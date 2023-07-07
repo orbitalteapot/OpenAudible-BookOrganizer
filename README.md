@@ -93,4 +93,4 @@ The script relies on the metadata of the audio files to organize them. Specifica
 
 Make sure that your audio files have this metadata properly set for the script to work effectively.
 
-The script is copying the files from the source to t
+The script copies the files from the source to the destination, so no data will be lost if something goes wrong.
