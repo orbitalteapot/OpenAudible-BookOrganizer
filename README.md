@@ -65,9 +65,9 @@ Enter the path to the source folder containing audio files: <path_to_source_fold
 Enter the path to the destination folder where you want to organize the audio: <path_to_destination_folder>
 ```
 
-### 5. The script will organize the audio files based on their metadata.
+### 4. The script will organize the audio files based on their metadata.
 
-### 6. Deactivate Environment
+### 5. Deactivate Environment
 ```sh
 deactivate
 ```
