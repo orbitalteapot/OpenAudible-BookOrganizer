@@ -16,7 +16,7 @@ jobs:
     - name: Build and push Docker images
       uses: docker/build-push-action@v4.1.1
       with:
-        push: true
+        # push: true
         tags: audiocollectionsorter
         github-token: ${{ secrets.GHCR_TOKEN }}
 
