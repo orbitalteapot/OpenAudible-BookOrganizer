@@ -17,7 +17,7 @@ jobs:
       uses: docker/build-push-action@v4.1.1
       with:
         push: true
-        tags: type=ref,event=branch
+        tags: audiocollectionsorter
         platforms: linux/amd64,linux/arm64
         github-token: ${{ secrets.GHCR_TOKEN }}
 
