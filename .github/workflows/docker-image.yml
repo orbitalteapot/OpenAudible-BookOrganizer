@@ -18,7 +18,6 @@ jobs:
       with:
         push: true
         tags: audiocollectionsorter
-        platforms: linux/amd64,linux/arm64
         github-token: ${{ secrets.GHCR_TOKEN }}
 
     - name: Image digest
