@@ -41,7 +41,7 @@ def organize_audio(source_folder, destination_folder):
             else:
                 print(f"Unable to load metadata for file {file_path}")
                 
-    with multiprocessing.Pool(multiprocessing.cpu_count()) as p:
+    with multiprocessing.Pool(multiprocessing.cpu_count()/2) as p:
         p.map(move_audio, tasks)
 
 organize_audio("/source", "/destination")
