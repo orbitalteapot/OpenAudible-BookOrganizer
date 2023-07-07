@@ -1,19 +1,20 @@
-# Audiobook Organizer
+# Audio Organizer
 
-Audiobook Organizer is a simple Python script that helps you organize your audiobook files into a structured directory format based on the metadata of the files. The script uses the `eyed3` library to read metadata from audio files.
+Organize your audiobook or music collection!
+
+This is a simple Python script that helps you organize your audio files into a structured directory format based on the metadata of the files. The script uses the `tinytag` library to read metadata from audio files.
 
 ## Directory Structure
-
-If the audiobook is part of a series, the script organizes files in the following structure:
+If the audio is part of a series, the script organizes files in the following structure:
 
 ```mathematica
 Author
-└── Book Series (Album)
+└── Series (Album)
     └── Title
 ```
 
 
-If the audiobook is not part of a series(Album), it organizes files like `this`:
+If the audio is not part of a series(Album), it organizes files like `this`:
 
 ```mathematica
 Author
@@ -45,7 +46,7 @@ J.K. Rowling (Artist)
 ### 2. Install the required Python library by running:
 
 ```sh
-cd audiobookmanager
+cd audiocollectionsorter
 python3 -m venv .
 source ./bin/activate
 pip install -r requirements.txt
@@ -53,16 +54,16 @@ pip install -r requirements.txt
 
 ### 3. Run the script by executing:
 ```sh
-python3 scripts/organize_audiobooks.py
+python3 scripts/organize_audio.py
 ```
-You will be prompted to enter the source folder containing your audiobook files and the destination folder where you want the organized structure to be created:
+You will be prompted to enter the source folder containing your audio files and the destination folder where you want the organized structure to be created:
 
 ```mathematica
-Enter the path to the source folder containing audiobook files: <path_to_source_folder>
-Enter the path to the destination folder where you want to organize the audiobooks: <path_to_destination_folder>
+Enter the path to the source folder containing audio files: <path_to_source_folder>
+Enter the path to the destination folder where you want to organize the audio: <path_to_destination_folder>
 ```
 
-### 5. The script will organize the audiobook files based on their metadata.
+### 5. The script will organize the audio files based on their metadata.
 
 ### 6. Deactivate Environment
 ```sh
@@ -73,17 +74,21 @@ deactivate
 ### 1. Clone the repository or download the script.
 ### 2. Build the Docker Image
 ```sh
-cd audiobookmanager
-docker build -t audiobook-organizer .
+cd audiocollectionsorter
+docker build -t audio-organizer .
 ```
 
 ### 3. Run the Container
-Run the following command to start a container from the image. Replace /path/to/source with the path to your audiobook files, and /path/to/destination with the path where you want the organized audiobooks to be stored:
+Run the following command to start a container from the image. Replace /path/to/source with the path to your audio files, and /path/to/destination with the path where you want the organized audio to be stored:
 ```sh
-docker run -it --rm -v /path/to/source:/source -v /path/to/destination:/destination audiobook-organizer
+docker run -it --rm -v /path/to/source:/source -v /path/to/destination:/destination audio-organizer
 ```
 
-### 5. The container will organize the audiobook files based on their metadata.
+### 5. The container will organize the audio files based on their metadata.
 ## Note
 
-The script relies on the metadata of the audio files to organize them. Specifically, it uses the `artist` (author), `album` (book series), `title`, and `track number` (book number in series) metadata fields. Make sure that your audio files have this metadata properly set for the script to work effectively.
+The script relies on the metadata of the audio files to organize them. Specifically, it uses the `artist` (author), `album` (series), and `title` metadata fields.
+
+Make sure that your audio files have this metadata properly set for the script to work effectively.
+
+The script is copying the files from the source to t

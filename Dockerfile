@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the script into the container
-COPY scripts/organize_audiobooks_docker.py .
+COPY scripts/organize_audio_docker.py .
 
 # Run the script when the container is started
-CMD [ "python", "./organize_audiobooks_docker.py" ]
+CMD [ "python", "./organize_audio_docker.py" ]

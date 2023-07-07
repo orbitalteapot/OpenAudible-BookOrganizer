@@ -2,7 +2,7 @@ import os
 import shutil
 from tinytag import TinyTag
 
-def move_audiobook(file, author, album, title, destination_folder):
+def move_audio(file, author, album, title, destination_folder):
     author_path = os.path.join(destination_folder, author)
     if not os.path.exists(author_path):
         os.makedirs(author_path)
@@ -23,7 +23,7 @@ def move_audiobook(file, author, album, title, destination_folder):
         except shutil.SameFileError:
             pass
 
-def organize_audiobooks(source_folder, destination_folder):
+def organize_audio(source_folder, destination_folder):
     for subdir, dirs, files in os.walk(source_folder):
         for file in files:
             file_path = os.path.join(subdir, file)
@@ -33,12 +33,12 @@ def organize_audiobooks(source_folder, destination_folder):
                 album = audio_file.album
                 title = audio_file.title
                 if author and title:
-                    move_audiobook(file_path, author, album, title, destination_folder)
+                    move_audio(file_path, author, album, title, destination_folder)
                 else:
                     print(f"Metadata is missing for file {file_path}")
             else:
                 print(f"Unable to load metadata for file {file_path}")
 
-source_folder = input("Enter the path to the source folder containing audiobook files: ")
-destination_folder = input("Enter the path to the destination folder where you want to organize the audiobooks: ")
-organize_audiobooks(source_folder, destination_folder)
+source_folder = input("Enter the path to the source folder containing audio files: ")
+destination_folder = input("Enter the path to the destination folder where you want to organize the audio: ")
+organize_audio(source_folder, destination_folder)
