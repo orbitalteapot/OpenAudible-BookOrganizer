@@ -2,6 +2,8 @@
 
 Organize your audiobook or music collection!
 
+[![Docker Image CI](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-image.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-image.yml)
+
 This is a simple Python script that helps you organize your audio files into a structured directory format based on the metadata of the files. The script uses the `tinytag` library to read metadata from audio files.
 
 ## Directory Structure
