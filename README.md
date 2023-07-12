@@ -54,9 +54,13 @@ source ./bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Run the script by executing:
+### 3. Run the script according to your needs by executing:
 ```sh
 python3 scripts/organize_audio.py
+```
+or
+```sh
+python3 scripts/organize_audiobook.py
 ```
 You will be prompted to enter the source folder containing your audio files and the destination folder where you want the organized structure to be created:
 
@@ -74,19 +78,21 @@ deactivate
 
 ## Usage With docker
 ### 1. Clone the repository or download the script.
-### 2. Build the Docker Image
+### 2. Build the Docker Image for sorting audio or audiobooks
 ```sh
 cd audiocollectionsorter
-docker build -t audio-organizer .
+docker build -t audiosorter -f AudioSort_Dockerfile .
+docker build -t audiobooksorter -f AudioBookSort_Dockerfile .
 ```
 
 ### 3. Run the Container
 Run the following command to start a container from the image. Replace /path/to/source with the path to your audio files, and /path/to/destination with the path where you want the organized audio to be stored:
 ```sh
-docker run -it --rm -v /path/to/source:/source -v /path/to/destination:/destination audio-organizer
+docker run -it --rm -v /path/to/source:/source -v /path/to/destination:/destination audiosorter
+docker run -it --rm -v /path/to/source:/source -v /path/to/destination:/destination audiobooksorter
 ```
 
-### 5. The container will organize the audio files based on their metadata.
+### 4. The container will organize the audio files based on their metadata.
 ## Note
 
 The script relies on the metadata of the audio files to organize them. Specifically, it uses the `artist` (author), `album` (series), and `title` metadata fields.
