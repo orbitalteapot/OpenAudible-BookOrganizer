@@ -7,11 +7,11 @@ Organize your audiobook or music collection!
 This is a simple Python script that helps you organize your audio files into a structured directory format based on the metadata of the files. The script uses the `tinytag` library to read metadata from audio files.
 
 ## Directory Structure
-If the audio is part of a series, the script organizes files in the following structure:
+If the audio is part of a series, the script organizes files in the following structure for audio:
 
 ```mathematica
 Author
-└── Series (Album)
+└──(Album)
     └── Title
 ```
 
@@ -23,17 +23,25 @@ Author
 └── Title
 ```
 
-## Typical Output Example
+## Typical Output Example For AudioBooks
 ```mathematica
 J.K. Rowling (Artist)
 └── Harry Potter (Album)
-    ├── Harry Potter and the Sorcerer's Stone.mp3
-    ├── Harry Potter and the Chamber of Secrets.mp3
-    ├── Harry Potter and the Prisoner of Azkaban.mp3
-    ├── Harry Potter and the Goblet of Fire.mp3
-    ├── Harry Potter and the Order of the Phoenix.mp3
-    ├── Harry Potter and the Half-Blood Prince.mp3
-    └── Harry Potter and the Deathly Hallows.mp3
+    ├── Book 1
+    │   └── Harry Potter and the Sorcerer's Stone.mp3
+    ├── Book 2
+    │   └── Harry Potter and the Chamber of Secrets.mp3
+    ├── Book 3
+    │   └── Harry Potter and the Prisoner of Azkaban.mp3
+    ├── Book 4
+    │   └── Harry Potter and the Goblet of Fire.mp3
+    ├── Book 5
+    │   └── Harry Potter and the Order of the Phoenix.mp3
+    ├── Book 6
+    │   └── Harry Potter and the Half-Blood Prince.mp3
+    └── Book 7
+        └── Harry Potter and the Deathly Hallows.mp3
+
 ```
 
 ## Requirements
