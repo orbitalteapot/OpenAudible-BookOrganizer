@@ -18,6 +18,7 @@ jobs:
       with:
         # push: true
         tags: audiocollectionsorter
+        file: AudioBookSort_Dockerfile
         github-token: ${{ secrets.GHCR_TOKEN }}
 
     - name: Image digest
