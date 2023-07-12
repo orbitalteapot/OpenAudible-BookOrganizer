@@ -3,7 +3,7 @@ import shutil
 from tinytag import TinyTag
 import re
 
-def move_audio(file, author, album, title, destination_folder):
+def move_audio(file, author, album, title, book_number, destination_folder):
     author_path = os.path.join(destination_folder, author)
     if not os.path.exists(author_path):
         os.makedirs(author_path)
@@ -12,9 +12,19 @@ def move_audio(file, author, album, title, destination_folder):
         series_path = os.path.join(author_path, album)
         if not os.path.exists(series_path):
             os.makedirs(series_path)
+
+        # If a book number was found, use it for a subfolder
+        if book_number:
+            book_path = os.path.join(series_path, f'Book {book_number}')
+            if not os.path.exists(book_path):
+                os.makedirs(book_path)
+            destination_path = book_path
+        else:
+            destination_path = series_path
+
         new_file_name = f'{title}{os.path.splitext(file)[-1]}'
         try:
-            shutil.copy(file, os.path.join(series_path, new_file_name))
+            shutil.copy(file, os.path.join(destination_path, new_file_name))
         except shutil.SameFileError:
             pass
     else:
@@ -37,18 +47,35 @@ def organize_audio(source_folder, destination_folder):
                     book_number = None
 
                     if album:
-                        # Check for both delimiters and "Book <int>"
-                        match = re.search(r': (.*), Book (\d+)', album)
+                        # Check for format 'X: Y: Z, Book <int>'
+                        match = re.search(r'(.*): (.*), Book (\d+)', album)
                         if match:
-                            album = match.group(1)
-                            book_number = int(match.group(2))
+                            title = match.group(1)
+                            album = match.group(2)
+                            book_number = int(match.group(3))
                         else:
-                            # Check for only ':' delimiter
-                            match = re.search(r'(.*): (.*)', album)
+                            # Check for format 'X: Y: Z'
+                            match = re.search(r'(.*): (.*): (.*)', album)
                             if match:
                                 title = match.group(1)
                                 album = match.group(2)
-                    move_audio(file_path, author, album, title, destination_folder)
+                                # append the last part to the title
+                                title += ': ' + match.group(3)
+                            else:
+                                # Check for format 'X: Y, Book <int>'
+                                match = re.search(r'(.*): (.*), Book (\d+)', album)
+                                if match:
+                                    title = match.group(1)
+                                    album = match.group(2)
+                                    book_number = int(match.group(3))
+                                else:
+                                    # Check for format "X, Book <int>"
+                                    match = re.search(r'(.*), Book (\d+)', album)
+                                    if match:
+                                        album = match.group(1)
+                                        book_number = int(match.group(2))
+                    
+                    move_audio(file_path, author, album, title, book_number, destination_folder)
                 else:
                     print(f"Metadata is missing for file {file_path}")
             else:

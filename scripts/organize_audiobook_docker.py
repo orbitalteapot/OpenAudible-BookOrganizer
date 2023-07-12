@@ -47,17 +47,33 @@ def organize_audio(source_folder, destination_folder):
                     book_number = None
 
                     if album:
-                        # Check for both delimiters and "Book <int>"
-                        match = re.search(r': (.*), Book (\d+)', album)
+                        # Check for format 'X: Y: Z, Book <int>'
+                        match = re.search(r'(.*): (.*), Book (\d+)', album)
                         if match:
-                            album = match.group(1)
-                            book_number = int(match.group(2))
+                            title = match.group(1)
+                            album = match.group(2)
+                            book_number = int(match.group(3))
                         else:
-                            # Check for only ':' delimiter
-                            match = re.search(r'(.*): (.*)', album)
+                            # Check for format 'X: Y: Z'
+                            match = re.search(r'(.*): (.*): (.*)', album)
                             if match:
                                 title = match.group(1)
                                 album = match.group(2)
+                                # append the last part to the title
+                                title += ': ' + match.group(3)
+                            else:
+                                # Check for format 'X: Y, Book <int>'
+                                match = re.search(r'(.*): (.*), Book (\d+)', album)
+                                if match:
+                                    title = match.group(1)
+                                    album = match.group(2)
+                                    book_number = int(match.group(3))
+                                else:
+                                    # Check for format "X, Book <int>"
+                                    match = re.search(r'(.*), Book (\d+)', album)
+                                    if match:
+                                        album = match.group(1)
+                                        book_number = int(match.group(2))
                     
                     move_audio(file_path, author, album, title, book_number, destination_folder)
                 else:
