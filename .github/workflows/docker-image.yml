@@ -22,18 +22,23 @@ jobs:
     - name: Docker Metadata action
       uses: docker/metadata-action@v4.6.0
       with:
-        images: orbitalteapot/audiocollectionsorter
+        images: orbitalteapot/audiobookcollectionsorter
         
     - name: Build and push Docker images for audiobookcollectionsorter
       uses: docker/build-push-action@v4.1.1
       with:
         push: true
-        tags: audiobookcollectionsorter:${{ github.ref_name }}
+        tags: ${{ github.ref_name }}
         file: AudioBookSort_Dockerfile
+        
+    - name: Docker Metadata action
+      uses: docker/metadata-action@v4.6.0
+      with:
+        images: orbitalteapot/audiocollectionsorter
         
     - name: Build and push Docker images for audiocollectionsorter
       uses: docker/build-push-action@v4.1.1
       with:
         push: true
-        tags: audiocollectionsorter:${{ github.ref_name }}
+        tags: ${{ github.ref_name }}
         file: AudioSort_Dockerfile
