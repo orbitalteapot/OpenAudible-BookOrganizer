@@ -116,7 +116,13 @@ pyinstaller .\scripts\organize_audio.py --onefile
 pyinstaller .\scripts\organize_audiobook.py --onefile
 deactivate
 ```
-This will produce two programs `organize_audio.exe` and `organize_audiobook.exe` and can be used as normal. If you don't want to do this i will make the files available under release 
+This will produce two programs `organize_audio.exe` and `organize_audiobook.exe` and can be used as normal. If you don't want to do this i will make the files available under release.
+
+## Alternativly you can pull the images from DockerHub
+```sh
+docker pull orbitalteapot/audiobookcollectionsorter
+docker pull orbitalteapot/audiocollectionsorter
+```
 ## Note
 
 The script relies on the metadata of the audio files to organize them. Specifically, it uses the `artist` (author), `album` (series), and `title` metadata fields.
