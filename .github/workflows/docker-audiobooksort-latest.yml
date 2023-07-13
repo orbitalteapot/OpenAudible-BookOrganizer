@@ -1,8 +1,5 @@
 name: Push to DockerHub latest
 on:
-  push:
-    branches:        
-      - main
   pull_request:
     branches:
       - main
