@@ -1,8 +1,6 @@
-name: Docker Image CI
+name: Push to DockerHub taged
 on:
   push:
-    branches:    
-      - main
     tags:        
       - v*
 jobs:
