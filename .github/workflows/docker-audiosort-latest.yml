@@ -25,6 +25,6 @@ jobs:
       uses: docker/build-push-action@v4.1.1
       with:
         push: true
-        tags: latest
+        tags: orbitalteapot/audiocollectionsorter:latest
         labels: ${{ steps.meta.outputs.labels }}
         file: AudioSort_Dockerfile
