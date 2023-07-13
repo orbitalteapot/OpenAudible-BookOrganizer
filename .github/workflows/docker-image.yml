@@ -16,14 +16,14 @@ jobs:
     - name: Docker Login
       uses: docker/login-action@v2.2.0
       with:
-        registry: ghcr.io
-        username: ${{ github.actor }}
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.dockeruser }}
         password: ${{ secrets.GHCR_TOKEN_V2 }}
         
     - name: Docker Metadata action
       uses: docker/metadata-action@v4.6.0
       with:
-        images: ghcr.io/${{ github.repository }}
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
         
     - name: Build and push Docker images for audiobookcollectionsorter
       uses: docker/build-push-action@v4.1.1
