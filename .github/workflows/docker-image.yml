@@ -16,6 +16,8 @@ jobs:
         tags: audiobookcollectionsorter:${{ github.ref_name }}
         file: AudioBookSort_Dockerfile
         github-token: ${{ secrets.GHCR_TOKEN_V2 }}
+    - name: Image digest
+      run: echo ${{ steps.docker_build.outputs.digest }}
         
     - name: Build and push Docker images for audiocollectionsorter
       uses: docker/build-push-action@v4.1.1
@@ -24,6 +26,5 @@ jobs:
         tags: audiocollectionsorter:${{ github.ref_name }}
         file: AudioBookSort_Dockerfile
         github-token: ${{ secrets.GHCR_TOKEN_V2 }}
-
     - name: Image digest
       run: echo ${{ steps.docker_build.outputs.digest }}
