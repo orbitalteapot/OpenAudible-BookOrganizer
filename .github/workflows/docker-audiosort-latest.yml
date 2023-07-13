@@ -1,4 +1,4 @@
-name: Push to DockerHub audiosort latest
+name: DockerHub audiosort latest
 on:
   pull_request:
     branches:

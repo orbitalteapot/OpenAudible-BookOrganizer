@@ -2,10 +2,10 @@
 
 Organize your audiobook or music collection!
 
-[![Push to DockerHub audiosort latest](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiosort-latest.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiosort-latest.yml)
-[![Push to DockerHub latest](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort-latest.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort-latest.yml)
-[![Push to DockerHub audiobooksort taged](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort.yml)
-[![Push to DockerHub audiosort taged](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiosort.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiosort.yml)
+[![DockerHub audiosort latest](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiosort-latest.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiosort-latest.yml)
+[![DockerHub latest](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort-latest.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort-latest.yml)
+[![DockerHub audiobook sort tagged](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort.yml)
+[![DockerHub audio sort tagged](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiosort.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiosort.yml)
 
 This is a simple Python script that helps you organize your audio files into a structured directory format based on the metadata of the files. The script uses the `tinytag` library to read metadata from audio files.
 
