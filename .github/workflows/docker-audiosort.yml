@@ -1,8 +1,7 @@
 name: Push to DockerHub audiosort taged
 on:
   push:
-    tags:        
-      - v*
+    tags: '*'
 jobs:
   build:
     runs-on: ubuntu-latest
