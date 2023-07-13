@@ -29,7 +29,6 @@ jobs:
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         file: AudioBookSort_Dockerfile
-        context: .
         
     - name: Docker Metadata action
       uses: docker/metadata-action@v4.6.0
@@ -43,4 +42,3 @@ jobs:
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
         file: AudioSort_Dockerfile
-        context: .
