@@ -101,6 +101,19 @@ docker run -it --rm -v /path/to/source:/source -v /path/to/destination:/destinat
 ```
 
 ### 4. The container will organize the audio files based on their metadata.
+
+## Create the executables for windows
+You can run the following commands
+```sh
+cd audiocollectionsorter
+python3 -m venv myenv
+./Script/activate
+pip install -r requirements.txt
+pyinstaller .\scripts\organize_audio.py --onefile
+pyinstaller .\scripts\organize_audiobook.py --onefile
+deactivate
+```
+This will produce two programs `organize_audio.exe` and `organize_audiobook.exe` and can be used as normal. If you don't want to do this i will make the files available under release 
 ## Note
 
 The script relies on the metadata of the audio files to organize them. Specifically, it uses the `artist` (author), `album` (series), and `title` metadata fields.
