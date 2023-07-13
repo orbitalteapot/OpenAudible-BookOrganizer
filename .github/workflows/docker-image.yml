@@ -13,7 +13,7 @@ jobs:
       uses: docker/build-push-action@v4.1.1
       with:
         push: true
-        tags: audiobookcollectionsorter:${{GITHUB_REF_NAME}}
+        tags: audiobookcollectionsorter:${{ github.ref_name }}
         file: AudioBookSort_Dockerfile
         github-token: ${{ secrets.GHCR_TOKEN_V2 }}
         
@@ -21,7 +21,7 @@ jobs:
       uses: docker/build-push-action@v4.1.1
       with:
         push: true
-        tags: audiocollectionsorter:${{GITHUB_REF_NAME}}
+        tags: audiocollectionsorter:${{ github.ref_name }}
         file: AudioBookSort_Dockerfile
         github-token: ${{ secrets.GHCR_TOKEN_V2 }}
 
