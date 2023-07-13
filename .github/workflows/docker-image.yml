@@ -21,8 +21,6 @@ jobs:
         password: ${{ secrets.GHCR_TOKEN_V2 }}
         
     - name: Docker Metadata action
-      # You may pin to the exact commit or the version.
-      # uses: docker/metadata-action@818d4b7b91585d195f67373fd9cb0332e31a7175
       uses: docker/metadata-action@v4.6.0
       with:
         images: ghcr.io/${{ github.repository }}
@@ -31,14 +29,12 @@ jobs:
       uses: docker/build-push-action@v4.1.1
       with:
         push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        tags: audiobookcollectionsorter:${{ github.ref_name }}
         file: AudioBookSort_Dockerfile
         
     - name: Build and push Docker images for audiocollectionsorter
       uses: docker/build-push-action@v4.1.1
       with:
         push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
+        tags: audiocollectionsorter:${{ github.ref_name }}
         file: AudioBookSort_Dockerfile
