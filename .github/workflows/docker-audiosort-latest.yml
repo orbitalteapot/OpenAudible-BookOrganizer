@@ -14,6 +14,7 @@ jobs:
         password: ${{ secrets.DOCKER_PASSWORD }}
         
     - name: Docker Metadata action
+      id: meta
       uses: docker/metadata-action@v4.6.0
       with:
         images: orbitalteapot/audiocollectionsorter 
