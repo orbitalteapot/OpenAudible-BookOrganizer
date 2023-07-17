@@ -47,7 +47,7 @@ def sanitize(path):
 
 def load_books(csv_file):
     books = []
-    with open(csv_file, 'r') as file:
+    with open(csv_file, 'r', encoding='utf-8-sig') as file:
         reader = csv.reader(file)
         next(reader)  # Skip header
         for row in reader:
