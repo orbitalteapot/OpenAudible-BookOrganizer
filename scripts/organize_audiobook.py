@@ -6,6 +6,7 @@ import re
 import sys
 
 class Book:
+    file_name = str
     def __init__(self, key, title, author, narrated_by, purchase_date, duration, release_date, ave_rating, genre, series_name, series_sequence, product_id, asin, book_url, summary, description, rating_count, publisher, short_title, copyright, author_url, file_name, series_url, abridged, language, pdf_url, image_url, region, ayce, read_status, user_id, audible_aax, image, m4b=None):
         self.key = key
         self.title = title
@@ -41,6 +42,17 @@ class Book:
         self.audible_aax = audible_aax
         self.image = image
         self.m4b = m4b
+
+
+def progress(count, total, status=''):
+    bar_len = 60
+    filled_len = int(round(bar_len * count / float(total)))
+
+    percents = round(100.0 * count / float(total), 1)
+    bar = '=' * filled_len + '-' * (bar_len - filled_len)
+
+    sys.stdout.write('[%s] %s%s %s\r' % (bar, percents, '%', status))
+    sys.stdout.flush()
 
 def sanitize(path):
     return re.sub(r'[\\/*?:"<>|]', ',', path)
@@ -90,6 +102,7 @@ def move_audio(file, author, album, title, book_number, destination_folder):
 
 def organize_audio(source_folder, csv_file, destination_folder):
     books = load_books(csv_file)
+    i = 0
     for subdir, dirs, files in os.walk(source_folder):
         for file in files:
             file_path = os.path.join(subdir, file)
@@ -101,7 +114,7 @@ def organize_audio(source_folder, csv_file, destination_folder):
                 if title:
                     book_number = None
 
-                    book = next((b for b in books if b.file_name + ".m4b" == file), None)
+                    book = next((b for b in books if b.file_name in file), None)
                     if book:
                         author = sanitize(book.author)
                         if book.series_name:
@@ -109,19 +122,23 @@ def organize_audio(source_folder, csv_file, destination_folder):
                         title = sanitize(book.file_name)
                         if book.series_sequence:
                             book_number = sanitize(book.series_sequence)
-                    
+
                     move_audio(file_path, author, album, title, book_number, destination_folder)
+                    progress(i, len(books), status=f"Organizing Audiobook {i} of {len(books)}")
+                    i += 1
+
                 else:
                     print(f"Metadata is missing for file {file_path}")
             else:
                 print(f"Unable to load metadata for file {file_path}")
-
+    progress(i, len(books), status="Organizing Audiobooks")
 try:
-    print("The script will only take .m4b file format at the moment")
+    print("The script will make a copy of your audiobooks in a new folder structure based on the metadata in the openaudible export file.")
     source_folder = input("Enter the full path to the source folder containing audio files: ")
     csv_file = input("Enter the full path to the openaudible book export file: ")
     destination_folder = input("Enter the full path to the destination folder where you want the organized copy of your audiobooks: ")
     organize_audio(source_folder, csv_file, destination_folder)
+    print("Done!")
 except Exception as e:
     print(f"Unexpected error: {e}")
     sys.exit(1)
