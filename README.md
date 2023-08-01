@@ -1,6 +1,6 @@
 # OpenAudible Organizer
 
-Organize your audiobook or music collection!
+Organize your audiobook collection!
 
 [![Audiobook latest](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort-latest.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort-latest.yml)
 [![Audiobook tagged](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort.yml)
@@ -16,7 +16,7 @@ It can be downloaded **[here](https://github.com/orbitalteapot/OpenAudible-FileO
 ### Running the Program
 Fill in the details promptet as ilustrated below:
 
-![Example](images/example.png)
+![Example](images/menu.gif)
 
 The program will now quickly organize a copy of your books in the spesified folder.
 

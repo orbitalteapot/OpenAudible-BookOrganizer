@@ -102,7 +102,7 @@ def organize_audio(source_folder, csv_folder, destination_folder):
                 if title:
                     book_number = None
 
-                    book = next((b for b in books if b.file_name + ".m4b" == file), None)
+                    book = next((b for b in books if b.file_name in file), None)
                     if book:
                         author = sanitize(book.author)
                         if book.series_name:
