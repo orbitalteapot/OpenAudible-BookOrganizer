@@ -1,0 +1,12 @@
+﻿services:
+  audiobookservice:
+    image: orbitalteapot/openaudiblebookmanagerservice
+    build:
+      context: .
+      dockerfile: ManagerService/Dockerfile
+
+  managerconsole:
+    image: orbitalteapot/openaudiblebookmanagerconsole
+    build:
+      context: .
+      dockerfile: ManagerConsole/Dockerfile
