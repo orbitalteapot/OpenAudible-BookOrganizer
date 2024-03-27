@@ -1,10 +1,16 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudioBookService", "AudioBookService\AudioBookService.csproj", "{29E18248-3767-4D7A-9A11-8C4FD60BEF65}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ManagerService", "ManagerService\ManagerService.csproj", "{29E18248-3767-4D7A-9A11-8C4FD60BEF65}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AudioFileSorter", "AudioFileSorter\AudioFileSorter.csproj", "{8BF2B66D-32CC-4607-BDBE-356659ED2082}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ManagerConsole", "ManagerConsole\ManagerConsole.csproj", "{98A32616-C8EE-4A52-8D88-4C08F01F62C3}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{F7321B0A-493F-4A48-82B7-33C6C5A6558A}"
+	ProjectSection(SolutionItems) = preProject
+		docker-compose.yml = docker-compose.yml
+		README.md = README.md
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

@@ -1,4 +1,4 @@
-name: DockerHub audiobook sort tagged
+name: Push to DockerHub tagged
 on:
   push:
     tags: '*'
