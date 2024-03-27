@@ -2,10 +2,6 @@
 
 Organize your audiobook collection!
 
-[![Audiobook latest](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort-latest.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort-latest.yml)
-[![Audiobook tagged](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort.yml)
-
-
 This is a simple C# program that helps organize your audiobook collection into a structured directory format based on the OpenAudible book list export.
 ## Getting started
 ### Download the Latest Release **[here](https://github.com/orbitalteapot/OpenAudible-FileOrganizer/releases)**.
