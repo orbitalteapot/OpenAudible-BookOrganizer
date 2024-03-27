@@ -1,4 +1,4 @@
-# OpenAudible Organizer
+# OpenAudible Book Manager
 
 Organize your audiobook collection!
 
@@ -6,46 +6,18 @@ Organize your audiobook collection!
 [![Audiobook tagged](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort.yml/badge.svg)](https://github.com/orbitalteapot/audiocollectionsorter/actions/workflows/docker-audiobooksort.yml)
 
 
-This is a simple Python script that helps you organize your audio files into a structured directory format based on the metadata of the files. The script uses the `tinytag` library to read metadata from audio files, in addition to the OpenAudible export
-## Using the program
-### Download the Latest Release
-It can be downloaded **[here](https://github.com/orbitalteapot/OpenAudible-FileOrganizer/releases)**.
-
-### Export Booklist from OpenAudible
+This is a simple C# program that helps organize your audiobook collection into a structured directory format based on the OpenAudible book list export.
+## Getting started
+### Download the Latest Release **[here](https://github.com/orbitalteapot/OpenAudible-FileOrganizer/releases)**.
+### Export Book list from OpenAudible
 ![export](images/export.png)
-### Running the Program
-Fill in the details promptet as ilustrated below:
+### Run the console program
 
-![Example](images/menu.gif)
+![Example](images/BookTransferConsole.png)
 
-The program will now quickly organize a copy of your books in the spesified folder.
+The program will now quickly organize a copy of your books in the specified folder.
 
 ## Directory Structure
-If the audio is part of a `series`:
-
-```mathematica
-Author
-└── Series
-    └── Book <int>
-        └── Title
-```
-
-
-If the audio is not part of a series it will use the `album`:
-
-```mathematica
-Author
-└── Album
-    └── Title
-```
-
-If the book have no `album`:
-```mathematica
-Author
-└── Title
-```
-
-## Typical Output Example For AudioBooks
 ```mathematica
 J.K. Rowling (Artist)
 └── Wizarding World (series)
@@ -54,59 +26,25 @@ J.K. Rowling (Artist)
 ```
 
 
-## Running the Python Script
-
-### 1. Clone the repository or download the script.
-
-### 2. Install the required Python library by running:
-
+## Run the service program in docker
+It will monitor the export file and automatically start transferring the new files if it is changed (new export)
 ```sh
-cd audiocollectionsorter
-python3 -m venv .
-source ./bin/activate
-pip install -r requirements.txt
+docker run --rm -d -v <folderwithbooklist>:/app/export -v <books>:/app/source -v <destination>:/app/destination orbitalteapot/openaudiblebookmanagerservice:latest
 ```
 
-### 3. Run the script according to your needs by executing:
+## Run the console program in docker
+Enter the /app/* path for all three inputs
 ```sh
-python3 scripts/organize_audiobook.py
-```
-You will be prompted to enter requiered information
-
-### 4. Deactivate Environment
-```sh
-deactivate
+docker run --rm -it -v <folderwithbooklist>:/app/export -v <books>:/app/source -v <destination>:/app/destination orbitalteapot/openaudiblebookmanagerconsole:latest
 ```
 
-## Usage With docker
-### 1. Clone the repository or download the script.
-### 2. Build the Docker Image for sorting audio or audiobooks
+## Build your own docker image
+### 1. Clone the repository
 ```sh
-cd audiocollectionsorter
-docker build -t audiobookcollectionsorter -f AudioBookSort_Dockerfile .
+git clone https://github.com/orbitalteapot/OpenAudible-FileOrganizer.git
+cd OpenAudible-FileOrganizer
 ```
-
-### 3. Run the Container
-Run the following command to start a container from the image. Replace /path/to/source with the path to your audio files, and /path/to/destination with the path where you want the organized audio to be stored:
+### 2. Build the Docker Images
 ```sh
-docker run -it --rm -v /mnt/d/AudioBooks/books/:/source -v /mnt/d/sortedaudiobooks:/destination -v /mnt/d/mybooklist/:/csvexport audiobookcollectionsorter
-```
-
-### 4. The container will organize the audio files based on their metadata.
-
-## Create the executables for windows
-You can run the following commands
-```sh
-cd audiocollectionsorter
-python3 -m venv myenv
-./Script/activate
-pip install -r requirements.txt
-pyinstaller .\scripts\organize_audiobook.py --onefile
-deactivate
-```
-This will produce `organize_audiobook.exe` and can be used as normal. If you don't want to do this i will make the files available under release.
-
-## Alternativly you can pull the images from DockerHub
-```sh
-docker pull orbitalteapot/audiobookcollectionsorter
+docker compose build
 ```
