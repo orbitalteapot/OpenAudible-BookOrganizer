@@ -1,4 +1,4 @@
-# OpenAudible Book Manager
+# OpenAudible Book Organizer
 
 Organize your audiobook collection!
 
