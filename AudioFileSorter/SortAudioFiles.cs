@@ -91,6 +91,7 @@ public class FileSorter
         return directory;
     }
 
+
     private static async Task<bool> CopyAudioFileAsync(OpenAudible audioFile, string source, string targetDirectory)
     {
         var fileExtension = GetAudioFileExtension(audioFile);
@@ -131,7 +132,7 @@ public class FileSorter
 
     private static string? SanitizeFileName(string? fileName)
     {
-        if (string.IsNullOrWhiteSpace(fileName)) return "Unknown";
+        if (string.IsNullOrWhiteSpace(fileName)) return "";
         var invalidChars = Path.GetInvalidFileNameChars();
         var sanitized = new string(fileName.Where(ch => !invalidChars.Contains(ch)).ToArray());
         return sanitized.TrimEnd('.', ' ');
