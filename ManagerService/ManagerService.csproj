@@ -6,6 +6,7 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <UserSecretsId>dotnet-AudioBookManager-628A2DA2-30A5-42F9-B725-7275D7F86DCE</UserSecretsId>
         <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+        <Version>2.0.2</Version>
     </PropertyGroup>
 
     <ItemGroup>

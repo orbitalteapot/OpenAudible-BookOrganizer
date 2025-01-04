@@ -17,7 +17,7 @@ Console.Write("Enter the full path to the destination folder where you want the 
 var destinationFolder = Console.ReadLine();
 
 
-var bookList = await fileParser.ParseDataCsv(csvFile, new CancellationToken());
+var bookList = await fileParser.ParseDataCsv(csvFile, CancellationToken.None);
 await fileSorter.SortAudioFiles(sourceFolder, destinationFolder, bookList);
 
 Console.WriteLine("Done!");
