@@ -9,6 +9,7 @@ namespace AudioFileSorter;
 public class FileSorter
 {
     private static readonly object ConsoleLock = new();
+
     /// <summary>
     /// Sorts Open Audible books into the provided destination path in parallel.
     /// </summary>
@@ -27,18 +28,22 @@ public class FileSorter
         var copyBooks = 0;
         var totalBooks = openAudibles.Count;
         var maxLineLength = 0;
+        var maxParallelism = 1; 
+ 
         
-        var maxParallelism = Math.Max(1, Environment.ProcessorCount / 4); // speed up transfers for high end cpus
+        // maxParallelism = Math.Max(1, Environment.ProcessorCount / 4); // speed up transfers for high-end cpus
+    
+        
         var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = maxParallelism };
-        
-        
+
+
         // Run parallel sorting operations
         await Parallel.ForEachAsync(openAudibles, parallelOptions, async (audioFile, _) =>
         {
             try
             {
-                var copied = await ProcessAudioFile(audioFile, source, destination);
-                if (copied) Interlocked.Increment(ref copyBooks);
+                var copiedBooks = await ProcessAudioFile(audioFile, source, destination);
+                if (copiedBooks) Interlocked.Increment(ref copyBooks);
             }
             catch (Exception ex)
             {
@@ -46,7 +51,7 @@ public class FileSorter
             }
 
             var currentProgress = Interlocked.Increment(ref progressCount);
-            UpdateProgress(currentProgress, totalBooks, copyBooks, audioFile.Title, ref maxLineLength);
+            UpdateProgress(currentProgress, totalBooks, copyBooks, audioFile.ShortTitle, ref maxLineLength);
         });
 
         Console.WriteLine("\nSorting complete.");
@@ -68,6 +73,7 @@ public class FileSorter
         }
 
         var directory = CreateTargetDirectory(destination, audioFile);
+        await CopyPdfFileAsync(audioFile, source, directory);
         return await CopyAudioFileAsync(audioFile, source, directory);
     }
 
@@ -91,15 +97,27 @@ public class FileSorter
         return directory;
     }
 
+    private static async Task<bool> CopyPdfFileAsync(OpenAudible audioFile, string source, string targetDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(audioFile.PDF)) return false;
+        var sourceFile = Path.Combine(source, $"{audioFile.PDF}");
+        var destinationFile = Path.Combine(targetDirectory, $"{audioFile.ShortTitle}.pdf");
+
+        return await CopyFileIfNeededAsync(sourceFile, destinationFile);
+    }
 
     private static async Task<bool> CopyAudioFileAsync(OpenAudible audioFile, string source, string targetDirectory)
     {
         var fileExtension = GetAudioFileExtension(audioFile);
         if (fileExtension == null) return false;
-
         var sourceFile = Path.Combine(source, $"{audioFile.Filename}{fileExtension}");
         var destinationFile = Path.Combine(targetDirectory, $"{audioFile.ShortTitle}{fileExtension}");
 
+        return await CopyFileIfNeededAsync(sourceFile, destinationFile);
+    }
+
+    private static async Task<bool> CopyFileIfNeededAsync(string sourceFile, string destinationFile)
+    {
         if (!File.Exists(sourceFile))
         {
             Console.WriteLine($"\nWarning: Source file missing: {sourceFile}");
@@ -111,7 +129,6 @@ public class FileSorter
             if (!File.Exists(destinationFile) || !await AreFilesSameAsync(sourceFile, destinationFile))
             {
                 await CopyFileAsync(sourceFile, destinationFile);
-                // File.Copy(sourceFile, destinationFile, true);
                 return true;
             }
         }
@@ -119,7 +136,6 @@ public class FileSorter
         {
             Console.WriteLine($"\nError copying {sourceFile}: {ex.Message}");
         }
-
         return false;
     }
 
@@ -140,52 +156,18 @@ public class FileSorter
 
     private static async Task<bool> AreFilesSameAsync(string filePath1, string filePath2)
     {
-        try
-        {
-            var fileInfo1 = new FileInfo(filePath1);
-            var fileInfo2 = new FileInfo(filePath2);
+        var fileInfo1 = new FileInfo(filePath1);
+        var fileInfo2 = new FileInfo(filePath2);
 
-            // 🔹 Fastest check: Compare file size first
-            if (fileInfo1.Length != fileInfo2.Length) return false;
-
-            const int chunkSize = 4096; // 4KB buffer for speed
-            var buffer1 = new byte[chunkSize];
-            var buffer2 = new byte[chunkSize];
-
-            // 🔹 Open files in `FileShare.ReadWrite` mode to prevent locking issues
-            await using var stream1 = new FileStream(filePath1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize, true);
-            await using var stream2 = new FileStream(filePath2, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize, true);
-
-            // 🔹 Compare first chunk
-            var bytesRead1 = await stream1.ReadAsync(buffer1, 0, chunkSize);
-            var bytesRead2 = await stream2.ReadAsync(buffer2, 0, chunkSize);
-            if (bytesRead1 != bytesRead2 || !buffer1.AsSpan(0, bytesRead1).SequenceEqual(buffer2.AsSpan(0, bytesRead2)))
-                return false;
-
-            // 🔹 Compare last chunk if file is larger than chunk size
-            if (fileInfo1.Length > chunkSize)
-            {
-                stream1.Seek(-chunkSize, SeekOrigin.End);
-                stream2.Seek(-chunkSize, SeekOrigin.End);
-
-                bytesRead1 = await stream1.ReadAsync(buffer1, 0, chunkSize);
-                bytesRead2 = await stream2.ReadAsync(buffer2, 0, chunkSize);
-                if (bytesRead1 != bytesRead2 || !buffer1.AsSpan(0, bytesRead1).SequenceEqual(buffer2.AsSpan(0, bytesRead2)))
-                    return false;
-            }
-
-            return true;
-        }
-        catch
-        {
-            return false; // Assume files are different if any error occurs
-        }
+        return fileInfo1.Length == fileInfo2.Length;
     }
 
 
-    private static void UpdateProgress(int currentProgress, int totalBooks, int copyBooks, string? title, ref int maxLineLength)
+    private static void UpdateProgress(int currentProgress, int totalBooks, int copyBooks, string? title,
+        ref int maxLineLength)
     {
-        var message = $"{Math.Round((decimal)currentProgress / totalBooks * 100, 2)}% ({currentProgress}/{totalBooks}) Transferred: {copyBooks} => {title}";
+        var message =
+            $"{Math.Round((decimal)currentProgress / totalBooks * 100, 2)}% ({currentProgress}/{totalBooks}) Transferred: {copyBooks} => {title}";
 
         lock (ConsoleLock)
         {
@@ -197,17 +179,19 @@ public class FileSorter
             maxLineLength = Math.Max(maxLineLength, message.Length);
         }
     }
+
     private static async Task CopyFileAsync(string sourceFile, string destinationFile)
     {
         const int bufferSize = 81920; // 80KB buffer for efficiency
 
         await using var sourceStream = new FileStream(
-            sourceFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            sourceFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         await using var destinationStream = new FileStream(
-            destinationFile, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            destinationFile, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize,
+            FileOptions.Asynchronous | FileOptions.SequentialScan);
 
         await sourceStream.CopyToAsync(destinationStream);
     }
-
 }
