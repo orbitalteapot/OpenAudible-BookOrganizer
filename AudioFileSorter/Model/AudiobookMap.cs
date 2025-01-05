@@ -20,7 +20,7 @@ public sealed class AudiobookMap : ClassMap<OpenAudible>
         Map(m => m.PurchaseDate).Name("Purchase Date").TypeConverterOption.Format("yyyy-MM-dd", "MM/dd/yyyy", "M/d/yyyy");
         Map(m => m.Duration).Name("Duration").Optional();
         Map(m => m.ReleaseDate).Name("Release Date").TypeConverterOption.Format("yyyy-MM-dd", "MM/dd/yyyy", "M/d/yyyy");
-        Map(m => m.AveRating).Name("Ave. Rating").Optional();
+        Map(m => m.AveRating).Name("Ave. Rating").Optional().Default(0.0);
         Map(m => m.Genre).Name("Genre").Optional();
         Map(m => m.SeriesName).Name("Series Name").Optional();
         Map(m => m.SeriesSequence).Name("Series Sequence").Optional();
@@ -44,8 +44,8 @@ public sealed class AudiobookMap : ClassMap<OpenAudible>
         Map(m => m.Image).Name("Image").Optional();
         Map(m => m.M4B).Name("M4B").Optional();
         Map(m => m.MP3).Name("MP3").Optional();
-        Map(m => m.AYCE).Name("AYCE").TypeConverter<BooleanConverter>().Optional();
-        Map(m => m.RatingCount).Name("Rating Count").TypeConverter<Int32Converter>().Optional();
+        Map(m => m.AYCE).Name("AYCE").TypeConverter<BooleanConverter>().Optional().Default(false);
+        Map(m => m.RatingCount).Name("Rating Count").TypeConverter<Int32Converter>().Optional().Default(0);
 
         // **Newly Added Field**
         Map(m => m.PDF).Name("PDF").Optional();
