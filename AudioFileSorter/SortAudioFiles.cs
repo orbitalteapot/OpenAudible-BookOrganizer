@@ -15,7 +15,8 @@ public class FileSorter
     /// <param name="source">Source folder containing audio files.</param>
     /// <param name="destination">Destination folder to sort files into.</param>
     /// <param name="openAudibles">List of audiobook metadata.</param>
-    public async Task SortAudioFiles(string? source, string? destination, List<OpenAudible> openAudibles)
+    /// <param name="progress">Optional progress reporter.</param>
+    public async Task SortAudioFiles(string? source, string? destination, List<OpenAudible> openAudibles, IProgress<SortProgressInfo>? progress = null)
     {
         if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(destination))
         {
@@ -47,6 +48,24 @@ public class FileSorter
 
             var currentProgress = Interlocked.Increment(ref progressCount);
             UpdateProgress(currentProgress, totalBooks, copyBooks, audioFile.Title, ref maxLineLength);
+
+            progress?.Report(new SortProgressInfo
+            {
+                CurrentBook = currentProgress,
+                TotalBooks = totalBooks,
+                CopiedBooks = copyBooks,
+                CurrentTitle = audioFile.Title,
+                Percentage = Math.Round((double)currentProgress / totalBooks * 100, 2)
+            });
+        });
+
+        progress?.Report(new SortProgressInfo
+        {
+            CurrentBook = totalBooks,
+            TotalBooks = totalBooks,
+            CopiedBooks = copyBooks,
+            Percentage = 100,
+            IsComplete = true
         });
 
         Console.WriteLine("\nSorting complete.");
