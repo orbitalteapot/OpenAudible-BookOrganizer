@@ -1,46 +1,75 @@
 # OpenAudible Book Organizer
 
-Organize your audiobook collection!
+Organize your audiobook collection with a modern desktop app!
 
-This is a simple C# program that helps organize your audiobook collection into a structured directory format based on the OpenAudible book list export.
-## Getting started
-### Download the Latest Release **[here](https://github.com/orbitalteapot/OpenAudible-FileOrganizer/releases)**.
-### Export Book list from OpenAudible
+A cross-platform Electron application with a C# backend that helps organize your audiobook collection into a structured directory format based on the OpenAudible book list export.
+
+## Screenshots
+
+### Library View
+Browse, search, and sort your entire audiobook collection.
+
+![Library](images/bookmanagerapplib.png)
+
+### File Sorter
+Configure source and destination paths, then sort your audiobooks into organized folders with real-time progress tracking.
+
+![Sort Files](images/bookmanagerappfilesort.png)
+
+## Getting Started
+
+### Prerequisites
+- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [Node.js](https://nodejs.org/) (v18+)
+
+### Export Book List from OpenAudible
 ![export](images/export.png)
-### Run the console program
 
-![Example](images/BookTransferConsole.png)
+### Run in Development Mode
+```sh
+# Start the C# API backend
+dotnet run --project ManagerApi
 
-The program will now quickly organize a copy of your books in the specified folder.
+# In a separate terminal, start the Electron app
+cd electron-ui
+npm install
+npm run dev
+```
+
+### Build Installers
+```sh
+cd electron-ui
+
+# Windows (NSIS installer)
+npm run dist:win
+
+# Linux (tar.gz)
+npm run dist:linux
+
+# macOS x64 (zip)
+npm run dist:mac
+
+# macOS Apple Silicon (zip)
+npm run dist:mac-arm
+```
+
+Installers are output to `electron-ui/release/`.
 
 ## Directory Structure
-```mathematica
-J.K. Rowling (Artist)
-└── Wizarding World (series)
+
+Books are organized into the following folder structure:
+
+```
+J.K. Rowling (Author)
+└── Wizarding World (Series)
     └── Book 1
         └── Harry Potter and the Sorcerer's Stone.mp3
 ```
 
+## Project Structure
 
-## Run the service program in docker
-It will monitor the export file and automatically start transferring the new files if it is changed (new export)
-```sh
-docker run --rm -d -v <folderwithbooklist>:/app/export -v <books>:/app/source -v <destination>:/app/destination orbitalteapot/openaudiblebookmanagerservice:latest
-```
-
-## Run the console program in docker
-Enter the /app/* path for all three inputs
-```sh
-docker run --rm -it -v <folderwithbooklist>:/app/export -v <books>:/app/source -v <destination>:/app/destination orbitalteapot/openaudiblebookmanagerconsole:latest
-```
-
-## Build your own docker image
-### 1. Clone the repository
-```sh
-git clone https://github.com/orbitalteapot/OpenAudible-FileOrganizer.git
-cd OpenAudible-FileOrganizer
-```
-### 2. Build the Docker Images
-```sh
-docker compose build
-```
+| Folder | Description |
+|---|---|
+| `AudioFileSorter/` | Shared C# library — CSV parsing, file sorting logic |
+| `ManagerApi/` | ASP.NET Core Web API backend |
+| `electron-ui/` | Electron + React + Tailwind frontend |
