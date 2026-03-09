@@ -7,7 +7,15 @@
     "dev": "concurrently -n vite,electron \"vite\" \"wait-on http://localhost:5173 && electron .\"",
     "build": "vite build",
     "electron:dev": "electron .",
-    "package": "vite build && electron-builder"
+    "publish:backend:win": "node scripts/publish-backend.js win-x64",
+    "publish:backend:linux": "node scripts/publish-backend.js linux-x64",
+    "publish:backend:mac": "node scripts/publish-backend.js osx-x64",
+    "publish:backend:mac-arm": "node scripts/publish-backend.js osx-arm64",
+    "dist:win": "npm run publish:backend:win && vite build && electron-builder --win",
+    "dist:linux": "npm run publish:backend:linux && vite build && electron-builder --linux",
+    "dist:mac": "npm run publish:backend:mac && vite build && electron-builder --mac",
+    "dist:mac-arm": "npm run publish:backend:mac-arm && vite build && electron-builder --mac --arm64",
+    "dist:all": "npm run publish:backend:win && npm run publish:backend:linux && npm run publish:backend:mac && vite build && electron-builder --win --linux --mac"
   },
   "dependencies": {
     "lucide-react": "^0.300.0",
@@ -28,12 +36,51 @@
   "build": {
     "appId": "com.openaudible.bookorganizer",
     "productName": "OpenAudible Book Organizer",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "files": [
       "dist/**/*",
       "electron/**/*"
     ],
     "directories": {
       "output": "release"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "extraResources": [
+        { "from": "backend-bin/win-x64", "to": "backend", "filter": ["**/*"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": true
+    },
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb", "arch": ["x64"] }
+      ],
+      "category": "Utility",
+      "extraResources": [
+        { "from": "backend-bin/linux-x64", "to": "backend", "filter": ["**/*"] }
+      ]
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64"] }
+      ],
+      "category": "public.app-category.utilities",
+      "extraResources": [
+        { "from": "backend-bin/osx-x64", "to": "backend", "filter": ["**/*"] }
+      ]
+    },
+    "dmg": {
+      "contents": [
+        { "x": 130, "y": 220 },
+        { "x": 410, "y": 220, "type": "link", "path": "/Applications" }
+      ]
     }
   }
 }
