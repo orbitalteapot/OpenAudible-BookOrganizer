@@ -13,9 +13,9 @@
     "publish:backend:mac-arm": "node scripts/publish-backend.js osx-arm64",
     "dist:win": "npm run publish:backend:win && vite build && electron-builder --win",
     "dist:linux": "npm run publish:backend:linux && vite build && electron-builder --linux",
-    "dist:mac": "npm run publish:backend:mac && vite build && electron-builder --mac",
+    "dist:mac-x64": "npm run publish:backend:mac && vite build && electron-builder --mac --x64",
     "dist:mac-arm": "npm run publish:backend:mac-arm && vite build && electron-builder --mac --arm64",
-    "dist:all": "npm run publish:backend:win && npm run publish:backend:linux && npm run publish:backend:mac && vite build && electron-builder --win --linux --mac"
+    "dist:all": "npm run publish:backend:win && npm run publish:backend:linux && npm run publish:backend:mac && npm run publish:backend:mac-arm && vite build && electron-builder --win --linux --mac --x64 --arm64"
   },
   "dependencies": {
     "lucide-react": "^0.300.0",
@@ -72,7 +72,7 @@
       ],
       "category": "public.app-category.utilities",
       "extraResources": [
-        { "from": "backend-bin/osx-x64", "to": "backend", "filter": ["**/*"] }
+        { "from": "backend-bin/osx-${arch}", "to": "backend", "filter": ["**/*"] }
       ]
     },
     "dmg": {
