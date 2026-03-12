@@ -1,0 +1,20 @@
+services:
+  book-watcher:
+    build:
+      context: .
+      dockerfile: WatcherService/Dockerfile
+    environment:
+      # Path inside the container where the OpenAudible CSV export is mounted
+      CSV_PATH: /data/books.csv
+      # Path inside the container to watch for new audiobook files
+      SOURCE_PATH: /source
+      # Path inside the container where sorted books are written
+      DESTINATION_PATH: /destination
+    volumes:
+      # Place your OpenAudible CSV export (books.csv) in a local ./data folder
+      - ./data:/data
+      # Replace the left-hand side with your actual audiobook source directory
+      - /path/to/your/audiobooks:/source
+      # Replace the left-hand side with the directory you want books sorted into
+      - /path/to/your/organized:/destination
+    restart: unless-stopped
