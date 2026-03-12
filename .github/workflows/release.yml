@@ -143,7 +143,7 @@ jobs:
   build-mac-x64:
     name: macOS x64 package
     needs: [resolve-version]
-    runs-on: macos-13
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -169,7 +169,7 @@ jobs:
         env:
           # Skip code-signing for unsigned CI builds
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npm run dist:mac
+        run: npm run dist:mac-x64
 
       - name: Upload macOS x64 artifact
         uses: actions/upload-artifact@v4
