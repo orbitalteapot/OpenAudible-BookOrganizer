@@ -1,0 +1,216 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  # ── Windows x64 NSIS installer ───────────────────────────────────────────────
+  build-windows:
+    name: Windows x64 installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set app version from tag
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd electron-ui
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install npm dependencies
+        working-directory: electron-ui
+        run: npm ci
+
+      - name: Build Windows installer
+        working-directory: electron-ui
+        run: npm run dist:win
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: electron-ui/release/*.exe
+
+  # ── Linux x64 tar.gz ─────────────────────────────────────────────────────────
+  build-linux:
+    name: Linux x64 package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set app version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd electron-ui
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install npm dependencies
+        working-directory: electron-ui
+        run: npm ci
+
+      - name: Build Linux package
+        working-directory: electron-ui
+        run: npm run dist:linux
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-package
+          path: electron-ui/release/*.tar.gz
+
+  # ── macOS x64 zip ────────────────────────────────────────────────────────────
+  build-mac-x64:
+    name: macOS x64 package
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set app version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd electron-ui
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install npm dependencies
+        working-directory: electron-ui
+        run: npm ci
+
+      - name: Build macOS x64 package
+        working-directory: electron-ui
+        env:
+          # Skip code-signing for unsigned CI builds
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run dist:mac
+
+      - name: Upload macOS x64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64-package
+          path: electron-ui/release/*.zip
+
+  # ── macOS arm64 zip ───────────────────────────────────────────────────────────
+  build-mac-arm64:
+    name: macOS arm64 package
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set app version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd electron-ui
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+
+      - name: Install npm dependencies
+        working-directory: electron-ui
+        run: npm ci
+
+      - name: Build macOS arm64 package
+        working-directory: electron-ui
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+        run: npm run dist:mac-arm
+
+      - name: Upload macOS arm64 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-package
+          path: electron-ui/release/*.zip
+
+  # ── Docker image → ghcr.io ───────────────────────────────────────────────────
+  build-docker:
+    name: Docker image (WatcherService)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/openaudible-book-watcher
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: WatcherService/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ── GitHub Release with all artifacts ─────────────────────────────────────────
+  create-release:
+    name: Create GitHub Release
+    needs:
+      - build-windows
+      - build-linux
+      - build-mac-x64
+      - build-mac-arm64
+      - build-docker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            artifacts/windows-installer/*.exe
+            artifacts/linux-package/*.tar.gz
+            artifacts/macos-x64-package/*.zip
+            artifacts/macos-arm64-package/*.zip
