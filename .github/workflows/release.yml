@@ -1,6 +1,12 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number to release (e.g. 1.2.3)'
+        required: true
+        type: string
   push:
     tags:
       - 'v*'
@@ -10,9 +16,62 @@ permissions:
   packages: write
 
 jobs:
+  # ── Create tag (only when triggered manually) ─────────────────────────────────
+  create-tag:
+    name: Create release tag v${{ inputs.version }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: version must be in X.Y.Z format (e.g. 1.2.3)"
+            exit 1
+          fi
+
+      - name: Create and push tag
+        run: |
+          VERSION="${{ inputs.version }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" > /dev/null 2>&1; then
+            echo "Error: tag v${VERSION} already exists"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v${VERSION}" -m "Release v${VERSION}"
+          git push origin "v${VERSION}"
+
+  # ── Resolve version (single source of truth for all build jobs) ──────────────
+  resolve-version:
+    name: Resolve release version
+    needs: [create-tag]
+    if: always() && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      major_minor: ${{ steps.version.outputs.major_minor }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: Compute version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "major_minor=${VERSION%.*}" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
   # ── Windows x64 NSIS installer ───────────────────────────────────────────────
   build-windows:
     name: Windows x64 installer
+    needs: [resolve-version]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,9 +87,8 @@ jobs:
       - name: Set app version from tag
         shell: bash
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           cd electron-ui
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm version "${{ needs.resolve-version.outputs.version }}" --no-git-tag-version --allow-same-version
 
       - name: Install npm dependencies
         working-directory: electron-ui
@@ -49,6 +107,7 @@ jobs:
   # ── Linux x64 tar.gz ─────────────────────────────────────────────────────────
   build-linux:
     name: Linux x64 package
+    needs: [resolve-version]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,9 +122,8 @@ jobs:
 
       - name: Set app version from tag
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           cd electron-ui
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm version "${{ needs.resolve-version.outputs.version }}" --no-git-tag-version --allow-same-version
 
       - name: Install npm dependencies
         working-directory: electron-ui
@@ -84,6 +142,7 @@ jobs:
   # ── macOS x64 zip ────────────────────────────────────────────────────────────
   build-mac-x64:
     name: macOS x64 package
+    needs: [resolve-version]
     runs-on: macos-13
     steps:
       - uses: actions/checkout@v4
@@ -98,9 +157,8 @@ jobs:
 
       - name: Set app version from tag
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           cd electron-ui
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm version "${{ needs.resolve-version.outputs.version }}" --no-git-tag-version --allow-same-version
 
       - name: Install npm dependencies
         working-directory: electron-ui
@@ -122,6 +180,7 @@ jobs:
   # ── macOS arm64 zip ───────────────────────────────────────────────────────────
   build-mac-arm64:
     name: macOS arm64 package
+    needs: [resolve-version]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -136,9 +195,8 @@ jobs:
 
       - name: Set app version from tag
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           cd electron-ui
-          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm version "${{ needs.resolve-version.outputs.version }}" --no-git-tag-version --allow-same-version
 
       - name: Install npm dependencies
         working-directory: electron-ui
@@ -159,6 +217,7 @@ jobs:
   # ── Docker image → ghcr.io ───────────────────────────────────────────────────
   build-docker:
     name: Docker image (WatcherService)
+    needs: [resolve-version]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -176,8 +235,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/openaudible-book-watcher
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ needs.resolve-version.outputs.version }}
+            type=raw,value=${{ needs.resolve-version.outputs.major_minor }}
             type=raw,value=latest
 
       - name: Build and push Docker image
@@ -193,6 +252,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs:
+      - resolve-version
       - build-windows
       - build-linux
       - build-mac-x64
@@ -208,6 +268,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.resolve-version.outputs.tag }}
           generate_release_notes: true
           files: |
             artifacts/windows-installer/*.exe
