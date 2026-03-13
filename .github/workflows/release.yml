@@ -237,7 +237,7 @@ jobs:
 
   # ── Docker image → ghcr.io ───────────────────────────────────────────────────
   build-docker:
-    name: Docker image (WatcherService)
+    name: Docker image (Web App)
     needs: [resolve-version]
     runs-on: ubuntu-latest
     steps:
@@ -268,7 +268,7 @@ jobs:
           DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
-          file: WatcherService/Dockerfile
+          file: ManagerApi/Dockerfile
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
