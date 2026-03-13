@@ -15,6 +15,7 @@ import { startSort, getSortProgress, cancelSort } from '../api';
 export default function SortPanel({ books, sortState, setSortState }) {
   const { csvPath, sourcePath, destPath, sorting, progress, error } = sortState;
   const pollRef = useRef(null);
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
   const update = useCallback((patch) => {
     setSortState((prev) => ({ ...prev, ...patch }));
@@ -125,14 +126,16 @@ export default function SortPanel({ books, sortState, setSortState }) {
                   <input
                     type="text"
                     value={csvPath}
-                    placeholder="Select CSV export file..."
+                    placeholder={isElectron ? "Select CSV export file..." : "Configured by the server"}
                     className="input-field pl-9 text-sm"
                     readOnly
                   />
                 </div>
-                <button onClick={handleBrowseCsv} className="btn-secondary text-sm whitespace-nowrap">
-                  Browse
-                </button>
+                {isElectron && (
+                  <button onClick={handleBrowseCsv} className="btn-secondary text-sm whitespace-nowrap">
+                    Browse
+                  </button>
+                )}
               </div>
             </div>
 
@@ -147,14 +150,16 @@ export default function SortPanel({ books, sortState, setSortState }) {
                   <input
                     type="text"
                     value={sourcePath}
-                    placeholder="Select source audio folder..."
+                    placeholder={isElectron ? "Select source audio folder..." : "Configured by the server"}
                     className="input-field pl-9 text-sm"
                     readOnly
                   />
                 </div>
-                <button onClick={handleBrowseSource} className="btn-secondary text-sm whitespace-nowrap">
-                  Browse
-                </button>
+                {isElectron && (
+                  <button onClick={handleBrowseSource} className="btn-secondary text-sm whitespace-nowrap">
+                    Browse
+                  </button>
+                )}
               </div>
             </div>
 
@@ -169,14 +174,16 @@ export default function SortPanel({ books, sortState, setSortState }) {
                   <input
                     type="text"
                     value={destPath}
-                    placeholder="Select destination folder..."
+                    placeholder={isElectron ? "Select destination folder..." : "Configured by the server"}
                     className="input-field pl-9 text-sm"
                     readOnly
                   />
                 </div>
-                <button onClick={handleBrowseDest} className="btn-secondary text-sm whitespace-nowrap">
-                  Browse
-                </button>
+                {isElectron && (
+                  <button onClick={handleBrowseDest} className="btn-secondary text-sm whitespace-nowrap">
+                    Browse
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -229,7 +236,9 @@ export default function SortPanel({ books, sortState, setSortState }) {
                 <ArrowUpDown size={24} className="text-slate-500" />
               </div>
               <p className="text-sm text-slate-500 max-w-xs">
-                Configure your paths and click Start to begin organizing your audiobooks
+                {isElectron
+                  ? 'Configure your paths and click Start to begin organizing your audiobooks'
+                  : 'Review the configured paths and click Start to begin organizing your audiobooks'}
               </p>
             </div>
           )}

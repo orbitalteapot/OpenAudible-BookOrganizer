@@ -1,15 +1,17 @@
 services:
-  book-watcher:
+  book-organizer-web:
     build:
       context: .
-      dockerfile: WatcherService/Dockerfile
+      dockerfile: ManagerApi/Dockerfile
     environment:
       # Path inside the container where the OpenAudible CSV export is mounted
       CSV_PATH: /data/books.csv
-      # Path inside the container to watch for new audiobook files
+      # Path inside the container where source audiobook files are mounted
       SOURCE_PATH: /source
       # Path inside the container where sorted books are written
       DESTINATION_PATH: /destination
+    ports:
+      - "5123:5123"
     volumes:
       # Place your OpenAudible CSV export (books.csv) in a local ./data folder
       - ./data:/data

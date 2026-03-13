@@ -4,6 +4,10 @@ using ManagerApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+var csvPath = Environment.GetEnvironmentVariable("CSV_PATH") ?? string.Empty;
+var sourcePath = Environment.GetEnvironmentVariable("SOURCE_PATH") ?? string.Empty;
+var destinationPath = Environment.GetEnvironmentVariable("DESTINATION_PATH") ?? string.Empty;
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -16,13 +20,23 @@ builder.Services.AddCors(options =>
 
 builder.Services.AddSingleton<SortService>();
 
-builder.WebHost.UseUrls("http://localhost:5123");
+builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://0.0.0.0:5123");
 
 var app = builder.Build();
 
 app.UseCors();
+app.UseDefaultFiles();
+app.UseStaticFiles();
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
+
+app.MapGet("/api/config", () => Results.Ok(new
+{
+    csvPath,
+    sourcePath,
+    destinationPath,
+    webMode = true
+}));
 
 app.MapPost("/api/books/parse", async (ParseRequest request, SortService sortService) =>
 {
@@ -78,6 +92,8 @@ app.MapPost("/api/sort/cancel", (SortService sortService) =>
 
     return Results.Ok(new { message = "Sort cancellation requested" });
 });
+
+app.MapFallbackToFile("index.html");
 
 app.Run();
 

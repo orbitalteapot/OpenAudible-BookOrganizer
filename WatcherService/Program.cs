@@ -30,23 +30,7 @@ var sortLock = new SemaphoreSlim(1, 1);
 Console.WriteLine($"[{Timestamp()}] Performing initial sort...");
 await RunSort();
 
-// Debounce timer: triggers the sort 3 s after the last file-system event
-using var debounceTimer = new System.Timers.Timer(3000) { AutoReset = false };
-debounceTimer.Elapsed += async (_, _) => await RunSort();
-
-// Watch the source directory for new and renamed audio files
-using var watcher = new FileSystemWatcher(sourcePath)
-{
-    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
-    Filter = "*.*",
-    IncludeSubdirectories = false,
-    EnableRaisingEvents = true
-};
-
-watcher.Created += OnFileEvent;
-watcher.Renamed += OnFileEvent;
-
-Console.WriteLine($"[{Timestamp()}] Watching '{sourcePath}' for new audiobooks. Press Ctrl+C to stop.");
+Console.WriteLine($"[{Timestamp()}] Automatic file watching is disabled. Press Ctrl+C to stop.");
 
 // Block until the user presses Ctrl+C
 var cts = new CancellationTokenSource();
@@ -62,13 +46,6 @@ catch (OperationCanceledException) { }
 Console.WriteLine($"[{Timestamp()}] Service stopped.");
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-void OnFileEvent(object sender, FileSystemEventArgs e)
-{
-    Console.WriteLine($"[{Timestamp()}] File detected: {Path.GetFileName(e.FullPath)}");
-    debounceTimer.Stop();
-    debounceTimer.Start();
-}
 
 async Task RunSort()
 {

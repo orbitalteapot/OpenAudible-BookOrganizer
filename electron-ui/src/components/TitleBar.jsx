@@ -3,6 +3,7 @@ import { Minus, Square, X, Copy } from 'lucide-react';
 
 export default function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false);
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
   const handleMinimize = () => window.electronAPI?.minimize();
   const handleMaximize = async () => {
@@ -10,6 +11,19 @@ export default function TitleBar() {
     setIsMaximized(await window.electronAPI?.isMaximized());
   };
   const handleClose = () => window.electronAPI?.close();
+
+  if (!isElectron) {
+    return (
+      <header className="h-10 bg-slate-900/90 border-b border-slate-800 flex items-center px-4 select-none shrink-0">
+        <div className="flex items-center gap-2.5">
+          <div className="w-5 h-5 rounded-md bg-gradient-to-br from-brand-500 to-violet-500 flex items-center justify-center">
+            <span className="text-[10px]">OA</span>
+          </div>
+          <span className="text-xs font-medium text-slate-400">OpenAudible Book Organizer</span>
+        </div>
+      </header>
+    );
+  }
 
   return (
     <header className="titlebar-drag h-10 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between px-4 select-none shrink-0">
