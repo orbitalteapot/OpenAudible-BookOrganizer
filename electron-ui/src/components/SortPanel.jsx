@@ -97,6 +97,7 @@ export default function SortPanel({ books, sortState, setSortState }) {
   const isCanceled = progress?.isCanceled;
   const isComplete = progress?.isComplete && !progress?.error && !isCanceled;
   const hasError = progress?.error;
+  const progressDetails = parseProgressDetails(progress?.currentTitle);
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
@@ -282,7 +283,18 @@ export default function SortPanel({ books, sortState, setSortState }) {
               {progress?.currentTitle && !isComplete && (
                 <div className="bg-slate-800/50 rounded-lg px-4 py-3 border border-slate-700/30">
                   <p className="text-[11px] text-slate-500 mb-0.5">Current file</p>
-                  <p className="text-sm text-slate-300 truncate">{progress.currentTitle}</p>
+                  <div className="space-y-1.5">
+                    {progressDetails.length > 0 ? (
+                      progressDetails.map(({ label, value }) => (
+                        <div key={label} className="flex items-start gap-2 text-sm">
+                          <span className="text-slate-500 shrink-0 min-w-12">{label}</span>
+                          <span className="text-slate-300 break-all">{value}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <p className="text-sm text-slate-300 break-all">{progress.currentTitle}</p>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -336,4 +348,24 @@ function StatCard({ label, value, color = 'text-white' }) {
       <p className={`text-lg font-bold ${color}`}>{value.toLocaleString()}</p>
     </div>
   );
+}
+
+function parseProgressDetails(currentTitle) {
+  if (!currentTitle) return [];
+
+  return currentTitle
+    .split('|')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part, index) => {
+      const separatorIndex = part.indexOf(':');
+      if (separatorIndex === -1) {
+        return { label: `Item ${index + 1}`, value: part };
+      }
+
+      return {
+        label: part.slice(0, separatorIndex).trim(),
+        value: part.slice(separatorIndex + 1).trim(),
+      };
+    });
 }

@@ -69,14 +69,15 @@ public class FileSorter
             }
 
             var currentProgress = Interlocked.Increment(ref progressCount);
-            UpdateProgress(currentProgress, totalBooks, copyBooks, audioFile.Title, ref maxLineLength);
+            var progressLabel = BuildProgressLabel(audioFile);
+            UpdateProgress(currentProgress, totalBooks, copyBooks, progressLabel, ref maxLineLength);
 
             progress?.Report(new SortProgressInfo
             {
                 CurrentBook = currentProgress,
                 TotalBooks = totalBooks,
                 CopiedBooks = copyBooks,
-                CurrentTitle = audioFile.Title,
+                CurrentTitle = progressLabel,
                 Percentage = Math.Round((double)currentProgress / totalBooks * 100, 2)
             });
         });
@@ -109,7 +110,9 @@ public class FileSorter
         }
 
         var directory = CreateTargetDirectory(destination, audioFile);
-        return await CopyAudioFileAsync(audioFile, source, directory, cancellationToken);
+        var copiedAudio = await CopyAudioFileAsync(audioFile, source, directory, cancellationToken);
+        var copiedPdf = await CopyPdfCompanionAsync(audioFile, source, directory, cancellationToken);
+        return copiedAudio || copiedPdf;
     }
 
     private static string CreateTargetDirectory(string destination, OpenAudible audioFile)
@@ -170,11 +173,154 @@ public class FileSorter
         return false;
     }
 
+    private static async Task<bool> CopyPdfCompanionAsync(OpenAudible audioFile, string source, string targetDirectory, CancellationToken cancellationToken)
+    {
+        var sourcePdf = ResolvePdfSourcePath(audioFile, source);
+        if (sourcePdf == null)
+        {
+            return false;
+        }
+
+        var destinationPdf = Path.Combine(targetDirectory, $"{audioFile.ShortTitle}.pdf");
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!File.Exists(destinationPdf) || !await AreFilesSameAsync(sourcePdf, destinationPdf, cancellationToken))
+            {
+                await CopyFileAsync(sourcePdf, destinationPdf, cancellationToken);
+                return true;
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"\nError copying {sourcePdf}: {ex.Message}");
+        }
+
+        return false;
+    }
+
     private static string? GetAudioFileExtension(OpenAudible audioFile)
     {
         if (!string.IsNullOrWhiteSpace(audioFile.M4B)) return ".m4b";
         if (!string.IsNullOrWhiteSpace(audioFile.MP3)) return ".mp3";
         return null;
+    }
+
+    private static string? ResolvePdfSourcePath(OpenAudible audioFile, string sourceRoot)
+    {
+        foreach (var candidate in GetPdfPathCandidates(audioFile, sourceRoot))
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> GetPdfPathCandidates(OpenAudible audioFile, string sourceRoot)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var filePath in EnumerateFilePaths(audioFile.FilePaths))
+        {
+            if (!string.Equals(Path.GetExtension(filePath), ".pdf", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (var normalizedPath in ExpandSourcePathCandidates(filePath, sourceRoot))
+            {
+                if (seen.Add(normalizedPath))
+                {
+                    yield return normalizedPath;
+                }
+            }
+        }
+
+        foreach (var rawValue in new[] { audioFile.PDF, audioFile.Filename })
+        {
+            if (string.IsNullOrWhiteSpace(rawValue))
+            {
+                continue;
+            }
+
+            foreach (var candidate in ExpandPdfValueCandidates(rawValue.Trim(), sourceRoot))
+            {
+                if (seen.Add(candidate))
+                {
+                    yield return candidate;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateFilePaths(string? rawFilePaths)
+    {
+        if (string.IsNullOrWhiteSpace(rawFilePaths))
+        {
+            yield break;
+        }
+
+        foreach (var entry in rawFilePaths.Split(['|', ';', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var candidate = entry.Trim().Trim('"');
+            if (!string.IsNullOrWhiteSpace(candidate))
+            {
+                yield return candidate;
+            }
+        }
+    }
+
+    private static IEnumerable<string> ExpandPdfValueCandidates(string value, string sourceRoot)
+    {
+        foreach (var candidate in ExpandSourcePathCandidates(value, sourceRoot))
+        {
+            yield return candidate;
+        }
+
+        if (!string.Equals(Path.GetExtension(value), ".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var candidate in ExpandSourcePathCandidates($"{value}.pdf", sourceRoot))
+            {
+                yield return candidate;
+            }
+        }
+    }
+
+    private static IEnumerable<string> ExpandSourcePathCandidates(string value, string sourceRoot)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            yield break;
+        }
+
+        var trimmed = value.Trim().Trim('"');
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            yield break;
+        }
+
+        if (Path.IsPathRooted(trimmed))
+        {
+            yield return trimmed;
+            yield break;
+        }
+
+        yield return Path.Combine(sourceRoot, trimmed);
+
+        var fileName = Path.GetFileName(trimmed);
+        if (!string.Equals(fileName, trimmed, StringComparison.Ordinal))
+        {
+            yield return Path.Combine(sourceRoot, fileName);
+        }
     }
 
     private static string? SanitizeOptionalFileName(string? fileName)
@@ -429,6 +575,42 @@ public class FileSorter
             maxLineLength = Math.Max(maxLineLength, message.Length);
         }
     }
+
+    private static string BuildProgressLabel(OpenAudible audioFile)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(audioFile.Author))
+        {
+            parts.Add($"Artist: {audioFile.Author}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(audioFile.SeriesName))
+        {
+            parts.Add($"Series: {audioFile.SeriesName}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(audioFile.SeriesSequence))
+        {
+            parts.Add($"Book: {audioFile.SeriesSequence}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(audioFile.Title))
+        {
+            parts.Add($"Title: {audioFile.Title}");
+        }
+
+        var fileName = audioFile.Filename;
+        if (!string.IsNullOrWhiteSpace(fileName))
+        {
+            parts.Add($"File: {fileName}");
+        }
+
+        return parts.Count > 0
+            ? string.Join(" | ", parts)
+            : audioFile.Title ?? "Unknown";
+    }
+
     private static async Task CopyFileAsync(string sourceFile, string destinationFile, CancellationToken cancellationToken)
     {
         const int bufferSize = 81920; // 80KB buffer for efficiency
