@@ -40,3 +40,14 @@ export async function getSortProgress() {
   const res = await fetch(`${API_BASE}/api/sort/progress`);
   return res.json();
 }
+
+export async function cancelSort() {
+  const res = await fetch(`${API_BASE}/api/sort/cancel`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || 'Failed to cancel sort');
+  }
+  return res.json();
+}

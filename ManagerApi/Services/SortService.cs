@@ -7,8 +7,10 @@ public class SortService
 {
     private readonly CsvParser _csvParser = new();
     private readonly FileSorter _fileSorter = new();
+    private readonly object _sortLock = new();
     private List<OpenAudible> _books = new();
     private SortProgressInfo _currentProgress = new();
+    private CancellationTokenSource? _sortCancellation;
     private volatile bool _isSorting;
 
     public bool IsSorting => _isSorting;
@@ -23,11 +25,33 @@ public class SortService
 
     public SortProgressInfo GetProgress() => _currentProgress;
 
+    public bool CancelSort()
+    {
+        lock (_sortLock)
+        {
+            if (!_isSorting || _sortCancellation is null)
+            {
+                return false;
+            }
+
+            _sortCancellation.Cancel();
+            return true;
+        }
+    }
+
     public async Task StartSort(string csvPath, string sourcePath, string destinationPath)
     {
-        if (_isSorting) return;
-        _isSorting = true;
-        _currentProgress = new SortProgressInfo();
+        CancellationTokenSource cancellation;
+
+        lock (_sortLock)
+        {
+            if (_isSorting) return;
+
+            _isSorting = true;
+            _currentProgress = new SortProgressInfo();
+            _sortCancellation = new CancellationTokenSource();
+            cancellation = _sortCancellation;
+        }
 
         try
         {
@@ -41,7 +65,7 @@ public class SortService
                 _currentProgress = p;
             });
 
-            await _fileSorter.SortAudioFiles(sourcePath, destinationPath, _books, progress);
+            await _fileSorter.SortAudioFiles(sourcePath, destinationPath, _books, progress, cancellation.Token);
 
             _currentProgress = new SortProgressInfo
             {
@@ -52,17 +76,40 @@ public class SortService
                 IsComplete = true
             };
         }
+        catch (OperationCanceledException)
+        {
+            _currentProgress = new SortProgressInfo
+            {
+                CurrentBook = _currentProgress.CurrentBook,
+                TotalBooks = _currentProgress.TotalBooks,
+                CopiedBooks = _currentProgress.CopiedBooks,
+                CurrentTitle = _currentProgress.CurrentTitle,
+                Percentage = _currentProgress.Percentage,
+                IsComplete = true,
+                IsCanceled = true
+            };
+        }
         catch (Exception ex)
         {
             _currentProgress = new SortProgressInfo
             {
+                CurrentBook = _currentProgress.CurrentBook,
+                TotalBooks = _currentProgress.TotalBooks,
+                CopiedBooks = _currentProgress.CopiedBooks,
+                CurrentTitle = _currentProgress.CurrentTitle,
+                Percentage = _currentProgress.Percentage,
                 Error = ex.Message,
                 IsComplete = true
             };
         }
         finally
         {
-            _isSorting = false;
+            lock (_sortLock)
+            {
+                _sortCancellation?.Dispose();
+                _sortCancellation = null;
+                _isSorting = false;
+            }
         }
     }
 }

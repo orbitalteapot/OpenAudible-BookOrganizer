@@ -1,5 +1,6 @@
 ﻿using System.IO;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using AudioFileSorter.Model;
@@ -9,6 +10,13 @@ namespace AudioFileSorter;
 public class FileSorter
 {
     private static readonly object ConsoleLock = new();
+    private static readonly string[] PlaceholderValues = ["unknown", "n/a", "na", "none", "null"];
+    private static readonly string[] LeadingArticles = ["the ", "a ", "an "];
+    private static readonly string[] SeriesDecorators = [" series", " saga", " cycle"];
+    private static readonly string[] ContributorDescriptors = ["foreword", "afterword", "editor", "contributor", "adaptation", "music", "translator", "translatoreditor", "introduction", "preface", "illustrator"];
+    private static readonly string[] KnownNonAuthorSegments = ["the great courses", "crystal lake publishing", "crystal lake audio"];
+    private static readonly Regex SequenceValueRegex = new(@"(?<value>\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?)", RegexOptions.Compiled);
+
     /// <summary>
     /// Sorts Open Audible books into the provided destination path in parallel.
     /// </summary>
@@ -16,7 +24,12 @@ public class FileSorter
     /// <param name="destination">Destination folder to sort files into.</param>
     /// <param name="openAudibles">List of audiobook metadata.</param>
     /// <param name="progress">Optional progress reporter.</param>
-    public async Task SortAudioFiles(string? source, string? destination, List<OpenAudible> openAudibles, IProgress<SortProgressInfo>? progress = null)
+    public async Task SortAudioFiles(
+        string? source,
+        string? destination,
+        List<OpenAudible> openAudibles,
+        IProgress<SortProgressInfo>? progress = null,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(destination))
         {
@@ -30,16 +43,25 @@ public class FileSorter
         var maxLineLength = 0;
         
         var maxParallelism = Math.Max(1, Environment.ProcessorCount / 4); // speed up transfers for high end cpus
-        var parallelOptions = new ParallelOptions { MaxDegreeOfParallelism = maxParallelism };
+        var parallelOptions = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = maxParallelism,
+            CancellationToken = cancellationToken
+        };
         
         
         // Run parallel sorting operations
-        await Parallel.ForEachAsync(openAudibles, parallelOptions, async (audioFile, _) =>
+        await Parallel.ForEachAsync(openAudibles, parallelOptions, async (audioFile, ct) =>
         {
             try
             {
-                var copied = await ProcessAudioFile(audioFile, source, destination);
+                ct.ThrowIfCancellationRequested();
+                var copied = await ProcessAudioFile(audioFile, source, destination, ct);
                 if (copied) Interlocked.Increment(ref copyBooks);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -71,14 +93,14 @@ public class FileSorter
         Console.WriteLine("\nSorting complete.");
     }
 
-    private static async Task<bool> ProcessAudioFile(OpenAudible audioFile, string source, string destination)
+    private static async Task<bool> ProcessAudioFile(OpenAudible audioFile, string source, string destination, CancellationToken cancellationToken)
     {
         // Sanitize file names to prevent invalid path issues
-        audioFile.Author = SanitizeFileName(audioFile.Author);
-        audioFile.SeriesName = SanitizeFileName(audioFile.SeriesName);
-        audioFile.SeriesSequence = SanitizeFileName(audioFile.SeriesSequence);
-        audioFile.ShortTitle = SanitizeFileName(audioFile.ShortTitle);
-        audioFile.Title = SanitizeFileName(audioFile.Title);
+        audioFile.Author = ResolveAuthorDirectoryName(destination, SanitizeAuthorName(audioFile.Author));
+        audioFile.SeriesName = SanitizeOptionalFileName(audioFile.SeriesName);
+        audioFile.SeriesSequence = SanitizeSeriesSequence(audioFile.SeriesSequence);
+        audioFile.ShortTitle = SanitizeRequiredFileName(audioFile.ShortTitle);
+        audioFile.Title = SanitizeRequiredFileName(audioFile.Title);
 
         if (string.IsNullOrWhiteSpace(audioFile.Author))
         {
@@ -87,7 +109,7 @@ public class FileSorter
         }
 
         var directory = CreateTargetDirectory(destination, audioFile);
-        return await CopyAudioFileAsync(audioFile, source, directory);
+        return await CopyAudioFileAsync(audioFile, source, directory, cancellationToken);
     }
 
     private static string CreateTargetDirectory(string destination, OpenAudible audioFile)
@@ -97,7 +119,8 @@ public class FileSorter
 
         if (!string.IsNullOrWhiteSpace(audioFile.SeriesName))
         {
-            directory = Path.Combine(directory, audioFile.SeriesName);
+            var seriesDirectory = ResolveSeriesDirectoryName(directory, audioFile.SeriesName);
+            directory = Path.Combine(directory, seriesDirectory);
             Directory.CreateDirectory(directory);
 
             if (!string.IsNullOrWhiteSpace(audioFile.SeriesSequence))
@@ -110,7 +133,7 @@ public class FileSorter
         return directory;
     }
 
-    private static async Task<bool> CopyAudioFileAsync(OpenAudible audioFile, string source, string targetDirectory)
+    private static async Task<bool> CopyAudioFileAsync(OpenAudible audioFile, string source, string targetDirectory, CancellationToken cancellationToken)
     {
         var fileExtension = GetAudioFileExtension(audioFile);
         if (fileExtension == null) return false;
@@ -126,12 +149,18 @@ public class FileSorter
 
         try
         {
-            if (!File.Exists(destinationFile) || !await AreFilesSameAsync(sourceFile, destinationFile))
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!File.Exists(destinationFile) || !await AreFilesSameAsync(sourceFile, destinationFile, cancellationToken))
             {
-                await CopyFileAsync(sourceFile, destinationFile);
+                await CopyFileAsync(sourceFile, destinationFile, cancellationToken);
                 // File.Copy(sourceFile, destinationFile, true);
                 return true;
             }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -148,15 +177,196 @@ public class FileSorter
         return null;
     }
 
-    private static string? SanitizeFileName(string? fileName)
+    private static string? SanitizeOptionalFileName(string? fileName)
     {
-        if (string.IsNullOrWhiteSpace(fileName)) return "Unknown";
+        if (string.IsNullOrWhiteSpace(fileName)) return null;
         var invalidChars = Path.GetInvalidFileNameChars();
         var sanitized = new string(fileName.Where(ch => !invalidChars.Contains(ch)).ToArray());
-        return sanitized.TrimEnd('.', ' ');
+        var trimmed = sanitized.TrimEnd('.', ' ').Trim();
+        if (string.IsNullOrWhiteSpace(trimmed)) return null;
+        return IsPlaceholderValue(trimmed) ? null : trimmed;
     }
 
-    private static async Task<bool> AreFilesSameAsync(string filePath1, string filePath2)
+    private static string SanitizeRequiredFileName(string? fileName)
+    {
+        return SanitizeOptionalFileName(fileName) ?? "Unknown";
+    }
+
+    private static string SanitizeAuthorName(string? value)
+    {
+        var sanitized = SanitizeOptionalFileName(value);
+        if (sanitized is null)
+        {
+            return "Unknown";
+        }
+
+        var authorSegments = new List<string>();
+        foreach (var rawSegment in sanitized.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var segment = rawSegment.Trim();
+            var namePart = segment;
+            string? descriptorPart = null;
+
+            var separatorIndex = segment.IndexOf(" - ", StringComparison.Ordinal);
+            if (separatorIndex >= 0)
+            {
+                namePart = segment[..separatorIndex].Trim();
+                descriptorPart = segment[(separatorIndex + 3)..].Trim();
+            }
+
+            if (!string.IsNullOrWhiteSpace(descriptorPart) && IsContributorDescriptor(descriptorPart))
+            {
+                if (authorSegments.Count > 0)
+                {
+                    break;
+                }
+
+                continue;
+            }
+
+            if (authorSegments.Count > 0 && IsKnownNonAuthorSegment(namePart))
+            {
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(namePart))
+            {
+                authorSegments.Add(namePart);
+            }
+        }
+
+        if (authorSegments.Count == 0)
+        {
+            return "Unknown";
+        }
+
+        return string.Join(", ", authorSegments.Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    private static bool IsPlaceholderValue(string value)
+    {
+        return PlaceholderValues.Contains(value.Trim().ToLowerInvariant());
+    }
+
+    private static bool IsContributorDescriptor(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return ContributorDescriptors.Any(normalized.Contains);
+    }
+
+    private static bool IsKnownNonAuthorSegment(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return KnownNonAuthorSegments.Contains(normalized);
+    }
+
+    private static string? SanitizeSeriesSequence(string? value)
+    {
+        var sanitized = SanitizeOptionalFileName(value);
+        if (sanitized is null)
+        {
+            return null;
+        }
+
+        if (sanitized.StartsWith("Book ", StringComparison.OrdinalIgnoreCase))
+        {
+            sanitized = sanitized[5..].Trim();
+        }
+
+        var match = SequenceValueRegex.Match(sanitized);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        return match.Groups["value"].Value;
+    }
+
+    private static string ResolveSeriesDirectoryName(string authorDirectory, string requestedSeriesName)
+    {
+        var normalizedRequested = NormalizeSeriesKey(requestedSeriesName);
+        if (string.IsNullOrWhiteSpace(normalizedRequested))
+        {
+            return requestedSeriesName;
+        }
+
+        var existingSeriesDirectories = Directory.GetDirectories(authorDirectory);
+        foreach (var existingSeriesDirectory in existingSeriesDirectories)
+        {
+            var existingName = Path.GetFileName(existingSeriesDirectory);
+            if (string.IsNullOrWhiteSpace(existingName))
+            {
+                continue;
+            }
+
+            if (NormalizeSeriesKey(existingName) == normalizedRequested)
+            {
+                return existingName;
+            }
+        }
+
+        return requestedSeriesName;
+    }
+
+    private static string ResolveAuthorDirectoryName(string destinationRoot, string requestedAuthorName)
+    {
+        var normalizedRequested = NormalizeAuthorKey(requestedAuthorName);
+        if (string.IsNullOrWhiteSpace(normalizedRequested) || !Directory.Exists(destinationRoot))
+        {
+            return requestedAuthorName;
+        }
+
+        foreach (var existingAuthorDirectory in Directory.GetDirectories(destinationRoot))
+        {
+            var existingName = Path.GetFileName(existingAuthorDirectory);
+            if (string.IsNullOrWhiteSpace(existingName))
+            {
+                continue;
+            }
+
+            if (NormalizeAuthorKey(existingName) == normalizedRequested)
+            {
+                return existingName;
+            }
+        }
+
+        return requestedAuthorName;
+    }
+
+    private static string NormalizeAuthorKey(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        normalized = new string(normalized.Where(char.IsLetterOrDigit).ToArray());
+        return normalized;
+    }
+
+    private static string NormalizeSeriesKey(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+
+        foreach (var article in LeadingArticles)
+        {
+            if (normalized.StartsWith(article))
+            {
+                normalized = normalized[article.Length..];
+                break;
+            }
+        }
+
+        foreach (var decorator in SeriesDecorators)
+        {
+            if (normalized.EndsWith(decorator))
+            {
+                normalized = normalized[..^decorator.Length];
+                break;
+            }
+        }
+
+        normalized = new string(normalized.Where(char.IsLetterOrDigit).ToArray());
+        return normalized;
+    }
+
+    private static async Task<bool> AreFilesSameAsync(string filePath1, string filePath2, CancellationToken cancellationToken)
     {
         try
         {
@@ -175,8 +385,8 @@ public class FileSorter
             await using var stream2 = new FileStream(filePath2, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize, true);
 
             // 🔹 Compare first chunk
-            var bytesRead1 = await stream1.ReadAsync(buffer1, 0, chunkSize);
-            var bytesRead2 = await stream2.ReadAsync(buffer2, 0, chunkSize);
+            var bytesRead1 = await stream1.ReadAsync(buffer1.AsMemory(0, chunkSize), cancellationToken);
+            var bytesRead2 = await stream2.ReadAsync(buffer2.AsMemory(0, chunkSize), cancellationToken);
             if (bytesRead1 != bytesRead2 || !buffer1.AsSpan(0, bytesRead1).SequenceEqual(buffer2.AsSpan(0, bytesRead2)))
                 return false;
 
@@ -186,13 +396,17 @@ public class FileSorter
                 stream1.Seek(-chunkSize, SeekOrigin.End);
                 stream2.Seek(-chunkSize, SeekOrigin.End);
 
-                bytesRead1 = await stream1.ReadAsync(buffer1, 0, chunkSize);
-                bytesRead2 = await stream2.ReadAsync(buffer2, 0, chunkSize);
+                bytesRead1 = await stream1.ReadAsync(buffer1.AsMemory(0, chunkSize), cancellationToken);
+                bytesRead2 = await stream2.ReadAsync(buffer2.AsMemory(0, chunkSize), cancellationToken);
                 if (bytesRead1 != bytesRead2 || !buffer1.AsSpan(0, bytesRead1).SequenceEqual(buffer2.AsSpan(0, bytesRead2)))
                     return false;
             }
 
             return true;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch
         {
@@ -215,7 +429,7 @@ public class FileSorter
             maxLineLength = Math.Max(maxLineLength, message.Length);
         }
     }
-    private static async Task CopyFileAsync(string sourceFile, string destinationFile)
+    private static async Task CopyFileAsync(string sourceFile, string destinationFile, CancellationToken cancellationToken)
     {
         const int bufferSize = 81920; // 80KB buffer for efficiency
 
@@ -225,7 +439,7 @@ public class FileSorter
         await using var destinationStream = new FileStream(
             destinationFile, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
 
-        await sourceStream.CopyToAsync(destinationStream);
+        await sourceStream.CopyToAsync(destinationStream, cancellationToken);
     }
 
 }

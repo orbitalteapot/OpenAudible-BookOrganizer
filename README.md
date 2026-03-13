@@ -19,7 +19,7 @@ Configure source and destination paths, then sort your audiobooks into organized
 ## Getting Started
 
 ### Prerequisites
-- [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Node.js](https://nodejs.org/) (v18+)
 
 ### Export Book List from OpenAudible

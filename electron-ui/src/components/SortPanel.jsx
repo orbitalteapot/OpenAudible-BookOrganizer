@@ -4,12 +4,13 @@ import {
   FileSpreadsheet,
   FolderOutput,
   Play,
+  Square,
   CheckCircle2,
   AlertCircle,
   Loader2,
   ArrowUpDown,
 } from 'lucide-react';
-import { startSort, getSortProgress } from '../api';
+import { startSort, getSortProgress, cancelSort } from '../api';
 
 export default function SortPanel({ books, sortState, setSortState }) {
   const { csvPath, sourcePath, destPath, sorting, progress, error } = sortState;
@@ -52,6 +53,15 @@ export default function SortPanel({ books, sortState, setSortState }) {
     }
   };
 
+  const handleCancelSort = async () => {
+    try {
+      await cancelSort();
+      update({ error: null });
+    } catch (err) {
+      update({ error: err.message });
+    }
+  };
+
   const startPolling = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = setInterval(async () => {
@@ -84,7 +94,8 @@ export default function SortPanel({ books, sortState, setSortState }) {
     };
   }, [sorting, startPolling]);
 
-  const isComplete = progress?.isComplete && !progress?.error;
+  const isCanceled = progress?.isCanceled;
+  const isComplete = progress?.isComplete && !progress?.error && !isCanceled;
   const hasError = progress?.error;
 
   return (
@@ -113,7 +124,6 @@ export default function SortPanel({ books, sortState, setSortState }) {
                   <input
                     type="text"
                     value={csvPath}
-                    onChange={(e) => setCsvPath(e.target.value)}
                     placeholder="Select CSV export file..."
                     className="input-field pl-9 text-sm"
                     readOnly
@@ -136,7 +146,6 @@ export default function SortPanel({ books, sortState, setSortState }) {
                   <input
                     type="text"
                     value={sourcePath}
-                    onChange={(e) => setSourcePath(e.target.value)}
                     placeholder="Select source audio folder..."
                     className="input-field pl-9 text-sm"
                     readOnly
@@ -159,7 +168,6 @@ export default function SortPanel({ books, sortState, setSortState }) {
                   <input
                     type="text"
                     value={destPath}
-                    onChange={(e) => setDestPath(e.target.value)}
                     placeholder="Select destination folder..."
                     className="input-field pl-9 text-sm"
                     readOnly
@@ -179,23 +187,35 @@ export default function SortPanel({ books, sortState, setSortState }) {
             </div>
           )}
 
-          <button
-            onClick={handleStartSort}
-            disabled={sorting || !csvPath || !sourcePath || !destPath}
-            className="btn-primary w-full mt-6 inline-flex items-center justify-center gap-2"
-          >
-            {sorting ? (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                Sorting...
-              </>
-            ) : (
-              <>
-                <Play size={16} />
-                Start Sorting
-              </>
+          <div className="mt-6 flex gap-3">
+            <button
+              onClick={handleStartSort}
+              disabled={sorting || !csvPath || !sourcePath || !destPath}
+              className="btn-primary flex-1 inline-flex items-center justify-center gap-2"
+            >
+              {sorting ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" />
+                  Sorting...
+                </>
+              ) : (
+                <>
+                  <Play size={16} />
+                  Start Sorting
+                </>
+              )}
+            </button>
+
+            {sorting && (
+              <button
+                onClick={handleCancelSort}
+                className="btn-secondary inline-flex items-center justify-center gap-2 px-4"
+              >
+                <Square size={16} />
+                Cancel
+              </button>
             )}
-          </button>
+          </div>
         </div>
 
         {/* Progress Card */}
@@ -219,7 +239,7 @@ export default function SortPanel({ books, sortState, setSortState }) {
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs text-slate-400">
-                    {isComplete ? 'Complete' : hasError ? 'Error' : 'Sorting...'}
+                    {isComplete ? 'Complete' : isCanceled ? 'Canceled' : hasError ? 'Error' : 'Sorting...'}
                   </span>
                   <span className="text-xs font-bold text-brand-400">
                     {(progress?.percentage || 0).toFixed(1)}%
@@ -230,6 +250,8 @@ export default function SortPanel({ books, sortState, setSortState }) {
                     className={`h-full rounded-full transition-all duration-500 ease-out ${
                       hasError
                         ? 'bg-red-500'
+                        : isCanceled
+                        ? 'bg-amber-500'
                         : isComplete
                         ? 'bg-emerald-500'
                         : 'bg-gradient-to-r from-brand-600 to-brand-400'
@@ -272,6 +294,18 @@ export default function SortPanel({ books, sortState, setSortState }) {
                     <p className="text-sm font-medium text-emerald-300">Sorting complete!</p>
                     <p className="text-xs text-emerald-400/70 mt-0.5">
                       {progress.copiedBooks} file{progress.copiedBooks !== 1 ? 's' : ''} copied successfully
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {isCanceled && (
+                <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-4 flex items-center gap-3">
+                  <AlertCircle size={20} className="text-amber-400 shrink-0" />
+                  <div>
+                    <p className="text-sm font-medium text-amber-300">Sorting canceled</p>
+                    <p className="text-xs text-amber-400/70 mt-0.5">
+                      {progress?.copiedBooks || 0} file{(progress?.copiedBooks || 0) !== 1 ? 's' : ''} copied before cancellation
                     </p>
                   </div>
                 </div>

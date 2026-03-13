@@ -8,5 +8,6 @@ public class SortProgressInfo
     public string? CurrentTitle { get; set; }
     public double Percentage { get; set; }
     public bool IsComplete { get; set; }
+    public bool IsCanceled { get; set; }
     public string? Error { get; set; }
 }

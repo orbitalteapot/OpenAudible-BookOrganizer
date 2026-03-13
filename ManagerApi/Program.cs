@@ -67,6 +67,18 @@ app.MapGet("/api/sort/progress", (SortService sortService) =>
     return Results.Ok(sortService.GetProgress());
 });
 
+app.MapPost("/api/sort/cancel", (SortService sortService) =>
+{
+    if (!sortService.IsSorting)
+        return Results.BadRequest(new { error = "No sort is currently running" });
+
+    var canceled = sortService.CancelSort();
+    if (!canceled)
+        return Results.BadRequest(new { error = "No sort is currently running" });
+
+    return Results.Ok(new { message = "Sort cancellation requested" });
+});
+
 app.Run();
 
 record ParseRequest(string CsvPath);
