@@ -2,6 +2,11 @@
   "name": "openaudible-book-organizer",
   "version": "1.0.0",
   "description": "OpenAudible Book Organizer - Desktop App",
+  "homepage": "https://github.com/orbitalteapot/OpenAudible-BookOrganizer",
+  "author": {
+    "name": "orbitalteapot",
+    "email": "orbital@teapot.no"
+  },
   "main": "electron/main.js",
   "scripts": {
     "dev": "concurrently -n vite,electron \"vite\" \"wait-on http://localhost:5173 && electron .\"",
@@ -64,6 +69,7 @@
         { "target": "deb", "arch": ["x64"] }
       ],
       "category": "Utility",
+      "maintainer": "orbitalteapot <orbital@teapot.no>",
       "extraResources": [
         { "from": "backend-bin/linux-x64", "to": "backend", "filter": ["**/*"] }
       ]
