@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number to release (e.g. 1.2.3)'
+        description: 'Version number to release and tag (e.g. 1.2.3)'
         required: true
         type: string
   push:
     tags:
-      - 'v*'
+      - '*.*.*'
 
 permissions:
   contents: write
@@ -18,7 +18,7 @@ permissions:
 jobs:
   # ── Create tag (only when triggered manually) ─────────────────────────────────
   create-tag:
-    name: Create release tag v${{ inputs.version }}
+    name: Create release tag ${{ inputs.version }}
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -36,14 +36,14 @@ jobs:
       - name: Create and push tag
         run: |
           VERSION="${{ inputs.version }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" > /dev/null 2>&1; then
-            echo "Error: tag v${VERSION} already exists"
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" > /dev/null 2>&1; then
+            echo "Error: tag ${VERSION} already exists"
             exit 1
           fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v${VERSION}" -m "Release v${VERSION}"
-          git push origin "v${VERSION}"
+          git tag "${VERSION}" -m "Release ${VERSION}"
+          git push origin "${VERSION}"
 
   # ── Resolve version (single source of truth for all build jobs) ──────────────
   resolve-version:
@@ -68,15 +68,15 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             VERSION="${{ inputs.version }}"
           else
-            VERSION="${GITHUB_REF_NAME#v}"
+            VERSION="${GITHUB_REF_NAME}"
           fi
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Error: release tag must be in vX.Y.Z format (for example v1.2.3)"
+            echo "Error: release tag must be in X.Y.Z format (for example 1.2.3)"
             exit 1
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "major_minor=${VERSION%.*}" >> $GITHUB_OUTPUT
-          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$VERSION" >> $GITHUB_OUTPUT
 
   # ── Windows x64 NSIS installer ───────────────────────────────────────────────
   build-windows:
