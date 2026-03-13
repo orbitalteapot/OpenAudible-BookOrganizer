@@ -255,6 +255,8 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/OpenAudible-BookOrganizer
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
             type=raw,value=${{ needs.resolve-version.outputs.version }}
             type=raw,value=${{ needs.resolve-version.outputs.major_minor }}
@@ -283,6 +285,8 @@ jobs:
       - build-docker
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v8
         with:
