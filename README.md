@@ -99,14 +99,6 @@ Available tags are published by the release workflow:
 docker pull ghcr.io/orbitalteapot/openaudible-book-organizer:latest
 ```
 
-If the package is private, log in first:
-
-```sh
-echo <GITHUB_TOKEN> | docker login ghcr.io -u <GITHUB_USERNAME> --password-stdin
-```
-
-The token needs `read:packages` permission.
-
 ### How the Docker Image Works
 
 The Docker image runs the ASP.NET Core `ManagerApi` together with the built frontend, so the container exposes a browser-based interface instead of an automatic watcher process.
