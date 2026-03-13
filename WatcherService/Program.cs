@@ -34,19 +34,23 @@ await RunSort();
 using var debounceTimer = new System.Timers.Timer(3000) { AutoReset = false };
 debounceTimer.Elapsed += async (_, _) => await RunSort();
 
-// Watch the source directory for new and renamed audio files
-using var watcher = new FileSystemWatcher(sourcePath)
+var csvDirectory = Path.GetDirectoryName(csvPath)
+    ?? throw new InvalidOperationException($"Unable to determine directory for CSV path '{csvPath}'.");
+var csvFileName = Path.GetFileName(csvPath);
+
+using var csvWatcher = new FileSystemWatcher(csvDirectory)
 {
-    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite,
-    Filter = "*.*",
+    NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.CreationTime,
+    Filter = csvFileName,
     IncludeSubdirectories = false,
     EnableRaisingEvents = true
 };
 
-watcher.Created += OnFileEvent;
-watcher.Renamed += OnFileEvent;
+csvWatcher.Created += OnCsvFileEvent;
+csvWatcher.Changed += OnCsvFileEvent;
+csvWatcher.Renamed += OnCsvFileEvent;
 
-Console.WriteLine($"[{Timestamp()}] Watching '{sourcePath}' for new audiobooks. Press Ctrl+C to stop.");
+Console.WriteLine($"[{Timestamp()}] Watching '{csvPath}' for metadata updates. Press Ctrl+C to stop.");
 
 // Block until the user presses Ctrl+C
 var cts = new CancellationTokenSource();
@@ -63,9 +67,14 @@ Console.WriteLine($"[{Timestamp()}] Service stopped.");
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-void OnFileEvent(object sender, FileSystemEventArgs e)
+void OnCsvFileEvent(object sender, FileSystemEventArgs e)
 {
-    Console.WriteLine($"[{Timestamp()}] File detected: {Path.GetFileName(e.FullPath)}");
+    QueueSort($"CSV updated: {Path.GetFileName(e.FullPath)}");
+}
+
+void QueueSort(string reason)
+{
+    Console.WriteLine($"[{Timestamp()}] {reason}");
     debounceTimer.Stop();
     debounceTimer.Start();
 }

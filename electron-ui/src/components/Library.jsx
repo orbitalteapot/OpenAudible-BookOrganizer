@@ -11,18 +11,26 @@ import {
 } from 'lucide-react';
 import { parseBooks } from '../api';
 
-export default function LibraryView({ books, setBooks }) {
+export default function LibraryView({ books, setBooks, sortState }) {
   const [search, setSearch] = useState('');
   const [sortField, setSortField] = useState('title');
   const [sortDir, setSortDir] = useState('asc');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
   const handleLoadCsv = async () => {
-    const filePath = await window.electronAPI?.openFile([
-      { name: 'CSV Files', extensions: ['csv'] },
-    ]);
-    if (!filePath) return;
+    let filePath = sortState?.csvPath;
+
+    if (isElectron) {
+      filePath = await window.electronAPI?.openFile([
+        { name: 'CSV Files', extensions: ['csv'] },
+      ]);
+      if (!filePath) return;
+    } else if (!filePath) {
+      setError('No CSV path is configured for web mode');
+      return;
+    }
 
     setLoading(true);
     setError(null);
@@ -88,12 +96,18 @@ export default function LibraryView({ books, setBooks }) {
           </div>
           <h2 className="text-xl font-bold text-white mb-2">No audiobooks loaded</h2>
           <p className="text-sm text-slate-400 mb-8 leading-relaxed">
-            Import your OpenAudible CSV export to see your library here. You can
-            then browse, search, and sort your audiobook collection.
+            {isElectron
+              ? 'Import your OpenAudible CSV export to see your library here. You can then browse, search, and sort your audiobook collection.'
+              : 'Load the configured OpenAudible CSV export to browse your library and trigger sorting from the web interface.'}
           </p>
+          {!isElectron && sortState?.csvPath && (
+            <p className="mb-4 text-xs text-slate-500 bg-slate-800/50 border border-slate-700/30 rounded-lg px-4 py-2 break-all">
+              CSV: {sortState.csvPath}
+            </p>
+          )}
           <button onClick={handleLoadCsv} disabled={loading} className="btn-primary inline-flex items-center gap-2">
             <FileUp size={16} />
-            {loading ? 'Loading...' : 'Load CSV Export'}
+            {loading ? 'Loading...' : isElectron ? 'Load CSV Export' : 'Load Library'}
           </button>
           {error && (
             <p className="mt-4 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2">
@@ -137,7 +151,7 @@ export default function LibraryView({ books, setBooks }) {
           </div>
           <button onClick={handleLoadCsv} disabled={loading} className="btn-secondary inline-flex items-center gap-2 text-sm !py-2">
             <FileUp size={14} />
-            {loading ? 'Loading...' : 'Reload'}
+            {loading ? 'Loading...' : isElectron ? 'Reload' : 'Reload Library'}
           </button>
         </div>
       </div>

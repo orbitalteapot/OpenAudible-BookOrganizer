@@ -1,4 +1,7 @@
-const API_BASE = 'http://localhost:5123';
+const isBrowser = typeof window !== 'undefined';
+const isElectron = isBrowser && !!window.electronAPI;
+const isViteDev = isBrowser && window.location.port === '5173';
+const API_BASE = isElectron || isViteDev ? 'http://localhost:5123' : '';
 
 export async function healthCheck() {
   const res = await fetch(`${API_BASE}/api/health`);
@@ -48,6 +51,14 @@ export async function cancelSort() {
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || 'Failed to cancel sort');
+  }
+  return res.json();
+}
+
+export async function getAppConfig() {
+  const res = await fetch(`${API_BASE}/api/config`);
+  if (!res.ok) {
+    throw new Error('Failed to load app configuration');
   }
   return res.json();
 }
