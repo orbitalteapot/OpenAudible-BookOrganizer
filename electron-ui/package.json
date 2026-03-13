@@ -3,6 +3,11 @@
   "version": "1.0.0",
   "description": "OpenAudible Book Organizer - Desktop App",
   "homepage": "https://github.com/orbitalteapot/OpenAudible-BookOrganizer",
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/orbitalteapot/OpenAudible-BookOrganizer.git"
+  },
   "author": {
     "name": "orbitalteapot",
     "email": "orbital@teapot.no"
@@ -16,11 +21,11 @@
     "publish:backend:linux": "node scripts/publish-backend.js linux-x64",
     "publish:backend:mac": "node scripts/publish-backend.js osx-x64",
     "publish:backend:mac-arm": "node scripts/publish-backend.js osx-arm64",
-    "dist:win": "npm run publish:backend:win && vite build && electron-builder --win",
-    "dist:linux": "npm run publish:backend:linux && vite build && electron-builder --linux",
-    "dist:mac-x64": "npm run publish:backend:mac && vite build && electron-builder --mac --x64",
-    "dist:mac-arm": "npm run publish:backend:mac-arm && vite build && electron-builder --mac --arm64",
-    "dist:all": "npm run publish:backend:win && npm run publish:backend:linux && npm run publish:backend:mac && npm run publish:backend:mac-arm && vite build && electron-builder --win --linux --mac --x64 --arm64"
+    "dist:win": "npm run publish:backend:win && vite build && electron-builder --publish never --win",
+    "dist:linux": "npm run publish:backend:linux && vite build && electron-builder --publish never --linux",
+    "dist:mac-x64": "npm run publish:backend:mac && vite build && electron-builder --publish never --mac --x64",
+    "dist:mac-arm": "npm run publish:backend:mac-arm && vite build && electron-builder --publish never --mac --arm64",
+    "dist:all": "npm run publish:backend:win && npm run publish:backend:linux && npm run publish:backend:mac && npm run publish:backend:mac-arm && vite build && electron-builder --publish never --win --linux --mac --x64 --arm64"
   },
   "dependencies": {
     "lucide-react": "^0.300.0",

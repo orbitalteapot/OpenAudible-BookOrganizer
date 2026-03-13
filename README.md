@@ -43,13 +43,13 @@ cd electron-ui
 # Windows (NSIS installer)
 npm run dist:win
 
-# Linux (tar.gz)
+# Linux (AppImage + deb)
 npm run dist:linux
 
-# macOS x64 (zip)
-npm run dist:mac
+# macOS x64 (dmg)
+npm run dist:mac-x64
 
-# macOS Apple Silicon (zip)
+# macOS Apple Silicon (dmg)
 npm run dist:mac-arm
 ```
 

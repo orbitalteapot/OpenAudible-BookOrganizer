@@ -144,7 +144,7 @@ jobs:
         run: |
           npm run publish:backend:linux
           npm run build
-          npx electron-builder --linux AppImage deb --x64
+          npx electron-builder --publish never --linux AppImage deb --x64
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v7
@@ -187,7 +187,7 @@ jobs:
         run: |
           npm run publish:backend:mac
           npm run build
-          npx electron-builder --mac dmg --x64
+          npx electron-builder --publish never --mac dmg --x64
 
       - name: Upload macOS x64 artifact
         uses: actions/upload-artifact@v7
@@ -227,7 +227,7 @@ jobs:
         run: |
           npm run publish:backend:mac-arm
           npm run build
-          npx electron-builder --mac dmg --arm64
+          npx electron-builder --publish never --mac dmg --arm64
 
       - name: Upload macOS arm64 artifact
         uses: actions/upload-artifact@v7
@@ -262,6 +262,8 @@ jobs:
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
+        env:
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
         with:
           context: .
           file: WatcherService/Dockerfile
