@@ -36,7 +36,6 @@
   "build": {
     "appId": "com.openaudible.bookorganizer",
     "productName": "OpenAudible Book Organizer",
-    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "files": [
       "dist/**/*",
       "electron/**/*"
@@ -45,6 +44,7 @@
       "output": "release"
     },
     "win": {
+      "artifactName": "OpenAudible-Book-Organizer-${version}-windows-${arch}.${ext}",
       "target": [
         { "target": "nsis", "arch": ["x64"] }
       ],
@@ -58,8 +58,10 @@
       "deleteAppDataOnUninstall": true
     },
     "linux": {
+      "artifactName": "OpenAudible-Book-Organizer-${version}-linux-${arch}.${ext}",
       "target": [
-        { "target": "tar.gz", "arch": ["x64"] }
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb", "arch": ["x64"] }
       ],
       "category": "Utility",
       "extraResources": [
@@ -67,8 +69,9 @@
       ]
     },
     "mac": {
+      "artifactName": "OpenAudible-Book-Organizer-${version}-macos-${arch}.${ext}",
       "target": [
-        { "target": "zip", "arch": ["x64"] }
+        { "target": "dmg", "arch": ["x64", "arm64"] }
       ],
       "category": "public.app-category.utilities",
       "extraResources": [

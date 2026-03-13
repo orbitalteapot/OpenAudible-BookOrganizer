@@ -49,7 +49,7 @@ jobs:
   resolve-version:
     name: Resolve release version
     needs: [create-tag]
-    if: always() && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped')
+    if: github.event_name == 'push' && (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped')
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -63,6 +63,10 @@ jobs:
             VERSION="${{ inputs.version }}"
           else
             VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: release tag must be in vX.Y.Z format (for example v1.2.3)"
+            exit 1
           fi
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "major_minor=${VERSION%.*}" >> $GITHUB_OUTPUT
@@ -104,9 +108,9 @@ jobs:
           name: windows-installer
           path: electron-ui/release/*.exe
 
-  # ── Linux x64 tar.gz ─────────────────────────────────────────────────────────
+  # ── Linux x64 installers (AppImage + deb) ───────────────────────────────────
   build-linux:
-    name: Linux x64 package
+    name: Linux x64 installers
     needs: [resolve-version]
     runs-on: ubuntu-latest
     steps:
@@ -129,19 +133,24 @@ jobs:
         working-directory: electron-ui
         run: npm ci
 
-      - name: Build Linux package
+      - name: Build Linux installers
         working-directory: electron-ui
-        run: npm run dist:linux
+        run: |
+          npm run publish:backend:linux
+          npm run build
+          npx electron-builder --linux AppImage deb --x64
 
-      - name: Upload Linux artifact
+      - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: linux-package
-          path: electron-ui/release/*.tar.gz
+          name: linux-installers
+          path: |
+            electron-ui/release/*.AppImage
+            electron-ui/release/*.deb
 
-  # ── macOS x64 zip ────────────────────────────────────────────────────────────
+  # ── macOS x64 installer (dmg) ────────────────────────────────────────────────
   build-mac-x64:
-    name: macOS x64 package
+    name: macOS x64 installer
     needs: [resolve-version]
     runs-on: macos-latest
     steps:
@@ -164,22 +173,25 @@ jobs:
         working-directory: electron-ui
         run: npm ci
 
-      - name: Build macOS x64 package
+      - name: Build macOS x64 installer
         working-directory: electron-ui
         env:
           # Skip code-signing for unsigned CI builds
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npm run dist:mac-x64
+        run: |
+          npm run publish:backend:mac
+          npm run build
+          npx electron-builder --mac dmg --x64
 
       - name: Upload macOS x64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-x64-package
-          path: electron-ui/release/*.zip
+          name: macos-x64-installer
+          path: electron-ui/release/*.dmg
 
-  # ── macOS arm64 zip ───────────────────────────────────────────────────────────
+  # ── macOS arm64 installer (dmg) ──────────────────────────────────────────────
   build-mac-arm64:
-    name: macOS arm64 package
+    name: macOS arm64 installer
     needs: [resolve-version]
     runs-on: macos-latest
     steps:
@@ -202,17 +214,20 @@ jobs:
         working-directory: electron-ui
         run: npm ci
 
-      - name: Build macOS arm64 package
+      - name: Build macOS arm64 installer
         working-directory: electron-ui
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
-        run: npm run dist:mac-arm
+        run: |
+          npm run publish:backend:mac-arm
+          npm run build
+          npx electron-builder --mac dmg --arm64
 
       - name: Upload macOS arm64 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: macos-arm64-package
-          path: electron-ui/release/*.zip
+          name: macos-arm64-installer
+          path: electron-ui/release/*.dmg
 
   # ── Docker image → ghcr.io ───────────────────────────────────────────────────
   build-docker:
@@ -269,9 +284,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.resolve-version.outputs.tag }}
+          name: OpenAudible Book Organizer ${{ needs.resolve-version.outputs.version }}
+          body_path: .github/release-body.md
           generate_release_notes: true
           files: |
             artifacts/windows-installer/*.exe
-            artifacts/linux-package/*.tar.gz
-            artifacts/macos-x64-package/*.zip
-            artifacts/macos-arm64-package/*.zip
+            artifacts/linux-installers/*.AppImage
+            artifacts/linux-installers/*.deb
+            artifacts/macos-x64-installer/*.dmg
+            artifacts/macos-arm64-installer/*.dmg
