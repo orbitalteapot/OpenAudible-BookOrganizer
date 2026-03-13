@@ -254,7 +254,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/openaudible-book-watcher
+          images: ghcr.io/${{ github.repository_owner }}/OpenAudible-BookOrganizer
           tags: |
             type=raw,value=${{ needs.resolve-version.outputs.version }}
             type=raw,value=${{ needs.resolve-version.outputs.major_minor }}

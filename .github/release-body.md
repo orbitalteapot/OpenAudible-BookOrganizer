@@ -9,17 +9,25 @@ Now with Windows, Linux, macOS, and Docker support.
 ### Library View
 Browse, search, and sort your entire audiobook collection.
 
-![Library View](https://raw.githubusercontent.com/orbitalteapot/OpenAudible-BookOrganizer/main/images/bookmanagerapplib.png)
+![Library View](/images/bookmanagerapplib.png)
+
+### Liberary with books loaded
+![Loaded Books](/images/loadedbooks.png)
 
 ### File Sorter
 Configure source and destination paths, then sort your audiobooks into organized folders with real-time progress tracking.
 
-![File Sorter](https://raw.githubusercontent.com/orbitalteapot/OpenAudible-BookOrganizer/main/images/bookmanagerappfilesort.png)
+![File Sorter](/images/bookmanagerappfilesort.png)
 
 ### Export Book List from OpenAudible
 Export your OpenAudible library, then use that export to organize your books automatically.
 
-![OpenAudible Export](https://raw.githubusercontent.com/orbitalteapot/OpenAudible-BookOrganizer/main/images/export.png)
+![OpenAudible Export](/images/export.png)
+
+### Start Sorting
+Select your OpenAudible export file, choose your source and destination directories, and let the app handle the rest. Your audiobooks will be neatly organized into folders by author and series.
+
+![Start Sorting](/images/sorting.png)
 
 ## Directory Structure
 
