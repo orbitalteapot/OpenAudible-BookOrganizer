@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn } = require('child_process');
 
 let mainWindow;
@@ -48,6 +49,11 @@ function startBackend() {
     // In production, launch the self-contained binary
     const exe = getBackendExecutable();
     console.log(`[API] Starting backend: ${exe}`);
+
+    // Ensure the binary is executable on Linux/macOS
+    if (process.platform !== 'win32') {
+      try { fs.chmodSync(exe, 0o755); } catch { /* best effort */ }
+    }
 
     backendProcess = spawn(exe, [], {
       stdio: 'pipe',

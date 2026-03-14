@@ -41,4 +41,14 @@ const cmd = [
 console.log(`> ${cmd}\n`);
 execSync(cmd, { stdio: 'inherit' });
 
+// Ensure the binary is executable on Linux/macOS
+if (requestedRid.startsWith('linux') || requestedRid.startsWith('osx')) {
+  const binaryName = 'ManagerApi';
+  const binaryPath = path.join(outputDir, binaryName);
+  if (fs.existsSync(binaryPath)) {
+    fs.chmodSync(binaryPath, 0o755);
+    console.log(`Set execute permission on ${binaryPath}`);
+  }
+}
+
 console.log(`\nBackend published to: ${outputDir}`);
