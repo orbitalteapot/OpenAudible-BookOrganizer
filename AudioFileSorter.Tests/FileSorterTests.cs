@@ -173,7 +173,7 @@ public class FileSorterTests
         var reports = new List<SortProgressInfo>();
 
         var summary = await new FileSorter().SortAudioFiles(
-            workspace.Source, workspace.Destination, [], new Progress<SortProgressInfo>(reports.Add));
+            workspace.Source, workspace.Destination, [], progress: new Progress<SortProgressInfo>(reports.Add));
 
         Assert.Equal(0, summary.TotalBooks);
         await WaitForAsync(() => reports.Any(r => r.IsComplete));
@@ -299,7 +299,7 @@ public class FileSorterTests
 
     private static Task<SortSummary> Sort(TempWorkspace workspace, IProgress<SortProgressInfo>? progress, params OpenAudible[] books)
     {
-        return new FileSorter().SortAudioFiles(workspace.Source, workspace.Destination, [.. books], progress);
+        return new FileSorter().SortAudioFiles(workspace.Source, workspace.Destination, [.. books], progress: progress);
     }
 
     /// <summary>

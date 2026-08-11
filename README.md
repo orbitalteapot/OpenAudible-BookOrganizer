@@ -11,7 +11,33 @@ Supported targets include Windows, Linux, macOS, and Docker.
 - Loads an OpenAudible CSV export
 - Organizes audiobook files into `Author / Series / Book` folders
 - Copies companion PDFs when they are available in the CSV metadata
+- Replaces books you have re-downloaded, so an organized library stays current
 - Ships as a desktop app and as a Docker image for watcher-based automation
+
+## Keeping Books Up To Date
+
+Publishers re-issue audiobooks: a corrected chapter, a re-recorded narration, an updated edition.
+When you download the new version, a sort should replace the copy already in your organized
+library rather than leave the old one sitting there.
+
+Every run compares each book against the copy at the destination and only writes when they differ,
+so re-running a sort is cheap and safe. How closely it compares is up to you — the **Update check**
+setting on the Sort page toggles between the two:
+
+| Update check | What it compares | When to use it |
+| --- | --- | --- |
+| **Quick** (default) | File size, plus the first, middle and last 4 KB | Every day. It catches any re-release whose length changed, which is nearly all of them, and costs almost nothing to run over a large library. |
+| **Verify contents** | Every byte of both files | When you suspect a book was re-issued at exactly the same size, or you want certainty after a bad disk or an interrupted copy. Slower: it reads both files in full. |
+
+Either way, books that already match are left untouched and reported as skipped, and the sort
+summary shows how many books were **Updated** — replaced because their source had changed — as
+opposed to copied for the first time.
+
+In Docker, set the default with the `COMPARISON_MODE` environment variable (`quick` or `full`);
+the Sort page can still override it for an individual run.
+
+Note that a re-release that also changes the book's *title* is filed under the new name, and the
+file under the old name is left alone; the organiser never deletes from your destination folder.
 
 ## Screenshots
 
@@ -125,6 +151,8 @@ Optional:
 - `OABO_MAX_PARALLELISM` sets how many books are copied at once. It defaults to a quarter of the
   available CPU cores, capped at 8. Lower it to `1` or `2` if the destination is a network share
   or a spinning disk, where more concurrency makes transfers slower rather than faster.
+- `COMPARISON_MODE` sets the default update check, `quick` (the default) or `full`. See
+  [Keeping books up to date](#keeping-books-up-to-date). The Sort page can override it per run.
 
 ### How the Website Works
 
@@ -178,6 +206,7 @@ The container expects these environment variables:
 - `CSV_PATH=/data/books.csv`
 - `SOURCE_PATH=/source`
 - `DESTINATION_PATH=/destination`
+- `COMPARISON_MODE=quick` (optional; use `full` to compare every byte)
 
 Example:
 

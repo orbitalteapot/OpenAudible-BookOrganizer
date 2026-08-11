@@ -5,6 +5,24 @@
 A stability-focused release for the book organiser. The sorting engine has been reworked so that
 a run is predictable, repeatable, and safe to interrupt.
 
+## New: choose how books are kept up to date
+
+Publishers re-issue audiobooks, and a sort should replace the copy in your organized library rather
+than leave the old one behind. Every run already compares each book against the destination and
+only writes when they differ; the Sort page now lets you choose *how closely* it compares.
+
+- **Quick** (default, and what previous versions did) — file size plus the first, middle and last
+  4 KB. It catches any re-release whose length changed, which is nearly all of them, and costs
+  almost nothing to run over a large library.
+- **Verify contents** — compares every byte, and replaces any book that changed at all. Slower,
+  because it reads both files in full, but it also catches a re-issue that happens to be exactly
+  the same size as the copy you already have.
+
+Books that already match are left untouched either way. The progress panel now reports **Updated**
+— books replaced because their source had changed — separately from books copied for the first
+time. In Docker, set the default with `COMPARISON_MODE=quick|full`; the Sort page still overrides
+it for an individual run.
+
 ## Fixes
 
 **Your library is no longer rewritten by a sort.** Sorting used to overwrite the in-memory book
@@ -60,12 +78,14 @@ folder is refused, and progress now reports copied, skipped and failed counts se
 - Copy concurrency is capped at 8 and can be set with the `OABO_MAX_PARALLELISM` environment
   variable.
 - `POST /api/books/parse` now returns `{ books, skippedRows, warnings }` instead of a bare array.
+- `POST /api/sort/start` accepts an optional `comparisonMode` of `"quick"` or `"full"`; omitting it
+  uses the server default. Sort progress gained an `updatedBooks` count.
 
 ## Testing
 
-This release adds a test suite (140 tests) covering path safety, name resolution, planning
-determinism, atomic and idempotent copying, cancellation, and CSV robustness, plus a CI workflow
-that runs it on Linux and Windows.
+This release adds a test suite (171 tests) covering path safety, name resolution, planning
+determinism, atomic and idempotent copying, both update checks, cancellation, and CSV robustness,
+plus a CI workflow that runs it on Linux and Windows.
 
 ## Feedback
 

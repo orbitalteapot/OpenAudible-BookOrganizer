@@ -18,6 +18,7 @@ export default function App() {
     csvPath: '',
     sourcePath: '',
     destPath: '',
+    comparisonMode: 'quick',
     sorting: false,
     progress: null,
     error: null,
@@ -39,6 +40,7 @@ export default function App() {
           csvPath: config.csvPath || prev.csvPath,
           sourcePath: config.sourcePath || prev.sourcePath,
           destPath: config.destinationPath || prev.destPath,
+          comparisonMode: config.comparisonMode || prev.comparisonMode,
         }));
       })
       .catch(() => {

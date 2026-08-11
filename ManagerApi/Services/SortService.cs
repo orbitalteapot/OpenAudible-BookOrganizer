@@ -97,11 +97,17 @@ public class SortService
         }
     }
 
+    /// <summary>Starts a sort with the default settings.</summary>
+    public bool TryStartSort(string csvPath, string sourcePath, string destinationPath, out Task sortTask)
+    {
+        return TryStartSort(csvPath, sourcePath, destinationPath, null, out sortTask);
+    }
+
     /// <summary>
     /// Starts a sort if none is running. Returns false when one already is, so the caller can tell
     /// the user the truth instead of reporting a run that never started.
     /// </summary>
-    public bool TryStartSort(string csvPath, string sourcePath, string destinationPath, out Task sortTask)
+    public bool TryStartSort(string csvPath, string sourcePath, string destinationPath, SortOptions? options, out Task sortTask)
     {
         lock (_sortLock)
         {
@@ -116,19 +122,19 @@ public class SortService
             _sortCancellation = new CancellationTokenSource();
         }
 
-        sortTask = RunSort(csvPath, sourcePath, destinationPath);
+        sortTask = RunSort(csvPath, sourcePath, destinationPath, options ?? SortOptions.Default);
         return true;
     }
 
     /// <summary>Starts a sort and waits for it to finish. Used by tests and by direct callers.</summary>
-    public Task StartSort(string csvPath, string sourcePath, string destinationPath)
+    public Task StartSort(string csvPath, string sourcePath, string destinationPath, SortOptions? options = null)
     {
-        return TryStartSort(csvPath, sourcePath, destinationPath, out var sortTask)
+        return TryStartSort(csvPath, sourcePath, destinationPath, options, out var sortTask)
             ? sortTask
             : Task.CompletedTask;
     }
 
-    private async Task RunSort(string csvPath, string sourcePath, string destinationPath)
+    private async Task RunSort(string csvPath, string sourcePath, string destinationPath, SortOptions options)
     {
         CancellationTokenSource cancellation;
         lock (_sortLock)
@@ -144,13 +150,14 @@ public class SortService
             // per-book report could be delivered after the final one and leave the run looking
             // unfinished forever.
             var progress = new InlineProgress<SortProgressInfo>(SetProgress);
-            var summary = await _fileSorter.SortAudioFiles(sourcePath, destinationPath, books, progress, cancellation.Token);
+            var summary = await _fileSorter.SortAudioFiles(sourcePath, destinationPath, books, options, progress, cancellation.Token);
 
             SetProgress(new SortProgressInfo
             {
                 CurrentBook = summary.TotalBooks,
                 TotalBooks = summary.TotalBooks,
                 CopiedBooks = summary.CopiedBooks,
+                UpdatedBooks = summary.UpdatedBooks,
                 SkippedBooks = summary.SkippedBooks,
                 FailedBooks = summary.FailedBooks,
                 WarningCount = summary.WarningCount,
@@ -166,6 +173,7 @@ public class SortService
                 CurrentBook = snapshot.CurrentBook,
                 TotalBooks = snapshot.TotalBooks,
                 CopiedBooks = snapshot.CopiedBooks,
+                UpdatedBooks = snapshot.UpdatedBooks,
                 SkippedBooks = snapshot.SkippedBooks,
                 FailedBooks = snapshot.FailedBooks,
                 WarningCount = snapshot.WarningCount,
@@ -183,6 +191,7 @@ public class SortService
                 CurrentBook = snapshot.CurrentBook,
                 TotalBooks = snapshot.TotalBooks,
                 CopiedBooks = snapshot.CopiedBooks,
+                UpdatedBooks = snapshot.UpdatedBooks,
                 SkippedBooks = snapshot.SkippedBooks,
                 FailedBooks = snapshot.FailedBooks,
                 WarningCount = snapshot.WarningCount,

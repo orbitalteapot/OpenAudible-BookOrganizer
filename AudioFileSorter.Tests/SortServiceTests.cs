@@ -26,6 +26,38 @@ public class SortServiceTests
     }
 
     [Fact]
+    public async Task TryStartSort_passes_the_requested_update_check_through_to_the_sorter()
+    {
+        using var workspace = new TempWorkspace();
+
+        // Same length, differing only outside the chunks the quick check samples, so the mode the
+        // service hands down is the only thing that decides whether this book is replaced.
+        var (original, edited) = TempWorkspace.SameSizeEditedPair();
+
+        workspace.WriteSourceFile("the-hobbit.m4b", edited);
+        var destination = workspace.WriteDestinationFile(Path.Combine("Tolkien", "The Hobbit.m4b"), original);
+        var csvPath = WriteCsv(workspace, "The Hobbit,Tolkien,the-hobbit");
+
+        var quickService = new SortService();
+        Assert.True(quickService.TryStartSort(
+            csvPath, workspace.Source, workspace.Destination,
+            new SortOptions { ComparisonMode = FileComparisonMode.Quick }, out var quickTask));
+        await quickTask;
+
+        Assert.Equal(0, quickService.GetProgress().UpdatedBooks);
+        Assert.Equal(original, File.ReadAllText(destination));
+
+        var fullService = new SortService();
+        Assert.True(fullService.TryStartSort(
+            csvPath, workspace.Source, workspace.Destination,
+            new SortOptions { ComparisonMode = FileComparisonMode.Full }, out var fullTask));
+        await fullTask;
+
+        Assert.Equal(1, fullService.GetProgress().UpdatedBooks);
+        Assert.Equal(edited, File.ReadAllText(destination));
+    }
+
+    [Fact]
     public async Task A_late_progress_report_cannot_un_finish_a_completed_sort()
     {
         // A per-book report delivered after the run ended used to overwrite the completed state.

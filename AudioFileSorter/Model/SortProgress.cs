@@ -6,6 +6,9 @@ public class SortProgressInfo
     public int TotalBooks { get; set; }
     public int CopiedBooks { get; set; }
 
+    /// <summary>Books where an out-of-date file at the destination was replaced. Part of <see cref="CopiedBooks"/>.</summary>
+    public int UpdatedBooks { get; set; }
+
     /// <summary>Books that needed no work: already up to date, or with no matching source file.</summary>
     public int SkippedBooks { get; set; }
 

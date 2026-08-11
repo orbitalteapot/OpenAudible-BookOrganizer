@@ -1,3 +1,4 @@
+using AudioFileSorter.Model;
 using ManagerApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -5,6 +6,16 @@ var builder = WebApplication.CreateBuilder(args);
 var csvPath = Environment.GetEnvironmentVariable("CSV_PATH") ?? string.Empty;
 var sourcePath = Environment.GetEnvironmentVariable("SOURCE_PATH") ?? string.Empty;
 var destinationPath = Environment.GetEnvironmentVariable("DESTINATION_PATH") ?? string.Empty;
+
+// COMPARISON_MODE is the server-wide default: a container can be set up to verify contents on
+// every run, and a request that names a mode explicitly still wins.
+var configuredComparisonMode = Environment.GetEnvironmentVariable("COMPARISON_MODE");
+if (!SortOptions.TryParseComparisonMode(configuredComparisonMode, out var defaultComparisonMode))
+{
+    Console.Error.WriteLine(
+        $"Ignoring COMPARISON_MODE=\"{configuredComparisonMode}\": expected \"quick\" or \"full\". Using \"quick\".");
+    defaultComparisonMode = SortOptions.Default.ComparisonMode;
+}
 
 builder.Services.AddCors(options =>
 {
@@ -36,6 +47,7 @@ app.MapGet("/api/config", () => Results.Ok(new
     sourcePath,
     destinationPath,
     webMode = true,
+    comparisonMode = SortOptions.ToWireValue(defaultComparisonMode),
     csvExists = !string.IsNullOrWhiteSpace(csvPath) && File.Exists(csvPath),
     sourceExists = !string.IsNullOrWhiteSpace(sourcePath) && Directory.Exists(sourcePath),
     destinationExists = !string.IsNullOrWhiteSpace(destinationPath) && Directory.Exists(destinationPath)
@@ -92,6 +104,18 @@ app.MapPost("/api/sort/start", (SortRequest? request, SortService sortService) =
         return Results.BadRequest(new { error = "All paths are required" });
     }
 
+    // An omitted mode means "whatever this server is configured for", so a container started with
+    // COMPARISON_MODE=full verifies contents even for callers that never heard of the setting.
+    var comparisonMode = defaultComparisonMode;
+    if (!string.IsNullOrWhiteSpace(request.ComparisonMode) &&
+        !SortOptions.TryParseComparisonMode(request.ComparisonMode, out comparisonMode))
+    {
+        return Results.BadRequest(new
+        {
+            error = $"Unknown comparison mode \"{request.ComparisonMode}\". Use \"quick\" or \"full\"."
+        });
+    }
+
     // Validate before starting so the user gets a real error instead of a run that reports
     // failure seconds later, or worse, never reports at all.
     if (!File.Exists(request.CsvPath))
@@ -122,7 +146,8 @@ app.MapPost("/api/sort/start", (SortRequest? request, SortService sortService) =
     }
 
     // Checking IsSorting separately would leave a window where two requests both start a run.
-    if (!sortService.TryStartSort(request.CsvPath, request.SourcePath, request.DestinationPath, out var sortTask))
+    var options = new SortOptions { ComparisonMode = comparisonMode };
+    if (!sortService.TryStartSort(request.CsvPath, request.SourcePath, request.DestinationPath, options, out var sortTask))
     {
         return Results.Conflict(new { error = "Sort already in progress" });
     }
@@ -131,7 +156,11 @@ app.MapPost("/api/sort/start", (SortRequest? request, SortService sortService) =
         t => logger.LogError(t.Exception, "Sort task faulted"),
         TaskContinuationOptions.OnlyOnFaulted);
 
-    return Results.Ok(new { message = "Sort started" });
+    return Results.Ok(new
+    {
+        message = "Sort started",
+        comparisonMode = SortOptions.ToWireValue(comparisonMode)
+    });
 });
 
 app.MapGet("/api/sort/progress", (SortService sortService) => Results.Ok(sortService.GetProgress()));
@@ -167,7 +196,9 @@ static bool PathsOverlap(string sourcePath, string destinationPath)
 }
 
 record ParseRequest(string CsvPath);
-record SortRequest(string CsvPath, string SourcePath, string DestinationPath);
+
+/// <param name="ComparisonMode">"quick" or "full". Omitted means the server default.</param>
+record SortRequest(string CsvPath, string SourcePath, string DestinationPath, string? ComparisonMode = null);
 
 /// <summary>Exposed so the integration tests can drive the real application host.</summary>
 public partial class Program;

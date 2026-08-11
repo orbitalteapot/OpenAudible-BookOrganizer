@@ -62,6 +62,24 @@ public sealed class TempWorkspace : IDisposable
             .ToArray();
     }
 
+    /// <summary>
+    /// Two equal-length contents that are identical in the first, middle and last 4 KB — the three
+    /// windows the quick update check samples — and differ only in between. Stands in for an author
+    /// re-issuing a book without changing its size.
+    /// </summary>
+    public static (string Original, string Edited) SameSizeEditedPair()
+    {
+        const int chunk = 4096;
+        var head = new string('h', chunk);
+        var middle = new string('m', chunk);
+        var tail = new string('t', chunk);
+
+        var original = head + new string('a', chunk * 4) + middle + new string('a', chunk * 4) + tail;
+        var edited = head + new string('a', chunk * 2) + new string('b', chunk * 2) + middle + new string('a', chunk * 4) + tail;
+
+        return (original, edited);
+    }
+
     public static OpenAudible Book(
         string? title = "A Book",
         string? author = "An Author",

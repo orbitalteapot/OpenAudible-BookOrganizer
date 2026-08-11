@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
@@ -13,6 +14,7 @@ public class FileSorter
 {
     private const int MaxReportedWarnings = 200;
     private const int CopyBufferSize = 81920;
+    private const int ComparisonBufferSize = 131072;
     private const string PartialFileSuffix = ".oabo-partial";
 
     private static readonly object ConsoleLock = new();
@@ -23,6 +25,7 @@ public class FileSorter
     /// <param name="source">Source folder containing audio files.</param>
     /// <param name="destination">Destination folder to sort files into.</param>
     /// <param name="openAudibles">List of audiobook metadata. Never modified.</param>
+    /// <param name="options">Per-run settings. Defaults to <see cref="SortOptions.Default"/>.</param>
     /// <param name="progress">Optional progress reporter.</param>
     /// <param name="cancellationToken">Token used to abort the run.</param>
     /// <exception cref="ArgumentException">A required path was not supplied.</exception>
@@ -32,10 +35,13 @@ public class FileSorter
         string? source,
         string? destination,
         List<OpenAudible> openAudibles,
+        SortOptions? options = null,
         IProgress<SortProgressInfo>? progress = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(openAudibles);
+
+        var comparisonMode = (options ?? SortOptions.Default).ComparisonMode;
 
         // These used to be logged and swallowed, which left the UI waiting for a run that was
         // never going to report anything.
@@ -85,8 +91,11 @@ public class FileSorter
 
         cancellationToken.ThrowIfCancellationRequested();
 
+        WriteLine($"Sorting {totalBooks} books using the {DescribeMode(comparisonMode)} update check.");
+
         var progressCount = 0;
         var copiedBooks = 0;
+        var updatedBooks = 0;
         var skippedBooks = 0;
         var failedBooks = 0;
         var maxLineLength = 0;
@@ -99,20 +108,22 @@ public class FileSorter
 
         await Parallel.ForEachAsync(planned, parallelOptions, async (item, ct) =>
         {
-            var copiedAnything = false;
-
             try
             {
                 ct.ThrowIfCancellationRequested();
-                copiedAnything = await ProcessPlannedCopy(item, ct);
+                var outcome = await ProcessPlannedCopy(item, comparisonMode, ct);
 
-                if (copiedAnything)
+                if (outcome == CopyOutcome.Skipped)
                 {
-                    Interlocked.Increment(ref copiedBooks);
+                    Interlocked.Increment(ref skippedBooks);
                 }
                 else
                 {
-                    Interlocked.Increment(ref skippedBooks);
+                    Interlocked.Increment(ref copiedBooks);
+                    if (outcome == CopyOutcome.Updated)
+                    {
+                        Interlocked.Increment(ref updatedBooks);
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -134,6 +145,7 @@ public class FileSorter
                 CurrentBook = currentProgress,
                 TotalBooks = totalBooks,
                 CopiedBooks = currentCopied,
+                UpdatedBooks = Volatile.Read(ref updatedBooks),
                 SkippedBooks = Volatile.Read(ref skippedBooks),
                 FailedBooks = Volatile.Read(ref failedBooks),
                 CurrentTitle = item.Label,
@@ -146,6 +158,7 @@ public class FileSorter
         {
             TotalBooks = totalBooks,
             CopiedBooks = copiedBooks,
+            UpdatedBooks = updatedBooks,
             SkippedBooks = skippedBooks,
             FailedBooks = failedBooks,
             Warnings = warnings.ToArray(),
@@ -157,6 +170,7 @@ public class FileSorter
             CurrentBook = totalBooks,
             TotalBooks = totalBooks,
             CopiedBooks = summary.CopiedBooks,
+            UpdatedBooks = summary.UpdatedBooks,
             SkippedBooks = summary.SkippedBooks,
             FailedBooks = summary.FailedBooks,
             Percentage = 100,
@@ -164,40 +178,89 @@ public class FileSorter
             WarningCount = summary.WarningCount
         });
 
-        WriteLine($"Sorting complete. Copied {summary.CopiedBooks}, skipped {summary.SkippedBooks}, failed {summary.FailedBooks} of {totalBooks}.");
+        WriteLine(
+            $"Sorting complete. Copied {summary.CopiedBooks} (of which {summary.UpdatedBooks} updated), " +
+            $"skipped {summary.SkippedBooks}, failed {summary.FailedBooks} of {totalBooks}.");
         return summary;
     }
 
-    private static async Task<bool> ProcessPlannedCopy(PlannedCopy item, CancellationToken cancellationToken)
+    /// <summary>What a single file, or a whole book, needed.</summary>
+    private enum CopyOutcome
+    {
+        /// <summary>Already up to date, or nothing to copy.</summary>
+        Skipped = 0,
+
+        /// <summary>Written where nothing was before.</summary>
+        Created = 1,
+
+        /// <summary>An existing, out-of-date file was replaced.</summary>
+        Updated = 2
+    }
+
+    private static async Task<CopyOutcome> ProcessPlannedCopy(
+        PlannedCopy item,
+        FileComparisonMode comparisonMode,
+        CancellationToken cancellationToken)
     {
         if (!item.HasWork)
         {
-            return false;
+            return CopyOutcome.Skipped;
         }
 
         Directory.CreateDirectory(item.TargetDirectory!);
 
-        var copiedAudio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, cancellationToken);
-        var copiedPdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, cancellationToken);
-        return copiedAudio || copiedPdf;
+        var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, cancellationToken);
+        var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, cancellationToken);
+
+        // A book counts as updated when any of its files replaced an existing one; a book whose
+        // audio is new but whose PDF was already there is simply a copy.
+        if (audio == CopyOutcome.Updated || pdf == CopyOutcome.Updated)
+        {
+            return CopyOutcome.Updated;
+        }
+
+        return audio == CopyOutcome.Created || pdf == CopyOutcome.Created
+            ? CopyOutcome.Created
+            : CopyOutcome.Skipped;
     }
 
-    private static async Task<bool> CopyIfNeededAsync(string? sourceFile, string? destinationFile, CancellationToken cancellationToken)
+    private static async Task<CopyOutcome> CopyIfNeededAsync(
+        string? sourceFile,
+        string? destinationFile,
+        FileComparisonMode comparisonMode,
+        CancellationToken cancellationToken)
     {
         if (sourceFile is null || destinationFile is null)
         {
-            return false;
+            return CopyOutcome.Skipped;
         }
 
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (File.Exists(destinationFile) && await AreFilesSameAsync(sourceFile, destinationFile, cancellationToken))
+        var destinationExists = File.Exists(destinationFile);
+        if (destinationExists && await IsDestinationUpToDateAsync(sourceFile, destinationFile, comparisonMode, cancellationToken))
         {
-            return false;
+            return CopyOutcome.Skipped;
         }
 
         await CopyFileAtomicAsync(sourceFile, destinationFile, cancellationToken);
-        return true;
+        return destinationExists ? CopyOutcome.Updated : CopyOutcome.Created;
+    }
+
+    /// <summary>
+    /// Decides whether the file already at the destination still matches its source. Returning
+    /// false means "replace it", so every uncertain case has to answer false: a book the user
+    /// re-downloaded must not stay stale because a check could not make up its mind.
+    /// </summary>
+    private static Task<bool> IsDestinationUpToDateAsync(
+        string sourceFile,
+        string destinationFile,
+        FileComparisonMode comparisonMode,
+        CancellationToken cancellationToken)
+    {
+        return comparisonMode == FileComparisonMode.Full
+            ? AreFilesIdenticalAsync(sourceFile, destinationFile, cancellationToken)
+            : AreFilesSameAsync(sourceFile, destinationFile, cancellationToken);
     }
 
     /// <summary>
@@ -301,6 +364,88 @@ public class FileSorter
         }
     }
 
+    /// <summary>
+    /// Byte-for-byte comparison of two files. Used by <see cref="FileComparisonMode.Full"/>, where
+    /// the point is to notice a re-released book that happens to be exactly the same size as the
+    /// copy already on disk — something the sampled check cannot see.
+    /// </summary>
+    private static async Task<bool> AreFilesIdenticalAsync(string filePath1, string filePath2, CancellationToken cancellationToken)
+    {
+        byte[]? buffer1 = null;
+        byte[]? buffer2 = null;
+
+        try
+        {
+            var fileInfo1 = new FileInfo(filePath1);
+            var fileInfo2 = new FileInfo(filePath2);
+
+            if (!fileInfo1.Exists || !fileInfo2.Exists || fileInfo1.Length != fileInfo2.Length)
+            {
+                return false;
+            }
+
+            if (fileInfo1.Length == 0)
+            {
+                return true;
+            }
+
+            buffer1 = ArrayPool<byte>.Shared.Rent(ComparisonBufferSize);
+            buffer2 = ArrayPool<byte>.Shared.Rent(ComparisonBufferSize);
+
+            await using var stream1 = new FileStream(
+                filePath1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, ComparisonBufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+            await using var stream2 = new FileStream(
+                filePath2, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, ComparisonBufferSize,
+                FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+            while (true)
+            {
+                var read1 = await stream1.ReadAtLeastAsync(
+                    buffer1.AsMemory(0, ComparisonBufferSize), ComparisonBufferSize, throwOnEndOfStream: false, cancellationToken);
+                var read2 = await stream2.ReadAtLeastAsync(
+                    buffer2.AsMemory(0, ComparisonBufferSize), ComparisonBufferSize, throwOnEndOfStream: false, cancellationToken);
+
+                if (read1 != read2)
+                {
+                    // The lengths matched a moment ago, so one of the files is being written to
+                    // right now. Treat it as different and copy again on this or the next run.
+                    return false;
+                }
+
+                if (read1 == 0)
+                {
+                    return true;
+                }
+
+                if (!buffer1.AsSpan(0, read1).SequenceEqual(buffer2.AsSpan(0, read2)))
+                {
+                    return false;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return false; // Assume the files differ so the copy is retried.
+        }
+        finally
+        {
+            if (buffer1 is not null)
+            {
+                ArrayPool<byte>.Shared.Return(buffer1);
+            }
+
+            if (buffer2 is not null)
+            {
+                ArrayPool<byte>.Shared.Return(buffer2);
+            }
+        }
+    }
+
     private static IEnumerable<long> GetSampleOffsets(long length, int chunkSize)
     {
         yield return 0;
@@ -317,6 +462,11 @@ public class FileSorter
         }
 
         yield return Math.Max(0, length - chunkSize);
+    }
+
+    private static string DescribeMode(FileComparisonMode mode)
+    {
+        return mode == FileComparisonMode.Full ? "full (byte-for-byte)" : "quick (size and sampled contents)";
     }
 
     internal static double CalculatePercentage(int current, int total)

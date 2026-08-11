@@ -76,13 +76,17 @@ export async function getBooks() {
   return Array.isArray(data) ? data : [];
 }
 
-export function startSort(csvPath, sourcePath, destinationPath) {
+/**
+ * @param comparisonMode 'quick' | 'full'. Omitted lets the backend pick its default, which keeps
+ * this working against a backend that predates the setting.
+ */
+export function startSort(csvPath, sourcePath, destinationPath, comparisonMode) {
   return requestJson(
     '/api/sort/start',
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ csvPath, sourcePath, destinationPath }),
+      body: JSON.stringify({ csvPath, sourcePath, destinationPath, comparisonMode }),
     },
     'Failed to start sort'
   );

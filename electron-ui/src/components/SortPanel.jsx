@@ -9,14 +9,32 @@ import {
   AlertCircle,
   Loader2,
   ArrowUpDown,
+  Gauge,
+  ShieldCheck,
 } from 'lucide-react';
 import { startSort, getSortProgress, cancelSort } from '../api';
 
 const POLL_INTERVAL_MS = 400;
 const MAX_POLL_FAILURES = 25; // ~10 seconds of silence before giving up
 
+const COMPARISON_MODES = [
+  {
+    value: 'quick',
+    label: 'Quick',
+    description:
+      'Replaces a book when its size or sampled contents differ. Fast, and catches almost every re-release.',
+  },
+  {
+    value: 'full',
+    label: 'Verify contents',
+    description:
+      'Compares every byte and replaces any book that changed. Slower, but never leaves a stale copy behind.',
+  },
+];
+
 export default function SortPanel({ books, sortState, setSortState }) {
   const { csvPath, sourcePath, destPath, sorting, progress, error } = sortState;
+  const comparisonMode = sortState.comparisonMode === 'full' ? 'full' : 'quick';
   const pollRef = useRef(null);
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
@@ -50,7 +68,7 @@ export default function SortPanel({ books, sortState, setSortState }) {
     update({ error: null, sorting: true, progress: null });
 
     try {
-      await startSort(csvPath, sourcePath, destPath);
+      await startSort(csvPath, sourcePath, destPath, comparisonMode);
       startPolling();
     } catch (err) {
       update({ error: err.message, sorting: false });
@@ -122,6 +140,8 @@ export default function SortPanel({ books, sortState, setSortState }) {
   const hasError = progress?.error;
   const progressDetails = parseProgressDetails(progress?.currentTitle);
   const warningCount = progress?.warningCount || 0;
+
+  const updatedCount = progress?.updatedBooks || 0;
 
   // skippedBooks was added alongside failedBooks; fall back for an older backend.
   const skippedCount =
@@ -214,6 +234,40 @@ export default function SortPanel({ books, sortState, setSortState }) {
                 )}
               </div>
             </div>
+
+            {/* Update check */}
+            <div>
+              <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                Update check
+              </label>
+              <div
+                role="radiogroup"
+                aria-label="Update check"
+                className="flex gap-1 p-1 bg-slate-800/80 border border-slate-600/50 rounded-lg"
+              >
+                {COMPARISON_MODES.map((mode) => (
+                  <button
+                    key={mode.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={comparisonMode === mode.value}
+                    disabled={sorting}
+                    onClick={() => update({ comparisonMode: mode.value })}
+                    className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+                      comparisonMode === mode.value
+                        ? 'bg-brand-600 text-white'
+                        : 'text-slate-300 hover:bg-slate-700/60'
+                    }`}
+                  >
+                    {mode.value === 'full' ? <ShieldCheck size={14} /> : <Gauge size={14} />}
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1.5">
+                {COMPARISON_MODES.find((mode) => mode.value === comparisonMode)?.description}
+              </p>
+            </div>
           </div>
 
           {error && (
@@ -300,12 +354,17 @@ export default function SortPanel({ books, sortState, setSortState }) {
               </div>
 
               {/* Stats */}
-              <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">
                 <StatCard label="Total" value={progress?.totalBooks || 0} />
                 <StatCard
                   label="Copied"
                   value={progress?.copiedBooks || 0}
                   color="text-emerald-400"
+                />
+                <StatCard
+                  label="Updated"
+                  value={updatedCount}
+                  color={updatedCount ? 'text-sky-400' : 'text-slate-400'}
                 />
                 <StatCard label="Skipped" value={skippedCount} color="text-amber-400" />
                 <StatCard
@@ -348,6 +407,7 @@ export default function SortPanel({ books, sortState, setSortState }) {
                     <p className="text-sm font-medium text-emerald-300">Sorting complete!</p>
                     <p className="text-xs text-emerald-400/70 mt-0.5">
                       {progress.copiedBooks} book{progress.copiedBooks !== 1 ? 's' : ''} copied
+                      {updatedCount > 0 && `, ${updatedCount} of them updated in place`}
                       {skippedCount > 0 && `, ${skippedCount} already up to date or unmatched`}
                       {progress.failedBooks > 0 && `, ${progress.failedBooks} failed`}
                     </p>

@@ -5,8 +5,14 @@ public sealed class SortSummary
 {
     public int TotalBooks { get; init; }
 
-    /// <summary>Books for which at least one file was written.</summary>
+    /// <summary>Books for which at least one file was written, whether new or replaced.</summary>
     public int CopiedBooks { get; init; }
+
+    /// <summary>
+    /// Books where a file already at the destination was found to be out of date and replaced.
+    /// A subset of <see cref="CopiedBooks"/>.
+    /// </summary>
+    public int UpdatedBooks { get; init; }
 
     /// <summary>Books that were already up to date, or had no file to copy.</summary>
     public int SkippedBooks { get; init; }

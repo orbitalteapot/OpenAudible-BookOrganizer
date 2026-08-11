@@ -10,6 +10,9 @@ services:
       SOURCE_PATH: /source
       # Path inside the container where sorted books are written
       DESTINATION_PATH: /destination
+      # Default update check: "quick" (size and sampled contents) or "full" (every byte).
+      # The Sort page can override this for an individual run.
+      COMPARISON_MODE: quick
     ports:
       - "5123:5123"
     volumes:
