@@ -2,26 +2,11 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { BookOpen, FileUp, Search } from 'lucide-react';
 import { parseBooks } from '../api';
 import { useDebounced, useIsElectron } from '../hooks';
+import { compareBooks, filterBooks, SORT_LABELS } from '../sorting';
 import Button from './ui/Button';
 import { TextInput } from './ui/Field';
 import { Banner, EmptyState } from './ui/Surface';
 import LibraryTable from './LibraryTable';
-
-const SEARCH_FIELDS = ['title', 'author', 'seriesName', 'narratedBy'];
-
-const SORT_LABELS = {
-  title: 'title',
-  author: 'author',
-  seriesName: 'series',
-  narratedBy: 'narrator',
-  duration: 'duration',
-  aveRating: 'rating',
-};
-
-// Natural ordering, so "Book 2" sorts before "Book 10" and accented names file where a reader
-// expects. Built once rather than per comparison: constructing a collator is not cheap, and doing
-// it inside the sort callback made large libraries noticeably slow to reorder.
-const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
 
 function LibraryView({ books, setBooks, csvPath }) {
   const isElectron = useIsElectron();
@@ -79,38 +64,12 @@ function LibraryView({ books, setBooks, csvPath }) {
 
   // Filtering and sorting are separate passes so that typing does not pay for a re-sort and
   // re-sorting does not pay for a re-filter.
-  const filtered = useMemo(() => {
-    const query = debouncedSearch.trim().toLowerCase();
-    if (!query) return books;
+  const filtered = useMemo(() => filterBooks(books, debouncedSearch), [books, debouncedSearch]);
 
-    return books.filter((book) =>
-      SEARCH_FIELDS.some((field) => book[field]?.toLowerCase().includes(query))
-    );
-  }, [books, debouncedSearch]);
-
-  const rows = useMemo(() => {
-    const { field, dir } = sort;
-    const sorted = [...filtered];
-
-    sorted.sort((a, b) => {
-      const left = a[field];
-      const right = b[field];
-
-      // Books missing the sorted-on value collect at the end either way, rather than forming a
-      // block of blanks at the top when the direction flips.
-      if (left == null || left === '') return right == null || right === '' ? 0 : 1;
-      if (right == null || right === '') return -1;
-
-      const comparison =
-        typeof left === 'number' && typeof right === 'number'
-          ? left - right
-          : collator.compare(String(left), String(right));
-
-      return dir === 'asc' ? comparison : -comparison;
-    });
-
-    return sorted;
-  }, [filtered, sort]);
+  const rows = useMemo(
+    () => [...filtered].sort(compareBooks(sort.field, sort.dir)),
+    [filtered, sort]
+  );
 
   const sortLabel = SORT_LABELS[sort.field] ?? sort.field;
   const announcement = [

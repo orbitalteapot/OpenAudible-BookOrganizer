@@ -125,11 +125,13 @@ export default function LibraryTable({
   }, [resetKey, scrollToTop]);
 
   // Sorting by a column that is no longer rendered leaves the order unexplained and unchangeable.
+  // Guarded on a measured width: before the first measurement every optional column looks absent,
+  // and acting on that would silently discard the sort each time the view mounts.
   useEffect(() => {
-    if (!columns.some((column) => column.key === sortField)) {
+    if (containerWidth > 0 && !columns.some((column) => column.key === sortField)) {
       onSortFieldHidden?.();
     }
-  }, [columns, sortField, onSortFieldHidden]);
+  }, [containerWidth, columns, sortField, onSortFieldHidden]);
 
   const visible = books.slice(start, end);
 

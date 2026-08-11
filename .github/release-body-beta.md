@@ -23,6 +23,20 @@ Books that already match are left untouched either way. The progress panel now r
 time. In Docker, set the default with `COMPARISON_MODE=quick|full`; the Sort page still overrides
 it for an individual run.
 
+## Fixed since beta.1
+
+**The library list was ordering two columns wrongly.** Sorting by Duration compared the raw text
+OpenAudible writes ("45 mins", "9 hrs and 9 mins"), so a 45 minute book was filed *after* a nine
+hour one — 45 reads as larger than 9. Sorting by Series compared the series name alone, leaving
+every book in a series tied and in whatever order the export happened to use, which routinely put
+#10 above #2. Both now sort on what the column means rather than how the value is spelled.
+
+**Linux windows are associated with the installed app.** The `.desktop` entry's name did not match
+the window class, so a running window appeared as a separate generic entry rather than grouping
+under the app.
+
+The desktop and web interface has also been rebuilt — see below.
+
 ## Fixes
 
 **Your library is no longer rewritten by a sort.** Sorting used to overwrite the in-memory book
@@ -81,11 +95,34 @@ folder is refused, and progress now reports copied, skipped and failed counts se
 - `POST /api/sort/start` accepts an optional `comparisonMode` of `"quick"` or `"full"`; omitting it
   uses the server default. Sort progress gained an `updatedBooks` count.
 
+## A rebuilt interface
+
+The app has been reworked to stay usable with a large collection and to get out of the way.
+
+- **A 5,000 book library now renders in about a quarter of a second instead of four and a half
+  seconds.** Only the rows near the viewport are built, so the browser holds a few hundred elements
+  rather than 120,000, and scrolling stays smooth however large the collection is.
+- Searching is debounced and no longer re-sorts on every keystroke; the list returns to the top
+  when the results change instead of stranding you in the middle of a list that no longer exists.
+- The list is a real table with sortable headers, so screen readers can navigate it and it reports
+  the true size of your library.
+- Narrow windows shed optional columns and collapse the sidebar to icons rather than squeezing
+  everything into ellipses.
+- Durations read "12h 34m" rather than truncating to "12 hrs and…".
+- Flatter, quieter visuals: one accent colour, no gradients or glow, and text that meets the
+  WCAG AA contrast minimum on every surface it sits on.
+
 ## Testing
 
-This release adds a test suite (171 tests) covering path safety, name resolution, planning
-determinism, atomic and idempotent copying, both update checks, cancellation, and CSV robustness,
-plus a CI workflow that runs it on Linux and Windows.
+178 backend tests cover path safety, name resolution, planning determinism, atomic and idempotent
+copying, both update checks, cancellation and CSV robustness. 20 frontend tests cover the search
+and ordering rules, including regression tests for the two sorting bugs above. Both suites run in
+CI on Linux and Windows, and now gate the release itself.
+
+This beta was also driven by hand against a deliberately hostile library — books with no author,
+no series and no duration, a 400 character title, Arabic and Japanese text, emoji, markup in a
+title, and duplicate titles — checking that nothing crashed, nothing was written outside the
+destination folder, and a second run copied nothing.
 
 ## Feedback
 

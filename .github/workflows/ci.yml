@@ -55,6 +55,10 @@ jobs:
         working-directory: electron-ui
         run: npm ci
 
+      - name: Run frontend tests
+        working-directory: electron-ui
+        run: npm test
+
       - name: Build
         working-directory: electron-ui
         run: npm run build
