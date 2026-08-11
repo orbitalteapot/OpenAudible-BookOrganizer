@@ -128,8 +128,10 @@ Installers are output to `electron-ui/release/`.
 The web app container is published to GitHub Container Registry under GitHub Packages as:
 
 ```text
-ghcr.io/orbitalteapot/openaudible-book-organizer
+ghcr.io/orbitalteapot/openaudible-bookorganizer
 ```
+
+Note that the image name has no hyphen between "book" and "organizer".
 
 Available tags are published by the release workflow:
 
@@ -137,10 +139,14 @@ Available tags are published by the release workflow:
 - Major/minor version, for example `1.2`
 - `latest`
 
+A pre-release such as `3.1.0-beta.1` is published under its exact version only. `latest` and the
+major/minor tag keep pointing at the most recent stable release, so pulling `latest` never lands
+you on a beta by accident — you have to ask for the version by name.
+
 ### Pull the Image
 
 ```sh
-docker pull ghcr.io/orbitalteapot/openaudible-book-organizer:latest
+docker pull ghcr.io/orbitalteapot/openaudible-bookorganizer:latest
 ```
 
 ### How the Docker Image Works
@@ -228,7 +234,7 @@ docker run -d \
   -v /path/to/local/audiobooks:/source \
   -v /path/to/local/organized:/destination \
   --restart unless-stopped \
-  ghcr.io/orbitalteapot/openaudible-book-organizer:latest
+  ghcr.io/orbitalteapot/openaudible-bookorganizer:latest
 ```
 
 ### What to Do After the Container Starts
@@ -328,7 +334,7 @@ Example service using the published image:
 ```yaml
 services:
   book-organizer-web:
-    image: ghcr.io/orbitalteapot/openaudible-book-organizer:latest
+    image: ghcr.io/orbitalteapot/openaudible-bookorganizer:latest
     environment:
       CSV_PATH: /data/books.csv
       SOURCE_PATH: /source
@@ -359,7 +365,7 @@ http://localhost:5123
 The Docker image is published to GitHub Packages, not attached to the GitHub Release assets.
 
 - Repo owner packages page: `https://github.com/users/orbitalteapot/packages`
-- Package URL: `https://github.com/users/orbitalteapot/packages/container/package/openaudible-book-organizer`
+- Package URL: `https://github.com/users/orbitalteapot/packages/container/package/openaudible-bookorganizer`
 
 Depending on GitHub package visibility and linkage, it may appear under the owner Packages page before it appears in the repository sidebar.
 

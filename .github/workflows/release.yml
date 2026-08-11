@@ -282,7 +282,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/OpenAudible-BookOrganizer
+          # Spelled out in lower case rather than reusing the repository name: GHCR requires
+          # lower case, and leaving the folding implicit is what let the README document a
+          # pull command ("openaudible-book-organizer") that never matched what was published.
+          images: ghcr.io/${{ github.repository_owner }}/openaudible-bookorganizer
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           # A pre-release is published under its exact version only: 'latest' and the X.Y tag
