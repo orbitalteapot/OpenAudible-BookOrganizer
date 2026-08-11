@@ -181,6 +181,40 @@ public class SortPlannerTests
     }
 
     [Fact]
+    public void Plan_falls_back_to_the_source_folder_when_a_recorded_absolute_path_is_stale()
+    {
+        // Exports record where the file was, which is routinely not where it is now: another
+        // machine, another drive, a restored backup.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b");
+        var stalePath = Path.Combine(Path.GetTempPath(), "oabo-not-here", "a-book.m4b");
+        Assert.True(Path.IsPathRooted(stalePath));
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(m4b: null, filename: "not-this-one", filePaths: stalePath));
+
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "A Book.m4b"), planned[0].AudioDestination);
+    }
+
+    [Fact]
+    public void Plan_prefers_a_recorded_absolute_path_that_still_exists()
+    {
+        using var workspace = new TempWorkspace();
+        var elsewhere = Path.Combine(workspace.Root, "elsewhere");
+        Directory.CreateDirectory(elsewhere);
+        var recordedPath = Path.Combine(elsewhere, "a-book.m4b");
+        File.WriteAllText(recordedPath, "recorded");
+        workspace.WriteSourceFile("a-book.m4b", "in-source");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(m4b: null, filename: "not-this-one", filePaths: recordedPath));
+
+        Assert.Equal(recordedPath, planned[0].AudioSource);
+    }
+
+    [Fact]
     public void Plan_is_deterministic_for_the_same_input()
     {
         using var workspace = new TempWorkspace();

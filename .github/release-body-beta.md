@@ -34,7 +34,9 @@ reported, and every column is optional. Tab-separated exports and files with a b
 read correctly.
 
 **More of your files are found.** Audio files are now located even when the `M4B`/`MP3` columns
-are empty, and Windows-style paths in `File Paths` are matched on Linux and macOS.
+are empty, and a `File Paths` entry that records where a file *used to* live — another machine,
+another drive letter, a path written on Windows and read on Linux — falls back to the file name
+inside the source folder you chose.
 
 **No more empty folder trees.** Author and series folders are only created when there is actually
 something to copy into them.
@@ -61,7 +63,7 @@ folder is refused, and progress now reports copied, skipped and failed counts se
 
 ## Testing
 
-This release adds a test suite (138 tests) covering path safety, name resolution, planning
+This release adds a test suite (140 tests) covering path safety, name resolution, planning
 determinism, atomic and idempotent copying, cancellation, and CSV robustness, plus a CI workflow
 that runs it on Linux and Windows.
 

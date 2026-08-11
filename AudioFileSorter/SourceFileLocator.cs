@@ -186,15 +186,18 @@ public static class SourceFileLocator
         if (Path.IsPathRooted(trimmed))
         {
             yield return trimmed;
-            yield break;
+        }
+        else
+        {
+            yield return Path.Combine(sourceRoot, trimmed);
         }
 
-        yield return Path.Combine(sourceRoot, trimmed);
-
-        // A path recorded on Windows ("Books\\Title.m4b") is a single file name on Linux, so also
-        // try the bare file name against the source root.
+        // The recorded path is where the file was when the export was written, which is very
+        // often not where it is now: a different machine, a different drive letter, or a path
+        // written on Windows and read on Linux. Fall back to the bare file name inside the
+        // source folder the user actually chose.
         var fileName = GetPortableFileName(trimmed);
-        if (!string.Equals(fileName, trimmed, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(fileName))
+        if (!string.IsNullOrWhiteSpace(fileName) && !string.Equals(fileName, trimmed, StringComparison.Ordinal))
         {
             yield return Path.Combine(sourceRoot, fileName);
         }
