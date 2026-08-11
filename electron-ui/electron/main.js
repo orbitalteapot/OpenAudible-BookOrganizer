@@ -3,87 +3,115 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 
-let mainWindow;
-let backendProcess;
+const BACKEND_URL = 'http://localhost:5123';
+const BACKEND_START_TIMEOUT_MS = 60_000;
+const BACKEND_POLL_INTERVAL_MS = 500;
 
-function getBackendExecutable() {
-  const isDev = !app.isPackaged;
-  if (isDev) return null; // handled differently in dev
+let mainWindow = null;
+let backendProcess = null;
+let backendExit = null; // { code, signal } once the backend has stopped
+let quitting = false;
 
-  const platform = process.platform;
-  const backendDir = path.join(process.resourcesPath, 'backend');
-
-  if (platform === 'win32') return path.join(backendDir, 'ManagerApi.exe');
-  return path.join(backendDir, 'ManagerApi'); // linux & mac
+function isDev() {
+  return !app.isPackaged;
 }
 
-function startBackend() {
-  const isDev = !app.isPackaged;
+function getBackendExecutable() {
+  const backendDir = path.join(process.resourcesPath, 'backend');
+  return process.platform === 'win32'
+    ? path.join(backendDir, 'ManagerApi.exe')
+    : path.join(backendDir, 'ManagerApi');
+}
 
-  if (isDev) {
-    // In dev, check if backend is already running, else spawn dotnet run
-    fetch('http://localhost:5123/api/health')
-      .then(() => {
-        console.log('[API] Backend already running');
-      })
-      .catch(() => {
-        console.log('[API] Starting backend via dotnet run...');
-        backendProcess = spawn('dotnet', [
-          'run', '--project',
-          path.join(__dirname, '../../ManagerApi/ManagerApi.csproj')
-        ], { stdio: 'pipe' });
+function attachProcessLogging(child) {
+  child.stdout?.on('data', (data) => console.log(`[API] ${data.toString().trim()}`));
+  child.stderr?.on('data', (data) => console.error(`[API] ${data.toString().trim()}`));
 
-        backendProcess.stdout.on('data', (data) => {
-          console.log(`[API] ${data.toString().trim()}`);
-        });
+  child.on('error', (err) => {
+    console.error('[API] Failed to start backend:', err.message);
+    backendExit = { code: null, signal: null, error: err.message };
+  });
 
-        backendProcess.stderr.on('data', (data) => {
-          console.error(`[API] ${data.toString().trim()}`);
-        });
+  // Without this, a backend that dies mid-session leaves the UI waiting forever on requests
+  // that will never be answered.
+  child.on('exit', (code, signal) => {
+    console.error(`[API] Backend exited (code ${code}, signal ${signal})`);
+    backendExit = { code, signal };
+    backendProcess = null;
 
-        backendProcess.on('error', (err) => {
-          console.error('Failed to start backend:', err.message);
-        });
+    if (!quitting && mainWindow && !mainWindow.isDestroyed()) {
+      dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'Backend stopped',
+        message: 'The Book Organizer backend stopped unexpectedly.',
+        detail:
+          'Sorting and library loading will not work until the app is restarted. ' +
+          `Exit code: ${code === null ? signal : code}`,
+        buttons: ['OK'],
       });
+    }
+  });
+}
+
+async function isBackendReachable() {
+  try {
+    const res = await fetch(`${BACKEND_URL}/api/health`);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function startBackend() {
+  // Someone may already be running the backend by hand (the documented dev workflow), in which
+  // case starting a second one would just fail on the port and confuse the logs.
+  if (await isBackendReachable()) {
+    console.log('[API] Backend already running');
+    return;
+  }
+
+  if (isDev()) {
+    console.log('[API] Starting backend via dotnet run...');
+    backendProcess = spawn(
+      'dotnet',
+      ['run', '--project', path.join(__dirname, '../../ManagerApi/ManagerApi.csproj')],
+      { stdio: 'pipe' }
+    );
   } else {
-    // In production, launch the self-contained binary
     const exe = getBackendExecutable();
     console.log(`[API] Starting backend: ${exe}`);
 
-    // Ensure the binary is executable on Linux/macOS
-    if (process.platform !== 'win32') {
-      try { fs.chmodSync(exe, 0o755); } catch { /* best effort */ }
+    if (!fs.existsSync(exe)) {
+      backendExit = { code: null, signal: null, error: `Backend executable not found at ${exe}` };
+      return;
     }
 
-    backendProcess = spawn(exe, [], {
-      stdio: 'pipe',
-      env: { ...process.env },
-    });
+    if (process.platform !== 'win32') {
+      try {
+        fs.chmodSync(exe, 0o755);
+      } catch {
+        // Best effort; the spawn below reports the real problem if it is not executable.
+      }
+    }
 
-    backendProcess.stdout.on('data', (data) => {
-      console.log(`[API] ${data.toString().trim()}`);
-    });
-
-    backendProcess.stderr.on('data', (data) => {
-      console.error(`[API] ${data.toString().trim()}`);
-    });
-
-    backendProcess.on('error', (err) => {
-      console.error('Failed to start backend:', err.message);
-    });
+    backendProcess = spawn(exe, [], { stdio: 'pipe', env: { ...process.env } });
   }
+
+  attachProcessLogging(backendProcess);
 }
 
-async function waitForBackend(maxRetries = 40) {
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const response = await fetch('http://localhost:5123/api/health');
-      if (response.ok) return true;
-    } catch {
-      // Backend not ready yet
-    }
-    await new Promise((r) => setTimeout(r, 1000));
+async function waitForBackend() {
+  const deadline = Date.now() + BACKEND_START_TIMEOUT_MS;
+
+  while (Date.now() < deadline) {
+    if (await isBackendReachable()) return true;
+
+    // No point waiting out the full timeout for a process that has already died.
+    if (backendExit) return false;
+
+    await new Promise((resolve) => setTimeout(resolve, BACKEND_POLL_INTERVAL_MS));
   }
+
   return false;
 }
 
@@ -103,32 +131,31 @@ function createWindow() {
     },
   });
 
-  const isDev = !app.isPackaged;
-
-  if (isDev) {
+  if (isDev()) {
     mainWindow.loadURL('http://localhost:5173');
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
-  mainWindow.once('ready-to-show', () => {
-    mainWindow.show();
+  mainWindow.once('ready-to-show', () => mainWindow?.show());
+  mainWindow.on('closed', () => {
+    mainWindow = null;
   });
 }
 
-app.whenReady().then(async () => {
-  startBackend();
+function withWindow(action) {
+  return () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      return action(mainWindow);
+    }
+    return null;
+  };
+}
 
-  console.log('Waiting for backend...');
-  const backendReady = await waitForBackend();
-  if (!backendReady) {
-    console.error('Backend did not start in time');
-  }
-
-  createWindow();
-
-  // IPC: File dialog
+function registerIpcHandlers() {
   ipcMain.handle('dialog:openFile', async (_, filters) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return null;
+
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile'],
       filters: filters || [{ name: 'CSV Files', extensions: ['csv'] }],
@@ -136,48 +163,81 @@ app.whenReady().then(async () => {
     return result.canceled ? null : result.filePaths[0];
   });
 
-  // IPC: Folder dialog
   ipcMain.handle('dialog:openFolder', async () => {
-    const result = await dialog.showOpenDialog(mainWindow, {
-      properties: ['openDirectory'],
-    });
+    if (!mainWindow || mainWindow.isDestroyed()) return null;
+
+    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
     return result.canceled ? null : result.filePaths[0];
   });
 
-  // IPC: Window controls
-  ipcMain.handle('window:minimize', () => mainWindow.minimize());
-  ipcMain.handle('window:maximize', () => {
-    if (mainWindow.isMaximized()) {
-      mainWindow.unmaximize();
-    } else {
-      mainWindow.maximize();
+  ipcMain.handle('window:minimize', withWindow((window) => window.minimize()));
+  ipcMain.handle(
+    'window:maximize',
+    withWindow((window) => (window.isMaximized() ? window.unmaximize() : window.maximize()))
+  );
+  ipcMain.handle('window:close', withWindow((window) => window.close()));
+  ipcMain.handle('window:isMaximized', withWindow((window) => window.isMaximized()));
+}
+
+// Two copies of the app would both try to own port 5123, and the loser would look broken.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
     }
   });
-  ipcMain.handle('window:close', () => mainWindow.close());
-  ipcMain.handle('window:isMaximized', () => mainWindow.isMaximized());
-});
+
+  app.whenReady().then(async () => {
+    registerIpcHandlers();
+    await startBackend();
+
+    console.log('Waiting for backend...');
+    const backendReady = await waitForBackend();
+
+    createWindow();
+
+    if (!backendReady) {
+      console.error('Backend did not start in time');
+      dialog.showMessageBox(mainWindow, {
+        type: 'error',
+        title: 'Backend did not start',
+        message: 'The Book Organizer backend could not be started.',
+        detail:
+          backendExit?.error ||
+          'Check that port 5123 is free and that no other copy of the app is running, then restart the app.',
+        buttons: ['OK'],
+      });
+    }
+  });
+}
 
 function killBackend() {
-  if (backendProcess) {
-    try {
-      // On Windows, child processes need tree-kill via taskkill
-      if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', String(backendProcess.pid), '/f', '/t']);
-      } else {
-        backendProcess.kill('SIGTERM');
-      }
-    } catch {
-      // Best effort
+  if (!backendProcess) return;
+
+  const child = backendProcess;
+  backendProcess = null;
+
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(child.pid), '/f', '/t']);
+    } else {
+      child.kill('SIGTERM');
     }
-    backendProcess = null;
+  } catch {
+    // Best effort.
   }
 }
 
 app.on('window-all-closed', () => {
+  quitting = true;
   killBackend();
   app.quit();
 });
 
 app.on('before-quit', () => {
+  quitting = true;
   killBackend();
 });

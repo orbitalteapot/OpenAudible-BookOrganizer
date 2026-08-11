@@ -17,6 +17,7 @@ export default function LibraryView({ books, setBooks, sortState }) {
   const [sortDir, setSortDir] = useState('asc');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
 
   const handleLoadCsv = async () => {
@@ -34,9 +35,19 @@ export default function LibraryView({ books, setBooks, sortState }) {
 
     setLoading(true);
     setError(null);
+    setNotice(null);
     try {
-      const data = await parseBooks(filePath);
-      setBooks(data);
+      const { books: loaded, skippedRows } = await parseBooks(filePath);
+      setBooks(loaded);
+
+      if (skippedRows > 0) {
+        setNotice(
+          `${skippedRows} row${skippedRows === 1 ? '' : 's'} could not be read and were skipped. ` +
+            `${loaded.length} book${loaded.length === 1 ? '' : 's'} loaded.`
+        );
+      } else if (loaded.length === 0) {
+        setNotice('The export was read successfully but contained no books.');
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -114,6 +125,11 @@ export default function LibraryView({ books, setBooks, sortState }) {
               {error}
             </p>
           )}
+          {notice && (
+            <p className="mt-4 text-sm text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2">
+              {notice}
+            </p>
+          )}
         </div>
       </div>
     );
@@ -159,6 +175,12 @@ export default function LibraryView({ books, setBooks, sortState }) {
       {error && (
         <div className="mb-4 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-2">
           {error}
+        </div>
+      )}
+
+      {notice && (
+        <div className="mb-4 text-sm text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-2">
+          {notice}
         </div>
       )}
 

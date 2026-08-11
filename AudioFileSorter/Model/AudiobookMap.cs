@@ -1,26 +1,27 @@
-﻿using CsvHelper.Configuration;
-using CsvHelper.TypeConversion;
+using CsvHelper.Configuration;
 
 namespace AudioFileSorter.Model;
 
+/// <summary>
+/// Maps OpenAudible export columns onto <see cref="OpenAudible"/>.
+///
+/// Every column is optional. Exports vary between OpenAudible versions and platforms, and a
+/// missing column should degrade the result for that one field rather than fail the import; the
+/// parser checks separately that the file looks like a book list at all.
+/// </summary>
 public sealed class AudiobookMap : ClassMap<OpenAudible>
 {
     public AudiobookMap()
     {
-        // Mandatory Fields
         Map(m => m.Key).Name("Key").Optional();
-        Map(m => m.Title).Name("Title");
-        Map(m => m.Author).Name("Author");
-        Map(m => m.Filename).Name("File name");
-        Map(m => m.FilePaths).Name("File Paths");
+        Map(m => m.Title).Name("Title").Optional();
+        Map(m => m.Author).Name("Author").Optional();
+        Map(m => m.Filename).Name("File name", "Filename", "File Name").Optional();
+        Map(m => m.FilePaths).Name("File Paths", "File paths", "FilePaths").Optional();
         Map(m => m.AudibleAAX).Name("Audible (AAX)").Optional();
 
-        // Optional Fields
         Map(m => m.NarratedBy).Name("Narrated By").Optional();
-        Map(m => m.PurchaseDate).Name("Purchase Date").TypeConverterOption.Format("yyyy-MM-dd", "MM/dd/yyyy", "M/d/yyyy");
         Map(m => m.Duration).Name("Duration").Optional();
-        Map(m => m.ReleaseDate).Name("Release Date").TypeConverterOption.Format("yyyy-MM-dd", "MM/dd/yyyy", "M/d/yyyy");
-        Map(m => m.AveRating).Name("Ave. Rating").Optional();
         Map(m => m.Genre).Name("Genre").Optional();
         Map(m => m.SeriesName).Name("Series Name").Optional();
         Map(m => m.SeriesSequence).Name("Series Sequence").Optional();
@@ -44,10 +45,13 @@ public sealed class AudiobookMap : ClassMap<OpenAudible>
         Map(m => m.Image).Name("Image").Optional();
         Map(m => m.M4B).Name("M4B").Optional();
         Map(m => m.MP3).Name("MP3").Optional();
-        Map(m => m.AYCE).Name("AYCE").TypeConverter<BooleanConverter>().Optional();
-        Map(m => m.RatingCount).Name("Rating Count").TypeConverter<Int32Converter>().Optional();
-
-        // **Newly Added Field**
         Map(m => m.PDF).Name("PDF").Optional();
+
+        // Typed columns get converters that fall back to a default instead of throwing.
+        Map(m => m.PurchaseDate).Name("Purchase Date").TypeConverter<LenientDateTimeConverter>().Optional();
+        Map(m => m.ReleaseDate).Name("Release Date").TypeConverter<LenientDateTimeConverter>().Optional();
+        Map(m => m.AveRating).Name("Ave. Rating", "Ave Rating", "Average Rating").TypeConverter<LenientDoubleConverter>().Optional();
+        Map(m => m.RatingCount).Name("Rating Count").TypeConverter<LenientInt32Converter>().Optional();
+        Map(m => m.AYCE).Name("AYCE").TypeConverter<LenientBooleanConverter>().Optional();
     }
 }

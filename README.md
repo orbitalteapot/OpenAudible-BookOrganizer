@@ -59,6 +59,17 @@ npm install
 npm run dev
 ```
 
+### Run the Tests
+
+The sorting engine is covered by a test suite that runs on Linux, macOS, and Windows:
+
+```sh
+dotnet test OpenAudibleBookManager.sln
+```
+
+It exercises path sanitisation, author and series folder resolution, planning determinism,
+atomic and repeatable copying, cancellation, and CSV import robustness.
+
 ### Build Installers
 
 ```sh
@@ -108,6 +119,12 @@ At startup and while running, it uses:
 - `CSV_PATH` to load book metadata from your OpenAudible export
 - `SOURCE_PATH` as the mounted source folder that contains your audiobook files
 - `DESTINATION_PATH` as the folder where organized books are written
+
+Optional:
+
+- `OABO_MAX_PARALLELISM` sets how many books are copied at once. It defaults to a quarter of the
+  available CPU cores, capped at 8. Lower it to `1` or `2` if the destination is a network share
+  or a spinning disk, where more concurrency makes transfers slower rather than faster.
 
 ### How the Website Works
 
@@ -263,7 +280,7 @@ docker restart openaudible-book-organizer
 
 ### Use docker-compose.yml
 
-This repository already includes a sample [docker-compose.yml](d:/Development/test/newtest/OpenAudible-BookOrganizer/docker-compose.yml).
+This repository already includes a sample [docker-compose.yml](docker-compose.yml).
 
 1. Put your OpenAudible CSV export in `./data/books.csv`.
 2. Replace the example source and destination mount paths with your real folders.

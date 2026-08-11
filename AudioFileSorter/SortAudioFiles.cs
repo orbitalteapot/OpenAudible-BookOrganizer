@@ -1,63 +1,119 @@
-﻿using System.IO;
-using System.Security.Cryptography;
-using System.Text.RegularExpressions;
+using System.Collections.Concurrent;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using AudioFileSorter.Model;
 
 namespace AudioFileSorter;
 
+/// <summary>
+/// Copies an OpenAudible library into an Author / Series / Book folder structure.
+/// </summary>
 public class FileSorter
 {
+    private const int MaxReportedWarnings = 200;
+    private const int CopyBufferSize = 81920;
+    private const string PartialFileSuffix = ".oabo-partial";
+
     private static readonly object ConsoleLock = new();
-    private static readonly string[] PlaceholderValues = ["unknown", "n/a", "na", "none", "null"];
-    private static readonly string[] LeadingArticles = ["the ", "a ", "an "];
-    private static readonly string[] SeriesDecorators = [" series", " saga", " cycle"];
-    private static readonly string[] ContributorDescriptors = ["foreword", "afterword", "editor", "contributor", "adaptation", "music", "translator", "translatoreditor", "introduction", "preface", "illustrator"];
-    private static readonly string[] KnownNonAuthorSegments = ["the great courses", "crystal lake publishing", "crystal lake audio"];
-    private static readonly Regex SequenceValueRegex = new(@"(?<value>\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?)", RegexOptions.Compiled);
 
     /// <summary>
-    /// Sorts Open Audible books into the provided destination path in parallel.
+    /// Sorts Open Audible books into the provided destination path.
     /// </summary>
     /// <param name="source">Source folder containing audio files.</param>
     /// <param name="destination">Destination folder to sort files into.</param>
-    /// <param name="openAudibles">List of audiobook metadata.</param>
+    /// <param name="openAudibles">List of audiobook metadata. Never modified.</param>
     /// <param name="progress">Optional progress reporter.</param>
-    public async Task SortAudioFiles(
+    /// <param name="cancellationToken">Token used to abort the run.</param>
+    /// <exception cref="ArgumentException">A required path was not supplied.</exception>
+    /// <exception cref="DirectoryNotFoundException">The source folder does not exist.</exception>
+    /// <exception cref="IOException">The destination folder could not be created.</exception>
+    public async Task<SortSummary> SortAudioFiles(
         string? source,
         string? destination,
         List<OpenAudible> openAudibles,
         IProgress<SortProgressInfo>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(destination))
+        ArgumentNullException.ThrowIfNull(openAudibles);
+
+        // These used to be logged and swallowed, which left the UI waiting for a run that was
+        // never going to report anything.
+        if (string.IsNullOrWhiteSpace(source))
         {
-            Console.WriteLine("Error: Source or destination path is missing.");
-            return;
+            throw new ArgumentException("Source path is required.", nameof(source));
         }
 
-        var progressCount = 0;
-        var copyBooks = 0;
+        if (string.IsNullOrWhiteSpace(destination))
+        {
+            throw new ArgumentException("Destination path is required.", nameof(destination));
+        }
+
+        if (!Directory.Exists(source))
+        {
+            throw new DirectoryNotFoundException($"Source folder not found: {source}");
+        }
+
+        try
+        {
+            Directory.CreateDirectory(destination);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            throw new IOException($"Destination folder is not writable: {destination}. {ex.Message}", ex);
+        }
+
         var totalBooks = openAudibles.Count;
+        var warnings = new ConcurrentQueue<string>();
+        var warningCount = 0;
+
+        if (totalBooks == 0)
+        {
+            progress?.Report(new SortProgressInfo { Percentage = 100, IsComplete = true });
+            WriteLine("No books to sort.");
+            return new SortSummary { Warnings = [] };
+        }
+
+        var planned = new SortPlanner().Plan(openAudibles, source, Path.GetFullPath(destination));
+        foreach (var item in planned)
+        {
+            if (item.Warning is not null)
+            {
+                RecordWarning(warnings, ref warningCount, item.Warning);
+            }
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var progressCount = 0;
+        var copiedBooks = 0;
+        var skippedBooks = 0;
+        var failedBooks = 0;
         var maxLineLength = 0;
-        
-        var maxParallelism = Math.Max(1, Environment.ProcessorCount / 4); // speed up transfers for high end cpus
+
         var parallelOptions = new ParallelOptions
         {
-            MaxDegreeOfParallelism = maxParallelism,
+            MaxDegreeOfParallelism = GetMaxParallelism(),
             CancellationToken = cancellationToken
         };
-        
-        
-        // Run parallel sorting operations
-        await Parallel.ForEachAsync(openAudibles, parallelOptions, async (audioFile, ct) =>
+
+        await Parallel.ForEachAsync(planned, parallelOptions, async (item, ct) =>
         {
+            var copiedAnything = false;
+
             try
             {
                 ct.ThrowIfCancellationRequested();
-                var copied = await ProcessAudioFile(audioFile, source, destination, ct);
-                if (copied) Interlocked.Increment(ref copyBooks);
+                copiedAnything = await ProcessPlannedCopy(item, ct);
+
+                if (copiedAnything)
+                {
+                    Interlocked.Increment(ref copiedBooks);
+                }
+                else
+                {
+                    Interlocked.Increment(ref skippedBooks);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -65,453 +121,135 @@ public class FileSorter
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"\nError processing {audioFile.Filename}: {ex.Message}");
+                Interlocked.Increment(ref failedBooks);
+                RecordWarning(warnings, ref warningCount, $"Error processing {item.Book.Filename ?? item.Label}: {ex.Message}");
             }
 
             var currentProgress = Interlocked.Increment(ref progressCount);
-            var progressLabel = BuildProgressLabel(audioFile);
-            UpdateProgress(currentProgress, totalBooks, copyBooks, progressLabel, ref maxLineLength);
+            var currentCopied = Volatile.Read(ref copiedBooks);
+            UpdateProgress(currentProgress, totalBooks, currentCopied, item.Label, ref maxLineLength);
 
             progress?.Report(new SortProgressInfo
             {
                 CurrentBook = currentProgress,
                 TotalBooks = totalBooks,
-                CopiedBooks = copyBooks,
-                CurrentTitle = progressLabel,
-                Percentage = Math.Round((double)currentProgress / totalBooks * 100, 2)
+                CopiedBooks = currentCopied,
+                SkippedBooks = Volatile.Read(ref skippedBooks),
+                FailedBooks = Volatile.Read(ref failedBooks),
+                CurrentTitle = item.Label,
+                Percentage = CalculatePercentage(currentProgress, totalBooks),
+                WarningCount = Volatile.Read(ref warningCount)
             });
         });
+
+        var summary = new SortSummary
+        {
+            TotalBooks = totalBooks,
+            CopiedBooks = copiedBooks,
+            SkippedBooks = skippedBooks,
+            FailedBooks = failedBooks,
+            Warnings = warnings.ToArray(),
+            WarningCount = warningCount
+        };
 
         progress?.Report(new SortProgressInfo
         {
             CurrentBook = totalBooks,
             TotalBooks = totalBooks,
-            CopiedBooks = copyBooks,
+            CopiedBooks = summary.CopiedBooks,
+            SkippedBooks = summary.SkippedBooks,
+            FailedBooks = summary.FailedBooks,
             Percentage = 100,
-            IsComplete = true
+            IsComplete = true,
+            WarningCount = summary.WarningCount
         });
 
-        Console.WriteLine("\nSorting complete.");
+        WriteLine($"Sorting complete. Copied {summary.CopiedBooks}, skipped {summary.SkippedBooks}, failed {summary.FailedBooks} of {totalBooks}.");
+        return summary;
     }
 
-    private static async Task<bool> ProcessAudioFile(OpenAudible audioFile, string source, string destination, CancellationToken cancellationToken)
+    private static async Task<bool> ProcessPlannedCopy(PlannedCopy item, CancellationToken cancellationToken)
     {
-        // Sanitize file names to prevent invalid path issues
-        audioFile.Author = ResolveAuthorDirectoryName(destination, SanitizeAuthorName(audioFile.Author));
-        audioFile.SeriesName = SanitizeOptionalFileName(audioFile.SeriesName);
-        audioFile.SeriesSequence = SanitizeSeriesSequence(audioFile.SeriesSequence);
-        audioFile.ShortTitle = SanitizeRequiredFileName(audioFile.ShortTitle);
-        audioFile.Title = SanitizeRequiredFileName(audioFile.Title);
-
-        if (string.IsNullOrWhiteSpace(audioFile.Author))
+        if (!item.HasWork)
         {
-            Console.WriteLine($"\nWarning: Missing author for {audioFile.Filename}");
             return false;
         }
 
-        var directory = CreateTargetDirectory(destination, audioFile);
-        var copiedAudio = await CopyAudioFileAsync(audioFile, source, directory, cancellationToken);
-        var copiedPdf = await CopyPdfCompanionAsync(audioFile, source, directory, cancellationToken);
+        Directory.CreateDirectory(item.TargetDirectory!);
+
+        var copiedAudio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, cancellationToken);
+        var copiedPdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, cancellationToken);
         return copiedAudio || copiedPdf;
     }
 
-    private static string CreateTargetDirectory(string destination, OpenAudible audioFile)
+    private static async Task<bool> CopyIfNeededAsync(string? sourceFile, string? destinationFile, CancellationToken cancellationToken)
     {
-        var authorPath = Path.Combine(destination, audioFile.Author ?? throw new InvalidOperationException());
-        var directory = Directory.CreateDirectory(authorPath).FullName;
-
-        if (!string.IsNullOrWhiteSpace(audioFile.SeriesName))
-        {
-            var seriesDirectory = ResolveSeriesDirectoryName(directory, audioFile.SeriesName);
-            directory = Path.Combine(directory, seriesDirectory);
-            Directory.CreateDirectory(directory);
-
-            if (!string.IsNullOrWhiteSpace(audioFile.SeriesSequence))
-            {
-                directory = Path.Combine(directory, $"Book {audioFile.SeriesSequence}");
-                Directory.CreateDirectory(directory);
-            }
-        }
-
-        return directory;
-    }
-
-    private static async Task<bool> CopyAudioFileAsync(OpenAudible audioFile, string source, string targetDirectory, CancellationToken cancellationToken)
-    {
-        var fileExtension = GetAudioFileExtension(audioFile);
-        if (fileExtension == null) return false;
-
-        var sourceFile = Path.Combine(source, $"{audioFile.Filename}{fileExtension}");
-        var destinationFile = Path.Combine(targetDirectory, $"{audioFile.ShortTitle}{fileExtension}");
-
-        if (!File.Exists(sourceFile))
-        {
-            Console.WriteLine($"\nWarning: Source file missing: {sourceFile}");
-            return false;
-        }
-
-        try
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!File.Exists(destinationFile) || !await AreFilesSameAsync(sourceFile, destinationFile, cancellationToken))
-            {
-                await CopyFileAsync(sourceFile, destinationFile, cancellationToken);
-                // File.Copy(sourceFile, destinationFile, true);
-                return true;
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"\nError copying {sourceFile}: {ex.Message}");
-        }
-
-        return false;
-    }
-
-    private static async Task<bool> CopyPdfCompanionAsync(OpenAudible audioFile, string source, string targetDirectory, CancellationToken cancellationToken)
-    {
-        var sourcePdf = ResolvePdfSourcePath(audioFile, source);
-        if (sourcePdf == null)
+        if (sourceFile is null || destinationFile is null)
         {
             return false;
         }
 
-        var destinationPdf = Path.Combine(targetDirectory, $"{audioFile.ShortTitle}.pdf");
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (File.Exists(destinationFile) && await AreFilesSameAsync(sourceFile, destinationFile, cancellationToken))
+        {
+            return false;
+        }
+
+        await CopyFileAtomicAsync(sourceFile, destinationFile, cancellationToken);
+        return true;
+    }
+
+    /// <summary>
+    /// Copies through a temporary file in the destination folder and renames it into place, so an
+    /// interrupted run (cancel, crash, full disk) can never leave a half written book behind that
+    /// a later run would mistake for a complete one.
+    /// </summary>
+    private static async Task CopyFileAtomicAsync(string sourceFile, string destinationFile, CancellationToken cancellationToken)
+    {
+        var partialFile = destinationFile + PartialFileSuffix;
 
         try
         {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!File.Exists(destinationPdf) || !await AreFilesSameAsync(sourcePdf, destinationPdf, cancellationToken))
+            await using (var sourceStream = new FileStream(
+                             sourceFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, CopyBufferSize,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
+            await using (var destinationStream = new FileStream(
+                             partialFile, FileMode.Create, FileAccess.Write, FileShare.None, CopyBufferSize,
+                             FileOptions.Asynchronous | FileOptions.SequentialScan))
             {
-                await CopyFileAsync(sourcePdf, destinationPdf, cancellationToken);
-                return true;
+                await sourceStream.CopyToAsync(destinationStream, CopyBufferSize, cancellationToken);
+                await destinationStream.FlushAsync(cancellationToken);
             }
+
+            File.Move(partialFile, destinationFile, overwrite: true);
         }
-        catch (OperationCanceledException)
+        catch
         {
+            TryDelete(partialFile);
             throw;
         }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"\nError copying {sourcePdf}: {ex.Message}");
-        }
-
-        return false;
     }
 
-    private static string? GetAudioFileExtension(OpenAudible audioFile)
+    private static void TryDelete(string path)
     {
-        if (!string.IsNullOrWhiteSpace(audioFile.M4B)) return ".m4b";
-        if (!string.IsNullOrWhiteSpace(audioFile.MP3)) return ".mp3";
-        return null;
-    }
-
-    private static string? ResolvePdfSourcePath(OpenAudible audioFile, string sourceRoot)
-    {
-        foreach (var candidate in GetPdfPathCandidates(audioFile, sourceRoot))
+        try
         {
-            if (File.Exists(candidate))
+            if (File.Exists(path))
             {
-                return candidate;
+                File.Delete(path);
             }
         }
-
-        return null;
-    }
-
-    private static IEnumerable<string> GetPdfPathCandidates(OpenAudible audioFile, string sourceRoot)
-    {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var filePath in EnumerateFilePaths(audioFile.FilePaths))
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            if (!string.Equals(Path.GetExtension(filePath), ".pdf", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            foreach (var normalizedPath in ExpandSourcePathCandidates(filePath, sourceRoot))
-            {
-                if (seen.Add(normalizedPath))
-                {
-                    yield return normalizedPath;
-                }
-            }
-        }
-
-        foreach (var rawValue in new[] { audioFile.PDF, audioFile.Filename })
-        {
-            if (string.IsNullOrWhiteSpace(rawValue))
-            {
-                continue;
-            }
-
-            foreach (var candidate in ExpandPdfValueCandidates(rawValue.Trim(), sourceRoot))
-            {
-                if (seen.Add(candidate))
-                {
-                    yield return candidate;
-                }
-            }
+            // Best effort: a leftover .oabo-partial file is overwritten by the next run.
         }
     }
 
-    private static IEnumerable<string> EnumerateFilePaths(string? rawFilePaths)
-    {
-        if (string.IsNullOrWhiteSpace(rawFilePaths))
-        {
-            yield break;
-        }
-
-        foreach (var entry in rawFilePaths.Split(['|', ';', '\r', '\n'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            var candidate = entry.Trim().Trim('"');
-            if (!string.IsNullOrWhiteSpace(candidate))
-            {
-                yield return candidate;
-            }
-        }
-    }
-
-    private static IEnumerable<string> ExpandPdfValueCandidates(string value, string sourceRoot)
-    {
-        foreach (var candidate in ExpandSourcePathCandidates(value, sourceRoot))
-        {
-            yield return candidate;
-        }
-
-        if (!string.Equals(Path.GetExtension(value), ".pdf", StringComparison.OrdinalIgnoreCase))
-        {
-            foreach (var candidate in ExpandSourcePathCandidates($"{value}.pdf", sourceRoot))
-            {
-                yield return candidate;
-            }
-        }
-    }
-
-    private static IEnumerable<string> ExpandSourcePathCandidates(string value, string sourceRoot)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            yield break;
-        }
-
-        var trimmed = value.Trim().Trim('"');
-        if (string.IsNullOrWhiteSpace(trimmed))
-        {
-            yield break;
-        }
-
-        if (Path.IsPathRooted(trimmed))
-        {
-            yield return trimmed;
-            yield break;
-        }
-
-        yield return Path.Combine(sourceRoot, trimmed);
-
-        var fileName = Path.GetFileName(trimmed);
-        if (!string.Equals(fileName, trimmed, StringComparison.Ordinal))
-        {
-            yield return Path.Combine(sourceRoot, fileName);
-        }
-    }
-
-    private static string? SanitizeOptionalFileName(string? fileName)
-    {
-        if (string.IsNullOrWhiteSpace(fileName)) return null;
-        var invalidChars = Path.GetInvalidFileNameChars();
-        var sanitized = new string(fileName.Where(ch => !invalidChars.Contains(ch)).ToArray());
-        var trimmed = sanitized.TrimEnd('.', ' ').Trim();
-        if (string.IsNullOrWhiteSpace(trimmed)) return null;
-        return IsPlaceholderValue(trimmed) ? null : trimmed;
-    }
-
-    private static string SanitizeRequiredFileName(string? fileName)
-    {
-        return SanitizeOptionalFileName(fileName) ?? "Unknown";
-    }
-
-    private static string SanitizeAuthorName(string? value)
-    {
-        var sanitized = SanitizeOptionalFileName(value);
-        if (sanitized is null)
-        {
-            return "Unknown";
-        }
-
-        var authorSegments = new List<string>();
-        foreach (var rawSegment in sanitized.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-        {
-            var segment = rawSegment.Trim();
-            var namePart = segment;
-            string? descriptorPart = null;
-
-            var separatorIndex = segment.IndexOf(" - ", StringComparison.Ordinal);
-            if (separatorIndex >= 0)
-            {
-                namePart = segment[..separatorIndex].Trim();
-                descriptorPart = segment[(separatorIndex + 3)..].Trim();
-            }
-
-            if (!string.IsNullOrWhiteSpace(descriptorPart) && IsContributorDescriptor(descriptorPart))
-            {
-                if (authorSegments.Count > 0)
-                {
-                    break;
-                }
-
-                continue;
-            }
-
-            if (authorSegments.Count > 0 && IsKnownNonAuthorSegment(namePart))
-            {
-                continue;
-            }
-
-            if (!string.IsNullOrWhiteSpace(namePart))
-            {
-                authorSegments.Add(namePart);
-            }
-        }
-
-        if (authorSegments.Count == 0)
-        {
-            return "Unknown";
-        }
-
-        return string.Join(", ", authorSegments.Distinct(StringComparer.OrdinalIgnoreCase));
-    }
-
-    private static bool IsPlaceholderValue(string value)
-    {
-        return PlaceholderValues.Contains(value.Trim().ToLowerInvariant());
-    }
-
-    private static bool IsContributorDescriptor(string value)
-    {
-        var normalized = value.Trim().ToLowerInvariant();
-        return ContributorDescriptors.Any(normalized.Contains);
-    }
-
-    private static bool IsKnownNonAuthorSegment(string value)
-    {
-        var normalized = value.Trim().ToLowerInvariant();
-        return KnownNonAuthorSegments.Contains(normalized);
-    }
-
-    private static string? SanitizeSeriesSequence(string? value)
-    {
-        var sanitized = SanitizeOptionalFileName(value);
-        if (sanitized is null)
-        {
-            return null;
-        }
-
-        if (sanitized.StartsWith("Book ", StringComparison.OrdinalIgnoreCase))
-        {
-            sanitized = sanitized[5..].Trim();
-        }
-
-        var match = SequenceValueRegex.Match(sanitized);
-        if (!match.Success)
-        {
-            return null;
-        }
-
-        return match.Groups["value"].Value;
-    }
-
-    private static string ResolveSeriesDirectoryName(string authorDirectory, string requestedSeriesName)
-    {
-        var normalizedRequested = NormalizeSeriesKey(requestedSeriesName);
-        if (string.IsNullOrWhiteSpace(normalizedRequested))
-        {
-            return requestedSeriesName;
-        }
-
-        var existingSeriesDirectories = Directory.GetDirectories(authorDirectory);
-        foreach (var existingSeriesDirectory in existingSeriesDirectories)
-        {
-            var existingName = Path.GetFileName(existingSeriesDirectory);
-            if (string.IsNullOrWhiteSpace(existingName))
-            {
-                continue;
-            }
-
-            if (NormalizeSeriesKey(existingName) == normalizedRequested)
-            {
-                return existingName;
-            }
-        }
-
-        return requestedSeriesName;
-    }
-
-    private static string ResolveAuthorDirectoryName(string destinationRoot, string requestedAuthorName)
-    {
-        var normalizedRequested = NormalizeAuthorKey(requestedAuthorName);
-        if (string.IsNullOrWhiteSpace(normalizedRequested) || !Directory.Exists(destinationRoot))
-        {
-            return requestedAuthorName;
-        }
-
-        foreach (var existingAuthorDirectory in Directory.GetDirectories(destinationRoot))
-        {
-            var existingName = Path.GetFileName(existingAuthorDirectory);
-            if (string.IsNullOrWhiteSpace(existingName))
-            {
-                continue;
-            }
-
-            if (NormalizeAuthorKey(existingName) == normalizedRequested)
-            {
-                return existingName;
-            }
-        }
-
-        return requestedAuthorName;
-    }
-
-    private static string NormalizeAuthorKey(string value)
-    {
-        var normalized = value.Trim().ToLowerInvariant();
-        normalized = new string(normalized.Where(char.IsLetterOrDigit).ToArray());
-        return normalized;
-    }
-
-    private static string NormalizeSeriesKey(string value)
-    {
-        var normalized = value.Trim().ToLowerInvariant();
-
-        foreach (var article in LeadingArticles)
-        {
-            if (normalized.StartsWith(article))
-            {
-                normalized = normalized[article.Length..];
-                break;
-            }
-        }
-
-        foreach (var decorator in SeriesDecorators)
-        {
-            if (normalized.EndsWith(decorator))
-            {
-                normalized = normalized[..^decorator.Length];
-                break;
-            }
-        }
-
-        normalized = new string(normalized.Where(char.IsLetterOrDigit).ToArray());
-        return normalized;
-    }
-
+    /// <summary>
+    /// Cheap "is this the same file" check. Comparing every byte of a multi-gigabyte library on
+    /// every run is not viable, so size plus three sampled chunks is used instead.
+    /// </summary>
     private static async Task<bool> AreFilesSameAsync(string filePath1, string filePath2, CancellationToken cancellationToken)
     {
         try
@@ -519,33 +257,36 @@ public class FileSorter
             var fileInfo1 = new FileInfo(filePath1);
             var fileInfo2 = new FileInfo(filePath2);
 
-            // 🔹 Fastest check: Compare file size first
-            if (fileInfo1.Length != fileInfo2.Length) return false;
+            if (!fileInfo1.Exists || !fileInfo2.Exists || fileInfo1.Length != fileInfo2.Length)
+            {
+                return false;
+            }
 
-            const int chunkSize = 4096; // 4KB buffer for speed
+            var length = fileInfo1.Length;
+            if (length == 0)
+            {
+                return true;
+            }
+
+            const int chunkSize = 4096;
             var buffer1 = new byte[chunkSize];
             var buffer2 = new byte[chunkSize];
 
-            // 🔹 Open files in `FileShare.ReadWrite` mode to prevent locking issues
             await using var stream1 = new FileStream(filePath1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize, true);
             await using var stream2 = new FileStream(filePath2, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize, true);
 
-            // 🔹 Compare first chunk
-            var bytesRead1 = await stream1.ReadAsync(buffer1.AsMemory(0, chunkSize), cancellationToken);
-            var bytesRead2 = await stream2.ReadAsync(buffer2.AsMemory(0, chunkSize), cancellationToken);
-            if (bytesRead1 != bytesRead2 || !buffer1.AsSpan(0, bytesRead1).SequenceEqual(buffer2.AsSpan(0, bytesRead2)))
-                return false;
-
-            // 🔹 Compare last chunk if file is larger than chunk size
-            if (fileInfo1.Length > chunkSize)
+            foreach (var offset in GetSampleOffsets(length, chunkSize))
             {
-                stream1.Seek(-chunkSize, SeekOrigin.End);
-                stream2.Seek(-chunkSize, SeekOrigin.End);
+                stream1.Seek(offset, SeekOrigin.Begin);
+                stream2.Seek(offset, SeekOrigin.Begin);
 
-                bytesRead1 = await stream1.ReadAsync(buffer1.AsMemory(0, chunkSize), cancellationToken);
-                bytesRead2 = await stream2.ReadAsync(buffer2.AsMemory(0, chunkSize), cancellationToken);
-                if (bytesRead1 != bytesRead2 || !buffer1.AsSpan(0, bytesRead1).SequenceEqual(buffer2.AsSpan(0, bytesRead2)))
+                var read1 = await stream1.ReadAtLeastAsync(buffer1, chunkSize, throwOnEndOfStream: false, cancellationToken);
+                var read2 = await stream2.ReadAtLeastAsync(buffer2, chunkSize, throwOnEndOfStream: false, cancellationToken);
+
+                if (read1 != read2 || !buffer1.AsSpan(0, read1).SequenceEqual(buffer2.AsSpan(0, read2)))
+                {
                     return false;
+                }
             }
 
             return true;
@@ -554,74 +295,110 @@ public class FileSorter
         {
             throw;
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            return false; // Assume files are different if any error occurs
+            return false; // Assume the files differ so the copy is retried.
         }
     }
 
+    private static IEnumerable<long> GetSampleOffsets(long length, int chunkSize)
+    {
+        yield return 0;
+
+        if (length <= chunkSize)
+        {
+            yield break;
+        }
+
+        var middle = Math.Max(0, (length / 2) - (chunkSize / 2));
+        if (middle > 0)
+        {
+            yield return middle;
+        }
+
+        yield return Math.Max(0, length - chunkSize);
+    }
+
+    internal static double CalculatePercentage(int current, int total)
+    {
+        if (total <= 0)
+        {
+            return 100;
+        }
+
+        return Math.Round(Math.Clamp((double)current / total, 0, 1) * 100, 2);
+    }
+
+    private static int GetMaxParallelism()
+    {
+        var configured = Environment.GetEnvironmentVariable("OABO_MAX_PARALLELISM");
+        if (int.TryParse(configured, out var requested) && requested > 0)
+        {
+            return requested;
+        }
+
+        // Copying is bound by the slowest of the two volumes, and on a network share or a spinning
+        // disk more concurrency makes throughput worse, not better.
+        return Math.Clamp(Environment.ProcessorCount / 4, 1, 8);
+    }
+
+    private static void RecordWarning(ConcurrentQueue<string> warnings, ref int warningCount, string message)
+    {
+        var count = Interlocked.Increment(ref warningCount);
+        if (count <= MaxReportedWarnings)
+        {
+            warnings.Enqueue(message);
+            WriteLine($"Warning: {message}");
+        }
+        else if (count == MaxReportedWarnings + 1)
+        {
+            WriteLine($"Warning: more than {MaxReportedWarnings} warnings, further warnings are suppressed.");
+        }
+    }
 
     private static void UpdateProgress(int currentProgress, int totalBooks, int copyBooks, string? title, ref int maxLineLength)
     {
-        var message = $"{Math.Round((decimal)currentProgress / totalBooks * 100, 2)}% ({currentProgress}/{totalBooks}) Transferred: {copyBooks} => {title}";
+        // When output is redirected (a service log, or the backend piped into the desktop app) the
+        // carriage-return trick just produces one enormous line, so log periodically instead.
+        if (Console.IsOutputRedirected)
+        {
+            if (currentProgress == totalBooks || currentProgress % 100 == 0)
+            {
+                WriteLine($"{CalculatePercentage(currentProgress, totalBooks):0.##}% ({currentProgress}/{totalBooks}) transferred: {copyBooks}");
+            }
+
+            return;
+        }
+
+        var message = $"{CalculatePercentage(currentProgress, totalBooks):0.##}% ({currentProgress}/{totalBooks}) Transferred: {copyBooks} => {title}";
 
         lock (ConsoleLock)
         {
-            // Clear previous message with spaces to prevent text corruption
-            Console.Write("\r" + new string(' ', maxLineLength) + "\r");
-            Console.Write(message);
-
-            // Track the longest message to properly clear on next update
-            maxLineLength = Math.Max(maxLineLength, message.Length);
+            try
+            {
+                Console.Write("\r" + new string(' ', maxLineLength) + "\r");
+                Console.Write(message);
+                maxLineLength = Math.Max(maxLineLength, message.Length);
+            }
+            catch (IOException)
+            {
+                // The console went away (the desktop app closed the pipe). Never fail a sort for it.
+            }
         }
     }
 
-    private static string BuildProgressLabel(OpenAudible audioFile)
+    private static void WriteLine(string message)
     {
-        var parts = new List<string>();
-
-        if (!string.IsNullOrWhiteSpace(audioFile.Author))
+        lock (ConsoleLock)
         {
-            parts.Add($"Artist: {audioFile.Author}");
+            try
+            {
+                Console.WriteLine(Console.IsOutputRedirected ? message : $"\n{message}");
+            }
+            catch (IOException)
+            {
+                // See UpdateProgress.
+            }
         }
-
-        if (!string.IsNullOrWhiteSpace(audioFile.SeriesName))
-        {
-            parts.Add($"Series: {audioFile.SeriesName}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(audioFile.SeriesSequence))
-        {
-            parts.Add($"Book: {audioFile.SeriesSequence}");
-        }
-
-        if (!string.IsNullOrWhiteSpace(audioFile.Title))
-        {
-            parts.Add($"Title: {audioFile.Title}");
-        }
-
-        var fileName = audioFile.Filename;
-        if (!string.IsNullOrWhiteSpace(fileName))
-        {
-            parts.Add($"File: {fileName}");
-        }
-
-        return parts.Count > 0
-            ? string.Join(" | ", parts)
-            : audioFile.Title ?? "Unknown";
     }
-
-    private static async Task CopyFileAsync(string sourceFile, string destinationFile, CancellationToken cancellationToken)
-    {
-        const int bufferSize = 81920; // 80KB buffer for efficiency
-
-        await using var sourceStream = new FileStream(
-            sourceFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-        await using var destinationStream = new FileStream(
-            destinationFile, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-        await sourceStream.CopyToAsync(destinationStream, cancellationToken);
-    }
-
 }

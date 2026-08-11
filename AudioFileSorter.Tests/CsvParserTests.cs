@@ -1,0 +1,212 @@
+using System.Text;
+
+namespace AudioFileSorter.Tests;
+
+public class CsvParserTests : IDisposable
+{
+    private readonly string _directory = Path.Combine(Path.GetTempPath(), "oabo-csv-tests", Guid.NewGuid().ToString("N"));
+
+    public CsvParserTests()
+    {
+        Directory.CreateDirectory(_directory);
+    }
+
+    [Fact]
+    public async Task Parses_a_standard_export()
+    {
+        var path = WriteCsv(
+            "Title,Author,File name,File Paths,Series Name,Series Sequence,Short Title,M4B",
+            "The Hobbit,J.R.R. Tolkien,the-hobbit,,Middle Earth,1,The Hobbit,Yes");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        var book = Assert.Single(result.Books);
+        Assert.Equal("The Hobbit", book.Title);
+        Assert.Equal("J.R.R. Tolkien", book.Author);
+        Assert.Equal("the-hobbit", book.Filename);
+        Assert.Equal("Middle Earth", book.SeriesName);
+        Assert.Equal(0, result.SkippedRows);
+    }
+
+    [Fact]
+    public async Task Parses_an_export_with_only_the_minimum_columns()
+    {
+        // Older exports and hand-trimmed files omit most columns; that used to throw a header
+        // validation error and lose the whole library.
+        var path = WriteCsv(
+            "Title,Author",
+            "The Hobbit,J.R.R. Tolkien");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Single(result.Books);
+        Assert.Equal("The Hobbit", result.Books[0].Title);
+    }
+
+    [Fact]
+    public async Task Parses_an_export_with_empty_numeric_and_date_cells()
+    {
+        var path = WriteCsv(
+            "Title,Author,File name,Purchase Date,Release Date,Ave. Rating,Rating Count,AYCE",
+            "The Hobbit,Tolkien,the-hobbit,,,,,");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        var book = Assert.Single(result.Books);
+        Assert.Null(book.PurchaseDate);
+        Assert.Equal(0, book.AveRating);
+        Assert.Equal(0, book.RatingCount);
+        Assert.False(book.AYCE);
+    }
+
+    [Fact]
+    public async Task Parses_an_export_with_unparseable_numeric_and_date_cells()
+    {
+        var path = WriteCsv(
+            "Title,Author,File name,Purchase Date,Ave. Rating,Rating Count",
+            "The Hobbit,Tolkien,the-hobbit,not-a-date,not-a-number,lots");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        var book = Assert.Single(result.Books);
+        Assert.Null(book.PurchaseDate);
+        Assert.Equal(0, book.AveRating);
+        Assert.Equal(0, book.RatingCount);
+    }
+
+    [Theory]
+    [InlineData("2020-05-04")]
+    [InlineData("05/04/2020")]
+    [InlineData("5/4/2020")]
+    public async Task Accepts_the_date_formats_openaudible_has_shipped(string date)
+    {
+        var path = WriteCsv(
+            "Title,Author,File name,Purchase Date",
+            $"The Hobbit,Tolkien,the-hobbit,{date}");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.NotNull(Assert.Single(result.Books).PurchaseDate);
+    }
+
+    [Fact]
+    public async Task Keeps_the_good_rows_when_one_row_is_short()
+    {
+        var path = WriteCsv(
+            "Title,Author,File name,Series Name",
+            "Book One,Author One,book-one,Series",
+            "Book Two,Author Two",
+            "Book Three,Author Three,book-three,Series");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Equal(3, result.Books.Count);
+        Assert.Equal("Book Two", result.Books[1].Title);
+    }
+
+    [Fact]
+    public async Task Reads_a_tab_separated_export()
+    {
+        var path = WriteCsv(
+            "Title\tAuthor\tFile name",
+            "The Hobbit\tTolkien\tthe-hobbit");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Equal("The Hobbit", Assert.Single(result.Books).Title);
+    }
+
+    [Fact]
+    public async Task Reads_a_file_that_starts_with_a_utf8_byte_order_mark()
+    {
+        var path = Path.Combine(_directory, "bom.csv");
+        await File.WriteAllTextAsync(
+            path,
+            "Title,Author,File name\nThe Hobbit,Tolkien,the-hobbit\n",
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Equal("The Hobbit", Assert.Single(result.Books).Title);
+    }
+
+    [Fact]
+    public async Task Reads_quoted_fields_that_span_lines()
+    {
+        var path = WriteCsv(
+            "Title,Author,File name,Summary",
+            "\"The Hobbit\",Tolkien,the-hobbit,\"A long\nsummary, with a comma\"");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        var book = Assert.Single(result.Books);
+        Assert.Equal("The Hobbit", book.Title);
+        Assert.Contains("with a comma", book.Summary);
+    }
+
+    [Fact]
+    public async Task Returns_an_empty_library_for_a_header_only_export()
+    {
+        var path = WriteCsv("Title,Author,File name");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Empty(result.Books);
+    }
+
+    [Fact]
+    public async Task Rejects_a_file_that_is_not_an_openaudible_export()
+    {
+        var path = WriteCsv("alpha,beta,gamma", "1,2,3");
+
+        var exception = await Assert.ThrowsAsync<InvalidDataException>(
+            () => new CsvParser().ParseAsync(path, CancellationToken.None));
+
+        Assert.Contains("does not look like an OpenAudible export", exception.Message);
+    }
+
+    [Fact]
+    public async Task Rejects_an_empty_file_with_a_clear_message()
+    {
+        var path = WriteCsv();
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => new CsvParser().ParseAsync(path, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Reports_a_missing_file_as_a_missing_file()
+    {
+        await Assert.ThrowsAsync<FileNotFoundException>(
+            () => new CsvParser().ParseAsync(Path.Combine(_directory, "nope.csv"), CancellationToken.None));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task Reports_a_missing_path_as_an_argument_error(string? path)
+    {
+        await Assert.ThrowsAnyAsync<ArgumentException>(
+            () => new CsvParser().ParseAsync(path, CancellationToken.None));
+    }
+
+    private string WriteCsv(params string[] lines)
+    {
+        var path = Path.Combine(_directory, $"{Guid.NewGuid():N}.csv");
+        File.WriteAllText(path, string.Join("\n", lines) + (lines.Length > 0 ? "\n" : string.Empty));
+        return path;
+    }
+
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(_directory, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Temp folder cleanup is best effort.
+        }
+    }
+}

@@ -12,6 +12,9 @@ import {
 } from 'lucide-react';
 import { startSort, getSortProgress, cancelSort } from '../api';
 
+const POLL_INTERVAL_MS = 400;
+const MAX_POLL_FAILURES = 25; // ~10 seconds of silence before giving up
+
 export default function SortPanel({ books, sortState, setSortState }) {
   const { csvPath, sourcePath, destPath, sorting, progress, error } = sortState;
   const pollRef = useRef(null);
@@ -65,21 +68,40 @@ export default function SortPanel({ books, sortState, setSortState }) {
 
   const startPolling = useCallback(() => {
     if (pollRef.current) clearInterval(pollRef.current);
+
+    // A transient failure is normal; a run of them means the backend is gone, and spinning
+    // "Sorting..." forever is worse than saying so.
+    let consecutiveFailures = 0;
+
+    const stop = () => {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    };
+
     pollRef.current = setInterval(async () => {
       try {
         const p = await getSortProgress();
+        consecutiveFailures = 0;
+
         const patches = { progress: p };
         if (p.isComplete) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
+          stop();
           patches.sorting = false;
           if (p.error) patches.error = p.error;
         }
         setSortState((prev) => ({ ...prev, ...patches }));
-      } catch {
-        // Ignore polling errors
+      } catch (err) {
+        consecutiveFailures += 1;
+        if (consecutiveFailures >= MAX_POLL_FAILURES) {
+          stop();
+          setSortState((prev) => ({
+            ...prev,
+            sorting: false,
+            error: `Lost contact with the backend while sorting: ${err.message}`,
+          }));
+        }
       }
-    }, 400);
+    }, POLL_INTERVAL_MS);
   }, [setSortState]);
 
   // Resume polling when component remounts while a sort is still active
@@ -99,6 +121,12 @@ export default function SortPanel({ books, sortState, setSortState }) {
   const isComplete = progress?.isComplete && !progress?.error && !isCanceled;
   const hasError = progress?.error;
   const progressDetails = parseProgressDetails(progress?.currentTitle);
+  const warningCount = progress?.warningCount || 0;
+
+  // skippedBooks was added alongside failedBooks; fall back for an older backend.
+  const skippedCount =
+    progress?.skippedBooks ??
+    Math.max(0, (progress?.currentBook || 0) - (progress?.copiedBooks || 0));
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
@@ -272,21 +300,26 @@ export default function SortPanel({ books, sortState, setSortState }) {
               </div>
 
               {/* Stats */}
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 xl:grid-cols-4 gap-3">
                 <StatCard label="Total" value={progress?.totalBooks || 0} />
                 <StatCard
                   label="Copied"
                   value={progress?.copiedBooks || 0}
                   color="text-emerald-400"
                 />
+                <StatCard label="Skipped" value={skippedCount} color="text-amber-400" />
                 <StatCard
-                  label="Skipped"
-                  value={
-                    (progress?.currentBook || 0) - (progress?.copiedBooks || 0)
-                  }
-                  color="text-amber-400"
+                  label="Failed"
+                  value={progress?.failedBooks || 0}
+                  color={progress?.failedBooks ? 'text-red-400' : 'text-slate-400'}
                 />
               </div>
+
+              {warningCount > 0 && (
+                <p className="text-xs text-amber-400/80">
+                  {warningCount} warning{warningCount === 1 ? '' : 's'} recorded. See the backend log for details.
+                </p>
+              )}
 
               {/* Current File */}
               {progress?.currentTitle && !isComplete && (
@@ -314,7 +347,9 @@ export default function SortPanel({ books, sortState, setSortState }) {
                   <div>
                     <p className="text-sm font-medium text-emerald-300">Sorting complete!</p>
                     <p className="text-xs text-emerald-400/70 mt-0.5">
-                      {progress.copiedBooks} file{progress.copiedBooks !== 1 ? 's' : ''} copied successfully
+                      {progress.copiedBooks} book{progress.copiedBooks !== 1 ? 's' : ''} copied
+                      {skippedCount > 0 && `, ${skippedCount} already up to date or unmatched`}
+                      {progress.failedBooks > 0 && `, ${progress.failedBooks} failed`}
                     </p>
                   </div>
                 </div>
