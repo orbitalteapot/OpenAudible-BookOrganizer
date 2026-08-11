@@ -29,15 +29,22 @@ setting on the Sort page toggles between the two:
 | **Quick** (default) | File size, plus the first, middle and last 4 KB | Every day. It catches any re-release whose length changed, which is nearly all of them, and costs almost nothing to run over a large library. |
 | **Verify contents** | Every byte of both files | When you suspect a book was re-issued at exactly the same size, or you want certainty after a bad disk or an interrupted copy. Slower: it reads both files in full. |
 
-Either way, books that already match are left untouched and reported as skipped, and the sort
-summary shows how many books were **Updated** — replaced because their source had changed — as
-opposed to copied for the first time.
+Either way, a book that already matches is left untouched. The sort summary counts it as
+**Skipped**, along with any book whose source file could not be found at all, and reports
+**Updated** — books replaced because their source had changed — as a subset of **Copied**, which
+also includes books written to the destination for the first time.
 
 In Docker, set the default with the `COMPARISON_MODE` environment variable (`quick` or `full`);
 the Sort page can still override it for an individual run.
 
-Note that a re-release that also changes the book's *title* is filed under the new name, and the
-file under the old name is left alone; the organiser never deletes from your destination folder.
+Two things worth knowing about re-releases:
+
+- The organiser never deletes from your destination folder. If a re-release also changes the book's
+  title enough to be filed under a different name, the new file is written alongside the old one,
+  and removing the old copy is up to you. A title that differs only in punctuation or spacing still
+  resolves to the existing file, which is replaced in place as usual.
+- Replacing a book is atomic: the new version is written beside the old one and renamed over it, so
+  an interrupted update leaves you with either the old copy or the new one, never half of each.
 
 ## Screenshots
 

@@ -65,6 +65,29 @@ public class UpdateCheckTests
         Assert.Equal(original, File.ReadAllText(destination));
     }
 
+    /// <summary>
+    /// The other half of the quick check's contract: what it samples, it must actually compare.
+    /// Without this, the sampling loop could be deleted entirely and every other test would still
+    /// pass, because they only ever assert that quick mode does *not* notice a difference.
+    /// </summary>
+    [Theory]
+    [InlineData(TempWorkspace.SampleWindow.Head)]
+    [InlineData(TempWorkspace.SampleWindow.Middle)]
+    [InlineData(TempWorkspace.SampleWindow.Tail)]
+    public async Task Quick_mode_replaces_a_same_size_edit_inside_a_sampled_chunk(TempWorkspace.SampleWindow window)
+    {
+        using var workspace = new TempWorkspace();
+        var (original, edited) = TempWorkspace.SameSizeEditInWindow(window);
+        workspace.WriteSourceFile("a-book.m4b", edited);
+        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
+
+        var summary = await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
+
+        Assert.Equal(1, summary.CopiedBooks);
+        Assert.Equal(1, summary.UpdatedBooks);
+        Assert.Equal(edited, File.ReadAllText(destination));
+    }
+
     [Fact]
     public async Task Full_mode_replaces_a_same_size_edit_between_the_sampled_chunks()
     {
@@ -144,16 +167,110 @@ public class UpdateCheckTests
         Assert.Equal(1, reports[^1].UpdatedBooks);
     }
 
+    /// <summary>
+    /// Cancels mid-run, once books are actually being compared and copied, rather than before the
+    /// first one — a run that aborts at the starting gate never enters the byte-for-byte loop and
+    /// proves nothing about it.
+    /// </summary>
     [Fact]
-    public async Task Full_mode_honours_cancellation()
+    public async Task Full_mode_honours_cancellation_once_it_is_already_comparing()
     {
         using var workspace = new TempWorkspace();
         var books = new List<OpenAudible>();
-        for (var i = 0; i < 200; i++)
+        for (var i = 0; i < 300; i++)
         {
-            workspace.WriteSourceFile($"book-{i}.m4b", new string((char)('a' + (i % 26)), 40_000));
+            var content = new string((char)('a' + (i % 26)), 200_000);
+            workspace.WriteSourceFile($"book-{i}.m4b", content);
+
+            // Half the books already exist at the destination with identical contents, so the run
+            // has to read both files in full before deciding to skip them.
+            if (i % 2 == 0)
+            {
+                workspace.WriteDestinationFile(Path.Combine("An Author", $"Book {i}.m4b"), content);
+            }
+
             books.Add(TempWorkspace.Book(title: $"Book {i}", filename: $"book-{i}"));
         }
+
+        using var cancellation = new CancellationTokenSource();
+        var comparedBeforeCancel = 0;
+
+        var progress = new InlineTestProgress(report =>
+        {
+            comparedBeforeCancel = report.CurrentBook;
+            if (report.CurrentBook >= 5)
+            {
+                cancellation.Cancel();
+            }
+        });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            new FileSorter().SortAudioFiles(
+                workspace.Source,
+                workspace.Destination,
+                books,
+                new SortOptions { ComparisonMode = FileComparisonMode.Full },
+                progress,
+                cancellation.Token));
+
+        Assert.True(comparedBeforeCancel >= 5, $"expected the run to get going before cancelling, got {comparedBeforeCancel}");
+        Assert.True(comparedBeforeCancel < books.Count, "the run finished instead of being cancelled");
+
+        Assert.Empty(Directory.GetFiles(workspace.Destination, "*.oabo-partial", SearchOption.AllDirectories));
+
+        // Whatever was written before the cancel must be complete, not truncated.
+        foreach (var file in Directory.GetFiles(workspace.Destination, "*.m4b", SearchOption.AllDirectories))
+        {
+            Assert.Equal(200_000, new FileInfo(file).Length);
+        }
+    }
+
+    /// <summary>
+    /// The byte-for-byte comparison is the only unbounded loop in a sort. On a large library a
+    /// cancelled run must stop inside it, not after it — otherwise Cancel reports success while
+    /// the backend keeps reading whole files.
+    /// </summary>
+    [Fact]
+    public async Task The_byte_for_byte_comparison_stops_when_cancelled()
+    {
+        using var workspace = new TempWorkspace();
+        var content = new string('z', 2_000_000);
+        var first = workspace.WriteSourceFile("a-book.m4b", content);
+        var second = workspace.WriteDestinationFile("copy.m4b", content);
+
+        using var cancellation = new CancellationTokenSource();
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            FileSorter.AreFilesIdenticalAsync(first, second, cancellation.Token));
+    }
+
+    [Fact]
+    public async Task The_byte_for_byte_comparison_still_reports_identical_files_as_identical()
+    {
+        using var workspace = new TempWorkspace();
+        var content = new string('z', 2_000_000);
+        var first = workspace.WriteSourceFile("a-book.m4b", content);
+        var second = workspace.WriteDestinationFile("copy.m4b", content);
+
+        Assert.True(await FileSorter.AreFilesIdenticalAsync(first, second, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task The_byte_for_byte_comparison_spots_a_difference_in_the_final_block()
+    {
+        using var workspace = new TempWorkspace();
+        var first = workspace.WriteSourceFile("a-book.m4b", new string('z', 2_000_000) + "end-a");
+        var second = workspace.WriteDestinationFile("copy.m4b", new string('z', 2_000_000) + "end-b");
+
+        Assert.False(await FileSorter.AreFilesIdenticalAsync(first, second, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Full_mode_aborts_before_touching_anything_when_the_token_is_already_cancelled()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
 
         using var cancellation = new CancellationTokenSource();
         await cancellation.CancelAsync();
@@ -162,11 +279,11 @@ public class UpdateCheckTests
             new FileSorter().SortAudioFiles(
                 workspace.Source,
                 workspace.Destination,
-                books,
+                [TempWorkspace.Book()],
                 new SortOptions { ComparisonMode = FileComparisonMode.Full },
                 cancellationToken: cancellation.Token));
 
-        Assert.Empty(Directory.GetFiles(workspace.Destination, "*.oabo-partial", SearchOption.AllDirectories));
+        Assert.Empty(workspace.DestinationFiles());
     }
 
     [Fact]

@@ -137,7 +137,16 @@ public class FileSorter
             }
 
             var currentProgress = Interlocked.Increment(ref progressCount);
+
+            // Read the sub-counts before the total they are part of. A worker increments
+            // copiedBooks and only then updatedBooks, so reading them the other way round can
+            // pair an old copied count with a newer updated count and publish a snapshot
+            // claiming more books were updated than were copied.
+            var currentUpdated = Volatile.Read(ref updatedBooks);
+            var currentSkipped = Volatile.Read(ref skippedBooks);
+            var currentFailed = Volatile.Read(ref failedBooks);
             var currentCopied = Volatile.Read(ref copiedBooks);
+
             UpdateProgress(currentProgress, totalBooks, currentCopied, item.Label, ref maxLineLength);
 
             progress?.Report(new SortProgressInfo
@@ -145,9 +154,9 @@ public class FileSorter
                 CurrentBook = currentProgress,
                 TotalBooks = totalBooks,
                 CopiedBooks = currentCopied,
-                UpdatedBooks = Volatile.Read(ref updatedBooks),
-                SkippedBooks = Volatile.Read(ref skippedBooks),
-                FailedBooks = Volatile.Read(ref failedBooks),
+                UpdatedBooks = currentUpdated,
+                SkippedBooks = currentSkipped,
+                FailedBooks = currentFailed,
                 CurrentTitle = item.Label,
                 Percentage = CalculatePercentage(currentProgress, totalBooks),
                 WarningCount = Volatile.Read(ref warningCount)
@@ -368,8 +377,12 @@ public class FileSorter
     /// Byte-for-byte comparison of two files. Used by <see cref="FileComparisonMode.Full"/>, where
     /// the point is to notice a re-released book that happens to be exactly the same size as the
     /// copy already on disk — something the sampled check cannot see.
+    ///
+    /// Internal rather than private so the "cancel stops it promptly" guarantee can be tested
+    /// directly: this is the only unbounded loop in a sort, and on a large library it is where a
+    /// cancelled run would otherwise keep grinding.
     /// </summary>
-    private static async Task<bool> AreFilesIdenticalAsync(string filePath1, string filePath2, CancellationToken cancellationToken)
+    internal static async Task<bool> AreFilesIdenticalAsync(string filePath1, string filePath2, CancellationToken cancellationToken)
     {
         byte[]? buffer1 = null;
         byte[]? buffer2 = null;
@@ -401,6 +414,11 @@ public class FileSorter
 
             while (true)
             {
+                // Checked here as well as passed to the reads: a whole-file comparison of a large
+                // book is many iterations long, and cancellation must not have to wait for the
+                // reads to notice it.
+                cancellationToken.ThrowIfCancellationRequested();
+
                 var read1 = await stream1.ReadAtLeastAsync(
                     buffer1.AsMemory(0, ComparisonBufferSize), ComparisonBufferSize, throwOnEndOfStream: false, cancellationToken);
                 var read2 = await stream2.ReadAtLeastAsync(
