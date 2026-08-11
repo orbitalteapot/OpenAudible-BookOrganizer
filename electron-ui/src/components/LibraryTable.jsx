@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useEffect, useMemo } from 'react';
 import { ArrowDown, ArrowUp, Search } from 'lucide-react';
 import { useElementWidth, useVirtualRows } from '../hooks';
 import { formatDuration } from '../format';
@@ -7,7 +7,9 @@ const ROW_HEIGHT = 40;
 
 /**
  * Column definitions, in priority order. `minTableWidth` is the width below which the column is
- * dropped, so a narrow window sheds detail instead of crushing every column into ellipses.
+ * dropped, so a narrow window sheds detail instead of crushing every column into ellipses. Title
+ * and Author have no threshold: they are the floor, and below the width that fits them the table
+ * scrolls sideways rather than shedding anything further.
  */
 const COLUMNS = [
   { key: 'title', label: 'Title', width: '2.4fr', minTableWidth: 0 },
@@ -17,6 +19,8 @@ const COLUMNS = [
   { key: 'duration', label: 'Duration', width: '92px', minTableWidth: 560, align: 'right' },
   { key: 'aveRating', label: 'Rating', width: '80px', minTableWidth: 1120, align: 'right' },
 ];
+
+const MIN_TABLE_WIDTH = 420;
 
 function cellValue(book, key) {
   if (key === 'seriesName') {
@@ -41,9 +45,9 @@ function cellTitle(book, key) {
   return undefined;
 }
 
-const Row = memo(function Row({ book, columns }) {
+const Row = memo(function Row({ book, columns, rowIndex }) {
   return (
-    <tr className="border-b border-line/60 hover:bg-raised/50">
+    <tr aria-rowindex={rowIndex} className="border-b border-line/60 hover:bg-raised/50">
       {columns.map((column) => {
         const value = cellValue(book, column.key);
         const isTitle = column.key === 'title';
@@ -54,7 +58,7 @@ const Row = memo(function Row({ book, columns }) {
             title={cellTitle(book, column.key) ?? (value !== '—' ? value : undefined)}
             className={[
               'truncate px-4',
-              column.align === 'right' ? 'text-right tabular' : '',
+              column.align === 'right' ? 'tabular text-right' : '',
               isTitle ? 'font-medium text-fg' : 'text-fg-muted',
             ].join(' ')}
             style={{ height: ROW_HEIGHT }}
@@ -80,22 +84,67 @@ function SortIndicator({ active, direction }) {
  * every row, so the two can no longer drift apart the way parallel flex widths did. Only the rows
  * near the viewport are rendered — see useVirtualRows — with spacer rows standing in for the rest,
  * which keeps a ten thousand book library scrolling at full speed.
+ *
+ * Because the DOM no longer holds a row per book, the row geometry has to be restated on the ARIA
+ * layer: aria-rowcount on the table and aria-rowindex on each row, or assistive tech reports the
+ * size of the window instead of the size of the library.
  */
-export default function LibraryTable({ books, sortField, sortDir, onSort, searchActive }) {
+export default function LibraryTable({
+  books,
+  sortField,
+  sortDir,
+  onSort,
+  onSortFieldHidden,
+  searchActive,
+  resetKey,
+}) {
   const [containerRef, containerWidth] = useElementWidth();
-  const columns = COLUMNS.filter((column) => containerWidth >= column.minTableWidth);
 
-  const { scrollRef, start, end, paddingTop, paddingBottom } = useVirtualRows({
+  // Keyed on the set of visible columns rather than the raw width: a new array on every pixel of
+  // resize — or worse, on every render — would defeat the memo on Row and reconcile every visible
+  // row on every scroll frame.
+  const visibleKeys = COLUMNS.filter((column) => containerWidth >= column.minTableWidth)
+    .map((column) => column.key)
+    .join(',');
+
+  const columns = useMemo(
+    () => COLUMNS.filter((column) => visibleKeys.split(',').includes(column.key)),
+    [visibleKeys]
+  );
+
+  const { scrollRef, start, end, paddingTop, paddingBottom, scrollToTop } = useVirtualRows({
     count: books.length,
     rowHeight: ROW_HEIGHT,
   });
 
+  // A new result set starts at the top. Without this, searching from halfway down leaves scrollTop
+  // pointing past the end of a much shorter list: the window resolves to an empty slice and the
+  // user is shown a blank table that then judders upwards.
+  useEffect(() => {
+    scrollToTop();
+  }, [resetKey, scrollToTop]);
+
+  // Sorting by a column that is no longer rendered leaves the order unexplained and unchangeable.
+  useEffect(() => {
+    if (!columns.some((column) => column.key === sortField)) {
+      onSortFieldHidden?.();
+    }
+  }, [columns, sortField, onSortFieldHidden]);
+
   const visible = books.slice(start, end);
 
   return (
-    <div ref={containerRef} className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-surface">
+    <div
+      ref={containerRef}
+      className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-surface"
+    >
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
-        <table className="w-full table-fixed border-collapse text-sm">
+        <table
+          aria-label="Audiobooks"
+          aria-rowcount={books.length + 1}
+          className="w-full table-fixed border-collapse text-sm"
+          style={{ minWidth: MIN_TABLE_WIDTH }}
+        >
           <colgroup>
             {columns.map((column) => (
               <col key={column.key} style={{ width: column.width }} />
@@ -103,9 +152,10 @@ export default function LibraryTable({ books, sortField, sortDir, onSort, search
           </colgroup>
 
           <thead className="sticky top-0 z-10">
-            <tr>
+            <tr aria-rowindex={1}>
               {columns.map((column) => {
                 const active = sortField === column.key;
+                const nextDirection = active && sortDir === 'asc' ? 'descending' : 'ascending';
 
                 return (
                   <th
@@ -117,13 +167,16 @@ export default function LibraryTable({ books, sortField, sortDir, onSort, search
                     <button
                       type="button"
                       onClick={() => onSort(column.key)}
+                      // The visible label alone would leave a keyboard user with no idea what
+                      // pressing it does, since the direction arrow is decorative.
+                      aria-label={`${column.label}, sort ${nextDirection}`}
                       className={[
                         'flex h-10 w-full items-center gap-1.5 px-4 text-xs transition-colors',
                         column.align === 'right' ? 'justify-end' : '',
                         active ? 'text-fg' : 'text-fg-muted hover:text-fg',
                       ].join(' ')}
                     >
-                      {column.label}
+                      <span aria-hidden="true">{column.label}</span>
                       <SortIndicator active={active} direction={sortDir} />
                     </button>
                   </th>
@@ -133,18 +186,25 @@ export default function LibraryTable({ books, sortField, sortDir, onSort, search
           </thead>
 
           <tbody>
+            {/* role="presentation" so the spacers do not count themselves as rows. */}
             {paddingTop > 0 && (
-              <tr aria-hidden="true">
+              <tr role="presentation">
                 <td colSpan={columns.length} style={{ height: paddingTop }} />
               </tr>
             )}
 
             {visible.map((book, index) => (
-              <Row key={book.key || book.asin || start + index} book={book} columns={columns} />
+              <Row
+                key={book.key || book.asin || start + index}
+                book={book}
+                columns={columns}
+                // +2: ARIA row indices are 1-based and the header occupies row 1.
+                rowIndex={start + index + 2}
+              />
             ))}
 
             {paddingBottom > 0 && (
-              <tr aria-hidden="true">
+              <tr role="presentation">
                 <td colSpan={columns.length} style={{ height: paddingBottom }} />
               </tr>
             )}

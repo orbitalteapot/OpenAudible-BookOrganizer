@@ -88,7 +88,6 @@ function SortPanel({ config, setConfig, run, setRun }) {
               {() => (
                 <SegmentedControl
                   label="Update check"
-                  name="comparison-mode"
                   value={comparisonMode}
                   options={COMPARISON_MODES}
                   disabled={sorting}
@@ -114,8 +113,31 @@ function SortPanel({ config, setConfig, run, setRun }) {
 
         <ProgressCard sorting={sorting} progress={progress} />
       </div>
+
+      {/*
+        Always mounted so it is being observed before the text arrives. The banners below announce
+        nothing on their own: they are mounted at the same instant as their message, and a live
+        region that appears together with its content is routinely missed.
+      */}
+      <p aria-live="polite" className="sr-only">
+        {outcomeAnnouncement(run)}
+      </p>
     </div>
   );
+}
+
+/** One sentence describing how the run ended, for the live region. Empty while it is still going. */
+function outcomeAnnouncement({ sorting, progress, error }) {
+  if (error) return `Sort failed: ${error}`;
+  if (sorting || !progress?.isComplete) return '';
+
+  const copied = progress.copiedBooks || 0;
+  const failed = progress.failedBooks || 0;
+
+  if (progress.error) return `Sort failed: ${progress.error}`;
+  if (progress.isCanceled) return `Sort canceled after ${copied} books`;
+
+  return `Sort complete. ${copied} copied${failed > 0 ? `, ${failed} failed` : ''}.`;
 }
 
 function ProgressCard({ sorting, progress }) {

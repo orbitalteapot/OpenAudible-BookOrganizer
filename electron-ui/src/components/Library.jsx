@@ -9,6 +9,15 @@ import LibraryTable from './LibraryTable';
 
 const SEARCH_FIELDS = ['title', 'author', 'seriesName', 'narratedBy'];
 
+const SORT_LABELS = {
+  title: 'title',
+  author: 'author',
+  seriesName: 'series',
+  narratedBy: 'narrator',
+  duration: 'duration',
+  aveRating: 'rating',
+};
+
 // Natural ordering, so "Book 2" sorts before "Book 10" and accented names file where a reader
 // expects. Built once rather than per comparison: constructing a collator is not cheap, and doing
 // it inside the sort callback made large libraries noticeably slow to reorder.
@@ -62,6 +71,12 @@ function LibraryView({ books, setBooks, csvPath }) {
     setSort((prev) => (prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' }));
   }, []);
 
+  // The window got too narrow for the column being sorted on. Fall back to Title, which is never
+  // dropped, so the order on screen always corresponds to a header the user can see and change.
+  const handleSortFieldHidden = useCallback(() => {
+    setSort({ field: 'title', dir: 'asc' });
+  }, []);
+
   // Filtering and sorting are separate passes so that typing does not pay for a re-sort and
   // re-sorting does not pay for a re-filter.
   const filtered = useMemo(() => {
@@ -96,6 +111,16 @@ function LibraryView({ books, setBooks, csvPath }) {
 
     return sorted;
   }, [filtered, sort]);
+
+  const sortLabel = SORT_LABELS[sort.field] ?? sort.field;
+  const announcement = [
+    debouncedSearch.trim()
+      ? rows.length === 0
+        ? `No books match ${debouncedSearch.trim()}`
+        : `${rows.length.toLocaleString()} of ${books.length.toLocaleString()} books match ${debouncedSearch.trim()}`
+      : `${books.length.toLocaleString()} books`,
+    `sorted by ${sortLabel}, ${sort.dir === 'asc' ? 'ascending' : 'descending'}`,
+  ].join(', ');
 
   if (books.length === 0) {
     return (
@@ -151,12 +176,23 @@ function LibraryView({ books, setBooks, csvPath }) {
       {error && <Banner tone="critical">{error}</Banner>}
       {notice && <Banner tone="caution">{notice}</Banner>}
 
+      {/*
+        Always mounted, so it actually announces. A live region that appears at the same moment as
+        its text is frequently missed: assistive tech has to be observing the node before the text
+        lands in it.
+      */}
+      <p aria-live="polite" className="sr-only">
+        {announcement}
+      </p>
+
       <LibraryTable
         books={rows}
         sortField={sort.field}
         sortDir={sort.dir}
         onSort={handleSort}
+        onSortFieldHidden={handleSortFieldHidden}
         searchActive={debouncedSearch.trim().length > 0}
+        resetKey={`${debouncedSearch}\u0000${sort.field}\u0000${sort.dir}`}
       />
     </div>
   );

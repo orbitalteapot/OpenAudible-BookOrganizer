@@ -18,10 +18,10 @@
     --color-line: 38 43 50;
     --color-line-strong: 55 62 71;
 
-    /* Text, in descending emphasis. All three clear WCAG AA on canvas and surface. */
+    /* Text, in descending emphasis. All three clear WCAG AA 4.5:1 on canvas, surface AND raised. */
     --color-fg: 232 235 239;
-    --color-fg-muted: 155 164 175;
-    --color-fg-subtle: 123 133 145;
+    --color-fg-muted: 161 170 181;
+    --color-fg-subtle: 141 150 161;
 
     /* One accent, used sparingly: the primary action and the current selection. */
     --color-accent: 88 143 255;
@@ -70,9 +70,14 @@
   /*
    * One focus treatment everywhere, and only for keyboard users: :focus alone would ring every
    * button on click, which is the usual reason apps end up removing focus styles altogether.
+   *
+   * A real outline rather than a Tailwind ring: rings are drawn as box-shadows, which ancestors
+   * with hidden overflow clip. The sticky table header sits inside two such containers, and its
+   * focus indicator was losing its top and outer edges.
    */
   :focus-visible {
-    @apply outline-none ring-2 ring-accent/70 ring-offset-2 ring-offset-canvas;
+    outline: 2px solid rgb(var(--color-accent) / 0.9);
+    outline-offset: 2px;
   }
 
   ::-webkit-scrollbar {
