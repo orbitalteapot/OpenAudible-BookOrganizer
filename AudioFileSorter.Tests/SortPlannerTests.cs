@@ -107,13 +107,16 @@ public class SortPlannerTests
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b");
-        // Written by an older version, before ':' was stripped on Linux.
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book: The Sequel.m4b"), "audio");
+        // Written by an earlier version that punctuated the name differently. The fixture name
+        // has to be legal on every platform: NTFS reads ':' as an alternate data stream.
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book - The Sequel.m4b"), "audio");
 
         var planned = Plan(workspace, TempWorkspace.Book(title: "A Book: The Sequel"));
 
+        // Sanitising gives "A Book The Sequel", but the existing file means the same thing, so it
+        // is reused rather than duplicated alongside it.
         Assert.Equal(
-            Path.Combine(workspace.Destination, "An Author", "A Book: The Sequel.m4b"),
+            Path.Combine(workspace.Destination, "An Author", "A Book - The Sequel.m4b"),
             planned[0].AudioDestination);
     }
 

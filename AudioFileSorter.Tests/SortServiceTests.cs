@@ -1,3 +1,4 @@
+using AudioFileSorter.Model;
 using ManagerApi.Services;
 
 namespace AudioFileSorter.Tests;
@@ -22,6 +23,46 @@ public class SortServiceTests
         Assert.Equal(1, progress.CopiedBooks);
         Assert.False(service.IsSorting);
         Assert.Equal(["Tolkien/The Hobbit.m4b"], workspace.DestinationFiles());
+    }
+
+    [Fact]
+    public async Task A_late_progress_report_cannot_un_finish_a_completed_sort()
+    {
+        // A per-book report delivered after the run ended used to overwrite the completed state.
+        // The UI stops polling on that flag, so losing it left it spinning on a finished run.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        var csvPath = WriteCsv(workspace, "The Hobbit,Tolkien,the-hobbit");
+
+        var service = new SortService();
+        Assert.True(service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out var sortTask));
+        await sortTask;
+        Assert.True(service.GetProgress().IsComplete);
+
+        service.SetProgress(new SortProgressInfo { CurrentBook = 1, TotalBooks = 25, Percentage = 4 });
+
+        var progress = service.GetProgress();
+        Assert.True(progress.IsComplete);
+        Assert.Equal(100, progress.Percentage);
+    }
+
+    [Fact]
+    public async Task A_new_run_clears_the_completed_state_of_the_previous_one()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        var csvPath = WriteCsv(workspace, "The Hobbit,Tolkien,the-hobbit");
+
+        var service = new SortService();
+        Assert.True(service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out var first));
+        await first;
+
+        Assert.True(service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out var second));
+        await second;
+
+        var progress = service.GetProgress();
+        Assert.True(progress.IsComplete);
+        Assert.Equal(1, progress.TotalBooks);
     }
 
     [Fact]

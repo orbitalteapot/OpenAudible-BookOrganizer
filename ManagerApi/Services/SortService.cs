@@ -140,7 +140,10 @@ public class SortService
         {
             var books = await EnsureBooksLoaded(csvPath, cancellation.Token);
 
-            var progress = new Progress<SortProgressInfo>(SetProgress);
+            // Deliberately not Progress<T>: it marshals each report through the thread pool, so a
+            // per-book report could be delivered after the final one and leave the run looking
+            // unfinished forever.
+            var progress = new InlineProgress<SortProgressInfo>(SetProgress);
             var summary = await _fileSorter.SortAudioFiles(sourcePath, destinationPath, books, progress, cancellation.Token);
 
             SetProgress(new SortProgressInfo
@@ -233,11 +236,31 @@ public class SortService
         return result.Books;
     }
 
-    private void SetProgress(SortProgressInfo progress)
+    /// <summary>
+    /// Publishes a progress snapshot. Internal rather than private so the "a finished run stays
+    /// finished" guarantee can be tested without racing the thread pool.
+    /// </summary>
+    internal void SetProgress(SortProgressInfo progress)
     {
         lock (_sortLock)
         {
+            // Once a run is finished, nothing from that run may un-finish it. The UI stops
+            // polling on the completed flag, so losing it would leave it spinning forever.
+            if (_currentProgress.IsComplete && !progress.IsComplete)
+            {
+                return;
+            }
+
             _currentProgress = progress;
         }
+    }
+
+    /// <summary>
+    /// An <see cref="IProgress{T}"/> that invokes the handler on the reporting thread instead of
+    /// queueing it, so reports are applied in the order they were made.
+    /// </summary>
+    private sealed class InlineProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => handler(value);
     }
 }

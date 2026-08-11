@@ -61,7 +61,7 @@ folder is refused, and progress now reports copied, skipped and failed counts se
 
 ## Testing
 
-This release adds a test suite (136 tests) covering path safety, name resolution, planning
+This release adds a test suite (138 tests) covering path safety, name resolution, planning
 determinism, atomic and idempotent copying, cancellation, and CSV robustness, plus a CI workflow
 that runs it on Linux and Windows.
 

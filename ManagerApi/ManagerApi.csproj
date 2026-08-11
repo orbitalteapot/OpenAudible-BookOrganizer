@@ -10,4 +10,8 @@
         <ProjectReference Include="..\AudioFileSorter\AudioFileSorter.csproj" />
     </ItemGroup>
 
+    <ItemGroup>
+        <InternalsVisibleTo Include="AudioFileSorter.Tests" />
+    </ItemGroup>
+
 </Project>
