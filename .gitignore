@@ -7,3 +7,7 @@ riderModule.iml
 .dotnet
 .artifacts
 data
+
+# The Dockerfile copies the built frontend here during the image build; it is generated output,
+# and running the same copy locally to test the web UI should not show up as a change.
+ManagerApi/wwwroot/

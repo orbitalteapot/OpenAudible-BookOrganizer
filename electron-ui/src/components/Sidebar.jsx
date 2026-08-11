@@ -1,60 +1,57 @@
 import { Library, ArrowUpDown, Headphones } from 'lucide-react';
 
-const navItems = [
+const NAV_ITEMS = [
   { id: 'library', label: 'Library', icon: Library },
-  { id: 'sort', label: 'Sort Files', icon: ArrowUpDown },
+  { id: 'sort', label: 'Sort', icon: ArrowUpDown },
 ];
 
+/**
+ * Primary navigation. Collapses to an icon rail on a narrow window rather than holding a fixed
+ * 240px, which on a small laptop was taking a fifth of the width to show two words.
+ */
 export default function Sidebar({ currentPage, onPageChange, bookCount }) {
   return (
-    <aside className="w-60 bg-slate-800/40 border-r border-slate-700/40 flex flex-col shrink-0">
-      {/* Branding */}
-      <div className="p-5 pb-6">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-brand-500 via-brand-600 to-violet-600 flex items-center justify-center shadow-lg shadow-brand-500/25">
-            <Headphones size={20} className="text-white" />
-          </div>
-          <div>
-            <h1 className="text-sm font-bold text-white leading-tight">OpenAudible</h1>
-            <p className="text-[11px] text-slate-400 leading-tight">Book Organizer</p>
-          </div>
-        </div>
+    <nav
+      aria-label="Main"
+      className="flex w-14 shrink-0 flex-col border-r border-line bg-canvas lg:w-52"
+    >
+      <div className="flex h-14 items-center gap-2.5 px-4">
+        <Headphones size={18} className="shrink-0 text-fg-muted" aria-hidden="true" />
+        <span className="hidden truncate text-sm font-semibold text-fg lg:block">Organizer</span>
       </div>
 
-      {/* Navigation */}
-      <nav className="flex-1 px-3 space-y-1">
-        <p className="px-3 mb-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
-          Menu
-        </p>
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = currentPage === item.id;
+      <ul className="flex-1 space-y-0.5 px-2">
+        {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
+          const isActive = currentPage === id;
+
           return (
-            <button
-              key={item.id}
-              onClick={() => onPageChange(item.id)}
-              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-                isActive
-                  ? 'bg-brand-500/15 text-brand-400 shadow-sm'
-                  : 'text-slate-400 hover:bg-slate-700/40 hover:text-slate-200'
-              }`}
-            >
-              <Icon size={18} strokeWidth={isActive ? 2.2 : 1.8} />
-              <span>{item.label}</span>
-            </button>
+            <li key={id}>
+              <button
+                type="button"
+                onClick={() => onPageChange(id)}
+                aria-current={isActive ? 'page' : undefined}
+                title={label}
+                className={[
+                  'flex h-9 w-full items-center gap-2.5 rounded px-3 text-sm transition-colors',
+                  isActive
+                    ? 'bg-raised font-medium text-fg'
+                    : 'text-fg-muted hover:bg-raised/60 hover:text-fg',
+                ].join(' ')}
+              >
+                <Icon size={16} className="shrink-0" aria-hidden="true" />
+                <span className="hidden lg:block">{label}</span>
+              </button>
+            </li>
           );
         })}
-      </nav>
+      </ul>
 
-      {/* Footer stats */}
-      <div className="p-4 mx-3 mb-3 rounded-xl bg-slate-800/80 border border-slate-700/40">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-500">Books loaded</span>
-          <span className="text-xs font-bold text-brand-400">
-            {bookCount > 0 ? bookCount.toLocaleString() : '—'}
-          </span>
-        </div>
+      <div className="hidden border-t border-line px-5 py-3 lg:block">
+        <p className="text-2xs text-fg-subtle">Books loaded</p>
+        <p className="tabular text-sm font-medium text-fg">
+          {bookCount > 0 ? bookCount.toLocaleString() : '—'}
+        </p>
       </div>
-    </aside>
+    </nav>
   );
 }

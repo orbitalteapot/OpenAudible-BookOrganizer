@@ -1,475 +1,231 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { memo } from 'react';
 import {
-  FolderOpen,
   FileSpreadsheet,
+  FolderOpen,
   FolderOutput,
-  Play,
-  Square,
-  CheckCircle2,
-  AlertCircle,
-  Loader2,
-  ArrowUpDown,
   Gauge,
+  Play,
   ShieldCheck,
+  Square,
 } from 'lucide-react';
-import { startSort, getSortProgress, cancelSort } from '../api';
-
-const POLL_INTERVAL_MS = 400;
-const MAX_POLL_FAILURES = 25; // ~10 seconds of silence before giving up
+import { useIsElectron, useSortRun } from '../hooks';
+import Button from './ui/Button';
+import { Field, PathInput } from './ui/Field';
+import SegmentedControl from './ui/SegmentedControl';
+import { Banner, Card, ProgressBar, Stat } from './ui/Surface';
 
 const COMPARISON_MODES = [
   {
     value: 'quick',
     label: 'Quick',
-    description:
-      'Replaces a book when its size or sampled contents differ. Fast, and catches almost every re-release.',
+    icon: Gauge,
+    description: 'Replaces a book when its size or sampled contents differ. Fast enough to run every time.',
   },
   {
     value: 'full',
     label: 'Verify contents',
-    description:
-      'Compares every byte and replaces any book that changed. Slower, but never leaves a stale copy behind.',
+    icon: ShieldCheck,
+    description: 'Compares every byte, so a re-release of identical size is still caught. Slower.',
   },
 ];
 
-export default function SortPanel({ books, sortState, setSortState }) {
-  const { csvPath, sourcePath, destPath, sorting, progress, error } = sortState;
-  const comparisonMode = sortState.comparisonMode === 'full' ? 'full' : 'quick';
-  const pollRef = useRef(null);
-  const isElectron = typeof window !== 'undefined' && !!window.electronAPI;
+const PATHS = [
+  { key: 'csvPath', label: 'OpenAudible CSV export', icon: FileSpreadsheet, picker: 'file' },
+  { key: 'sourcePath', label: 'Source folder', icon: FolderOpen, picker: 'folder' },
+  { key: 'destPath', label: 'Destination folder', icon: FolderOutput, picker: 'folder' },
+];
 
-  const update = useCallback((patch) => {
-    setSortState((prev) => ({ ...prev, ...patch }));
-  }, [setSortState]);
+function SortPanel({ config, setConfig, run, setRun }) {
+  const isElectron = useIsElectron();
+  const { start, cancel } = useSortRun({ run, setRun, config });
 
-  const handleBrowseCsv = async () => {
-    const path = await window.electronAPI?.openFile([
-      { name: 'CSV Files', extensions: ['csv'] },
-    ]);
-    if (path) update({ csvPath: path });
+  const { sorting, progress, error } = run;
+  const comparisonMode = config.comparisonMode === 'full' ? 'full' : 'quick';
+  const selectedMode = COMPARISON_MODES.find((mode) => mode.value === comparisonMode);
+
+  const browse = async (key, picker) => {
+    const path =
+      picker === 'file'
+        ? await window.electronAPI?.openFile([{ name: 'CSV Files', extensions: ['csv'] }])
+        : await window.electronAPI?.openFolder();
+
+    if (path) setConfig((prev) => ({ ...prev, [key]: path }));
   };
 
-  const handleBrowseSource = async () => {
-    const path = await window.electronAPI?.openFolder();
-    if (path) update({ sourcePath: path });
-  };
-
-  const handleBrowseDest = async () => {
-    const path = await window.electronAPI?.openFolder();
-    if (path) update({ destPath: path });
-  };
-
-  const handleStartSort = async () => {
-    if (!csvPath || !sourcePath || !destPath) {
-      update({ error: 'All three paths are required' });
-      return;
-    }
-
-    update({ error: null, sorting: true, progress: null });
-
-    try {
-      await startSort(csvPath, sourcePath, destPath, comparisonMode);
-      startPolling();
-    } catch (err) {
-      update({ error: err.message, sorting: false });
-    }
-  };
-
-  const handleCancelSort = async () => {
-    try {
-      await cancelSort();
-      update({ error: null });
-    } catch (err) {
-      update({ error: err.message });
-    }
-  };
-
-  const startPolling = useCallback(() => {
-    if (pollRef.current) clearInterval(pollRef.current);
-
-    // A transient failure is normal; a run of them means the backend is gone, and spinning
-    // "Sorting..." forever is worse than saying so.
-    let consecutiveFailures = 0;
-
-    const stop = () => {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    };
-
-    pollRef.current = setInterval(async () => {
-      try {
-        const p = await getSortProgress();
-        consecutiveFailures = 0;
-
-        const patches = { progress: p };
-        if (p.isComplete) {
-          stop();
-          patches.sorting = false;
-          if (p.error) patches.error = p.error;
-        }
-        setSortState((prev) => ({ ...prev, ...patches }));
-      } catch (err) {
-        consecutiveFailures += 1;
-        if (consecutiveFailures >= MAX_POLL_FAILURES) {
-          stop();
-          setSortState((prev) => ({
-            ...prev,
-            sorting: false,
-            error: `Lost contact with the backend while sorting: ${err.message}`,
-          }));
-        }
-      }
-    }, POLL_INTERVAL_MS);
-  }, [setSortState]);
-
-  // Resume polling when component remounts while a sort is still active
-  useEffect(() => {
-    if (sorting && !pollRef.current) {
-      startPolling();
-    }
-    return () => {
-      if (pollRef.current) {
-        clearInterval(pollRef.current);
-        pollRef.current = null;
-      }
-    };
-  }, [sorting, startPolling]);
-
-  const isCanceled = progress?.isCanceled;
-  const isComplete = progress?.isComplete && !progress?.error && !isCanceled;
-  const hasError = progress?.error;
-  const progressDetails = parseProgressDetails(progress?.currentTitle);
-  const warningCount = progress?.warningCount || 0;
-
-  const updatedCount = progress?.updatedBooks || 0;
-
-  // skippedBooks was added alongside failedBooks; fall back for an older backend.
-  const skippedCount =
-    progress?.skippedBooks ??
-    Math.max(0, (progress?.currentBook || 0) - (progress?.copiedBooks || 0));
+  const ready = config.csvPath && config.sourcePath && config.destPath;
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 overflow-y-auto">
-      <div className="mb-6">
-        <h2 className="text-lg font-bold text-white">Sort Audiobooks</h2>
-        <p className="text-xs text-slate-400 mt-0.5">
-          Organize your audiobook files into Author / Series / Book folder structure
-        </p>
+    <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <div>
+        <h1 className="text-lg font-semibold text-fg">Sort</h1>
+        <p className="text-xs text-fg-muted">Organize your files into Author / Series / Book folders</p>
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-        {/* Configuration Card */}
-        <div className="glass-card p-6">
-          <h3 className="text-sm font-semibold text-slate-200 mb-5">Configuration</h3>
-
+      <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-1 items-start gap-4 overflow-y-auto xl:grid-cols-2">
+        <Card title="Configuration">
           <div className="space-y-4">
-            {/* CSV File */}
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                OpenAudible CSV Export
-              </label>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <FileSpreadsheet size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="text"
-                    value={csvPath}
-                    placeholder={isElectron ? "Select CSV export file..." : "Configured by the server"}
-                    className="input-field pl-9 text-sm"
-                    readOnly
-                  />
-                </div>
-                {isElectron && (
-                  <button onClick={handleBrowseCsv} className="btn-secondary text-sm whitespace-nowrap">
-                    Browse
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Source Folder */}
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Source Audio Folder
-              </label>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <FolderOpen size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="text"
-                    value={sourcePath}
-                    placeholder={isElectron ? "Select source audio folder..." : "Configured by the server"}
-                    className="input-field pl-9 text-sm"
-                    readOnly
-                  />
-                </div>
-                {isElectron && (
-                  <button onClick={handleBrowseSource} className="btn-secondary text-sm whitespace-nowrap">
-                    Browse
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Destination Folder */}
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Destination Folder
-              </label>
-              <div className="flex gap-2">
-                <div className="relative flex-1">
-                  <FolderOutput size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
-                  <input
-                    type="text"
-                    value={destPath}
-                    placeholder={isElectron ? "Select destination folder..." : "Configured by the server"}
-                    className="input-field pl-9 text-sm"
-                    readOnly
-                  />
-                </div>
-                {isElectron && (
-                  <button onClick={handleBrowseDest} className="btn-secondary text-sm whitespace-nowrap">
-                    Browse
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* Update check */}
-            <div>
-              <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                Update check
-              </label>
-              <div
-                role="radiogroup"
-                aria-label="Update check"
-                className="flex gap-1 p-1 bg-slate-800/80 border border-slate-600/50 rounded-lg"
-              >
-                {COMPARISON_MODES.map((mode) => (
-                  <button
-                    key={mode.value}
-                    type="button"
-                    role="radio"
-                    aria-checked={comparisonMode === mode.value}
-                    disabled={sorting}
-                    onClick={() => update({ comparisonMode: mode.value })}
-                    className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
-                      comparisonMode === mode.value
-                        ? 'bg-brand-600 text-white'
-                        : 'text-slate-300 hover:bg-slate-700/60'
-                    }`}
-                  >
-                    {mode.value === 'full' ? <ShieldCheck size={14} /> : <Gauge size={14} />}
-                    {mode.label}
-                  </button>
-                ))}
-              </div>
-              <p className="text-[11px] text-slate-500 mt-1.5">
-                {COMPARISON_MODES.find((mode) => mode.value === comparisonMode)?.description}
-              </p>
-            </div>
-          </div>
-
-          {error && (
-            <div className="mt-4 flex items-start gap-2 text-sm text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-3">
-              <AlertCircle size={16} className="shrink-0 mt-0.5" />
-              <span>{error}</span>
-            </div>
-          )}
-
-          <div className="mt-6 flex gap-3">
-            <button
-              onClick={handleStartSort}
-              disabled={sorting || !csvPath || !sourcePath || !destPath}
-              className="btn-primary flex-1 inline-flex items-center justify-center gap-2"
-            >
-              {sorting ? (
-                <>
-                  <Loader2 size={16} className="animate-spin" />
-                  Sorting...
-                </>
-              ) : (
-                <>
-                  <Play size={16} />
-                  Start Sorting
-                </>
-              )}
-            </button>
-
-            {sorting && (
-              <button
-                onClick={handleCancelSort}
-                className="btn-secondary inline-flex items-center justify-center gap-2 px-4"
-              >
-                <Square size={16} />
-                Cancel
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Progress Card */}
-        <div className="glass-card p-6">
-          <h3 className="text-sm font-semibold text-slate-200 mb-5">Progress</h3>
-
-          {!progress && !sorting && (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <div className="w-14 h-14 rounded-xl bg-slate-700/50 border border-slate-600/30 flex items-center justify-center mb-4">
-                <ArrowUpDown size={24} className="text-slate-500" />
-              </div>
-              <p className="text-sm text-slate-500 max-w-xs">
-                {isElectron
-                  ? 'Configure your paths and click Start to begin organizing your audiobooks'
-                  : 'Review the configured paths and click Start to begin organizing your audiobooks'}
-              </p>
-            </div>
-          )}
-
-          {(sorting || progress) && (
-            <div className="space-y-5">
-              {/* Progress Bar */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-slate-400">
-                    {isComplete ? 'Complete' : isCanceled ? 'Canceled' : hasError ? 'Error' : 'Sorting...'}
-                  </span>
-                  <span className="text-xs font-bold text-brand-400">
-                    {(progress?.percentage || 0).toFixed(1)}%
-                  </span>
-                </div>
-                <div className="h-2.5 bg-slate-700/60 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ease-out ${
-                      hasError
-                        ? 'bg-red-500'
-                        : isCanceled
-                        ? 'bg-amber-500'
-                        : isComplete
-                        ? 'bg-emerald-500'
-                        : 'bg-gradient-to-r from-brand-600 to-brand-400'
-                    }`}
-                    style={{ width: `${progress?.percentage || 0}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* Stats */}
-              <div className="grid grid-cols-2 xl:grid-cols-5 gap-3">
-                <StatCard label="Total" value={progress?.totalBooks || 0} />
-                <StatCard
-                  label="Copied"
-                  value={progress?.copiedBooks || 0}
-                  color="text-emerald-400"
-                />
-                <StatCard
-                  label="Updated"
-                  value={updatedCount}
-                  color={updatedCount ? 'text-sky-400' : 'text-slate-400'}
-                />
-                <StatCard label="Skipped" value={skippedCount} color="text-amber-400" />
-                <StatCard
-                  label="Failed"
-                  value={progress?.failedBooks || 0}
-                  color={progress?.failedBooks ? 'text-red-400' : 'text-slate-400'}
-                />
-              </div>
-
-              {warningCount > 0 && (
-                <p className="text-xs text-amber-400/80">
-                  {warningCount} warning{warningCount === 1 ? '' : 's'} recorded. See the backend log for details.
-                </p>
-              )}
-
-              {/* Current File */}
-              {progress?.currentTitle && !isComplete && (
-                <div className="bg-slate-800/50 rounded-lg px-4 py-3 border border-slate-700/30">
-                  <p className="text-[11px] text-slate-500 mb-0.5">Current file</p>
-                  <div className="space-y-1.5">
-                    {progressDetails.length > 0 ? (
-                      progressDetails.map(({ label, value }) => (
-                        <div key={label} className="flex items-start gap-2 text-sm">
-                          <span className="text-slate-500 shrink-0 min-w-12">{label}</span>
-                          <span className="text-slate-300 break-all">{value}</span>
-                        </div>
-                      ))
-                    ) : (
-                      <p className="text-sm text-slate-300 break-all">{progress.currentTitle}</p>
+            {PATHS.map(({ key, label, icon, picker }) => (
+              <Field key={key} label={label}>
+                {(id) => (
+                  <div className="flex gap-2">
+                    <PathInput
+                      id={id}
+                      icon={icon}
+                      value={config[key]}
+                      placeholder={isElectron ? 'Not selected' : 'Configured by the server'}
+                    />
+                    {isElectron && (
+                      <Button onClick={() => browse(key, picker)} disabled={sorting}>
+                        Browse
+                      </Button>
                     )}
                   </div>
-                </div>
-              )}
+                )}
+              </Field>
+            ))}
 
-              {/* Complete State */}
-              {isComplete && (
-                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-4 py-4 flex items-center gap-3">
-                  <CheckCircle2 size={20} className="text-emerald-400 shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium text-emerald-300">Sorting complete!</p>
-                    <p className="text-xs text-emerald-400/70 mt-0.5">
-                      {progress.copiedBooks} book{progress.copiedBooks !== 1 ? 's' : ''} copied
-                      {updatedCount > 0 && `, ${updatedCount} of them updated in place`}
-                      {skippedCount > 0 && `, ${skippedCount} already up to date or unmatched`}
-                      {progress.failedBooks > 0 && `, ${progress.failedBooks} failed`}
-                    </p>
-                  </div>
-                </div>
+            <Field label="Update check" hint={selectedMode?.description} group>
+              {() => (
+                <SegmentedControl
+                  label="Update check"
+                  name="comparison-mode"
+                  value={comparisonMode}
+                  options={COMPARISON_MODES}
+                  disabled={sorting}
+                  onChange={(value) => setConfig((prev) => ({ ...prev, comparisonMode: value }))}
+                />
               )}
+            </Field>
+          </div>
 
-              {isCanceled && (
-                <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg px-4 py-4 flex items-center gap-3">
-                  <AlertCircle size={20} className="text-amber-400 shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium text-amber-300">Sorting canceled</p>
-                    <p className="text-xs text-amber-400/70 mt-0.5">
-                      {progress?.copiedBooks || 0} file{(progress?.copiedBooks || 0) !== 1 ? 's' : ''} copied before cancellation
-                    </p>
-                  </div>
-                </div>
-              )}
+          {error && <Banner tone="critical" className="mt-4">{error}</Banner>}
 
-              {/* Error State */}
-              {hasError && (
-                <div className="bg-red-500/10 border border-red-500/20 rounded-lg px-4 py-4 flex items-center gap-3">
-                  <AlertCircle size={20} className="text-red-400 shrink-0" />
-                  <div>
-                    <p className="text-sm font-medium text-red-300">Sort failed</p>
-                    <p className="text-xs text-red-400/70 mt-0.5">{progress.error}</p>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
+          <div className="mt-5 flex gap-2">
+            <Button variant="primary" icon={Play} className="flex-1" loading={sorting} disabled={!ready} onClick={start}>
+              {sorting ? 'Sorting' : 'Start sorting'}
+            </Button>
+            {sorting && (
+              <Button icon={Square} onClick={cancel}>
+                Cancel
+              </Button>
+            )}
+          </div>
+        </Card>
+
+        <ProgressCard sorting={sorting} progress={progress} />
       </div>
     </div>
   );
 }
 
-function StatCard({ label, value, color = 'text-white' }) {
+function ProgressCard({ sorting, progress }) {
+  if (!sorting && !progress) {
+    return (
+      <Card title="Progress">
+        <p className="py-8 text-center text-sm text-fg-subtle">
+          Progress will appear here once a sort starts.
+        </p>
+      </Card>
+    );
+  }
+
+  const canceled = progress?.isCanceled;
+  const failed = progress?.error;
+  const complete = progress?.isComplete && !failed && !canceled;
+
+  const copied = progress?.copiedBooks || 0;
+  const updated = progress?.updatedBooks || 0;
+  const failedCount = progress?.failedBooks || 0;
+  const skipped =
+    progress?.skippedBooks ?? Math.max(0, (progress?.currentBook || 0) - copied);
+  const warnings = progress?.warningCount || 0;
+
+  const status = failed ? 'Failed' : canceled ? 'Canceled' : complete ? 'Complete' : 'Sorting';
+  const tone = failed ? 'critical' : canceled ? 'caution' : complete ? 'positive' : 'accent';
+
   return (
-    <div className="bg-slate-800/50 rounded-lg px-4 py-3 border border-slate-700/30">
-      <p className="text-[11px] text-slate-500 mb-0.5">{label}</p>
-      <p className={`text-lg font-bold ${color}`}>{value.toLocaleString()}</p>
-    </div>
+    <Card title="Progress">
+      <div className="space-y-5">
+        <div>
+          <div className="mb-2 flex items-baseline justify-between">
+            <span className="text-sm text-fg-muted">{status}</span>
+            <span className="tabular text-sm font-medium text-fg">
+              {(progress?.percentage || 0).toFixed(0)}%
+            </span>
+          </div>
+          <ProgressBar value={progress?.percentage} tone={tone} label={`Sort progress: ${status}`} />
+          {progress?.totalBooks > 0 && (
+            <p className="tabular mt-2 text-2xs text-fg-subtle">
+              {(progress.currentBook || 0).toLocaleString()} of {progress.totalBooks.toLocaleString()} books
+            </p>
+          )}
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <Stat label="Copied" value={copied} tone="positive" />
+          <Stat label="Updated" value={updated} tone="accent" />
+          <Stat label="Skipped" value={skipped} tone="caution" />
+          <Stat label="Failed" value={failedCount} tone="critical" />
+        </div>
+
+        {progress?.currentTitle && !progress?.isComplete && (
+          <CurrentBook label={progress.currentTitle} />
+        )}
+
+        {complete && (
+          <Banner tone="positive">
+            {copied.toLocaleString()} book{copied === 1 ? '' : 's'} copied
+            {updated > 0 && `, ${updated.toLocaleString()} updated in place`}
+            {skipped > 0 && `, ${skipped.toLocaleString()} already up to date`}
+            {failedCount > 0 && `, ${failedCount.toLocaleString()} failed`}.
+          </Banner>
+        )}
+
+        {canceled && (
+          <Banner tone="caution">
+            Canceled after {copied.toLocaleString()} book{copied === 1 ? '' : 's'}. Files already copied are
+            complete; re-running picks up where this left off.
+          </Banner>
+        )}
+
+        {failed && <Banner tone="critical">{progress.error}</Banner>}
+
+        {warnings > 0 && (
+          <p className="text-2xs text-fg-subtle">
+            {warnings.toLocaleString()} warning{warnings === 1 ? '' : 's'} recorded — see the backend log.
+          </p>
+        )}
+      </div>
+    </Card>
   );
 }
 
-function parseProgressDetails(currentTitle) {
-  if (!currentTitle) return [];
-
-  return currentTitle
+/** The backend sends "Artist: X | Series: Y | Title: Z"; show it as fields rather than a run-on line. */
+function CurrentBook({ label }) {
+  const details = label
     .split('|')
     .map((part) => part.trim())
     .filter(Boolean)
-    .map((part, index) => {
-      const separatorIndex = part.indexOf(':');
-      if (separatorIndex === -1) {
-        return { label: `Item ${index + 1}`, value: part };
-      }
-
-      return {
-        label: part.slice(0, separatorIndex).trim(),
-        value: part.slice(separatorIndex + 1).trim(),
-      };
+    .map((part) => {
+      const separator = part.indexOf(':');
+      return separator === -1
+        ? { label: null, value: part }
+        : { label: part.slice(0, separator).trim(), value: part.slice(separator + 1).trim() };
     });
+
+  return (
+    <div className="rounded border border-line bg-raised px-3.5 py-3">
+      <p className="mb-1.5 text-2xs text-fg-subtle">Current book</p>
+      <dl className="space-y-1">
+        {details.map(({ label: key, value }, index) => (
+          <div key={key ?? index} className="flex gap-2 text-sm">
+            {key && <dt className="w-14 shrink-0 text-fg-subtle">{key}</dt>}
+            <dd className="min-w-0 break-words text-fg-muted">{value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
 }
+
+export default memo(SortPanel);

@@ -119,10 +119,12 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,
-    minWidth: 960,
-    minHeight: 640,
+    // The layout sheds the sidebar labels and the optional table columns below this, so the
+    // window stays usable rather than needing a horizontal scrollbar.
+    minWidth: 720,
+    minHeight: 560,
     frame: false,
-    backgroundColor: '#0f172a',
+    backgroundColor: '#0c0e11',
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
