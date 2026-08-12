@@ -6,6 +6,29 @@ const book = (overrides) => ({ title: 'A', author: 'A', ...overrides });
 const order = (books, field, dir = 'asc') => [...books].sort(compareBooks(field, dir));
 
 describe('durationMinutes', () => {
+  // The shape a real OpenAudible export actually uses. Getting this wrong is not cosmetic: an
+  // unrecognised duration is treated as missing, which sinks every book to the bottom of the
+  // column and leaves the Duration sort doing nothing at all.
+  it('reads a clock value', () => {
+    expect(durationMinutes('18:22:00')).toBe(1102);
+    expect(durationMinutes('27:23:00')).toBe(1643);
+    expect(durationMinutes('0:45:00')).toBe(45);
+    expect(durationMinutes('7:00:00')).toBe(420);
+  });
+
+  it('reads a clock value without seconds', () => {
+    expect(durationMinutes('18:22')).toBe(1102);
+  });
+
+  it('drops seconds rather than rounding, so the shown value matches the sorted one', () => {
+    expect(durationMinutes('1:30:59')).toBe(90);
+  });
+
+  it('does not mistake something that is not a clock for one', () => {
+    expect(durationMinutes('1:75:00')).toBeNull();
+    expect(durationMinutes('not a duration')).toBeNull();
+  });
+
   it('reads hours and minutes', () => {
     expect(durationMinutes('12 hrs and 34 mins')).toBe(754);
     expect(durationMinutes('1 hr and 1 min')).toBe(61);
@@ -24,6 +47,12 @@ describe('durationMinutes', () => {
 });
 
 describe('formatDuration', () => {
+  it('abbreviates a clock value, which otherwise gives no sense of scale at a glance', () => {
+    expect(formatDuration('18:22:00')).toBe('18h 22m');
+    expect(formatDuration('0:45:00')).toBe('45m');
+    expect(formatDuration('7:00:00')).toBe('7h');
+  });
+
   it('abbreviates, because the column truncates the prose form to nothing useful', () => {
     expect(formatDuration('12 hrs and 34 mins')).toBe('12h 34m');
     expect(formatDuration('45 mins')).toBe('45m');
@@ -54,6 +83,33 @@ describe('sorting by duration', () => {
       'forty five minutes',
       'one hour',
       'nine hours',
+    ]);
+  });
+
+  // Clock values sort as text in the wrong order too: "9:00:00" reads after "18:22:00".
+  it('orders clock values by length', () => {
+    const books = [
+      book({ title: 'longest', duration: '35:56:00' }),
+      book({ title: 'shortest', duration: '9:14:00' }),
+      book({ title: 'middle', duration: '18:22:00' }),
+    ];
+
+    expect(order(books, 'duration').map((b) => b.title)).toEqual(['shortest', 'middle', 'longest']);
+  });
+
+  it('orders a library that mixes both spellings', () => {
+    const books = [
+      book({ title: 'clock long', duration: '27:23:00' }),
+      book({ title: 'prose short', duration: '45 mins' }),
+      book({ title: 'clock short', duration: '2:10:00' }),
+      book({ title: 'prose long', duration: '30 hrs' }),
+    ];
+
+    expect(order(books, 'duration').map((b) => b.title)).toEqual([
+      'prose short',
+      'clock short',
+      'clock long',
+      'prose long',
     ]);
   });
 

@@ -30,6 +30,9 @@ export default function Sidebar({ currentPage, onPageChange, bookCount }) {
                 type="button"
                 onClick={() => onPageChange(id)}
                 aria-current={isActive ? 'page' : undefined}
+                // The label is display:none on the icon rail, which takes it out of the
+                // accessibility tree as well, leaving the button named only by its tooltip.
+                aria-label={label}
                 title={label}
                 className={[
                   'flex h-9 w-full items-center gap-2.5 rounded px-3 text-sm transition-colors',

@@ -97,6 +97,7 @@ public class FileSorter
         var copiedBooks = 0;
         var updatedBooks = 0;
         var skippedBooks = 0;
+        var missingBooks = 0;
         var failedBooks = 0;
         var maxLineLength = 0;
 
@@ -113,17 +114,21 @@ public class FileSorter
                 ct.ThrowIfCancellationRequested();
                 var outcome = await ProcessPlannedCopy(item, comparisonMode, ct);
 
-                if (outcome == CopyOutcome.Skipped)
+                switch (outcome)
                 {
-                    Interlocked.Increment(ref skippedBooks);
-                }
-                else
-                {
-                    Interlocked.Increment(ref copiedBooks);
-                    if (outcome == CopyOutcome.Updated)
-                    {
-                        Interlocked.Increment(ref updatedBooks);
-                    }
+                    case CopyOutcome.Skipped:
+                        Interlocked.Increment(ref skippedBooks);
+                        break;
+                    case CopyOutcome.NotFound:
+                        Interlocked.Increment(ref missingBooks);
+                        break;
+                    default:
+                        Interlocked.Increment(ref copiedBooks);
+                        if (outcome == CopyOutcome.Updated)
+                        {
+                            Interlocked.Increment(ref updatedBooks);
+                        }
+                        break;
                 }
             }
             catch (OperationCanceledException)
@@ -144,6 +149,7 @@ public class FileSorter
             // claiming more books were updated than were copied.
             var currentUpdated = Volatile.Read(ref updatedBooks);
             var currentSkipped = Volatile.Read(ref skippedBooks);
+            var currentMissing = Volatile.Read(ref missingBooks);
             var currentFailed = Volatile.Read(ref failedBooks);
             var currentCopied = Volatile.Read(ref copiedBooks);
 
@@ -156,6 +162,7 @@ public class FileSorter
                 CopiedBooks = currentCopied,
                 UpdatedBooks = currentUpdated,
                 SkippedBooks = currentSkipped,
+                MissingBooks = currentMissing,
                 FailedBooks = currentFailed,
                 CurrentTitle = item.Label,
                 Percentage = CalculatePercentage(currentProgress, totalBooks),
@@ -169,6 +176,7 @@ public class FileSorter
             CopiedBooks = copiedBooks,
             UpdatedBooks = updatedBooks,
             SkippedBooks = skippedBooks,
+            MissingBooks = missingBooks,
             FailedBooks = failedBooks,
             Warnings = warnings.ToArray(),
             WarningCount = warningCount
@@ -181,6 +189,7 @@ public class FileSorter
             CopiedBooks = summary.CopiedBooks,
             UpdatedBooks = summary.UpdatedBooks,
             SkippedBooks = summary.SkippedBooks,
+            MissingBooks = summary.MissingBooks,
             FailedBooks = summary.FailedBooks,
             Percentage = 100,
             IsComplete = true,
@@ -189,21 +198,25 @@ public class FileSorter
 
         WriteLine(
             $"Sorting complete. Copied {summary.CopiedBooks} (of which {summary.UpdatedBooks} updated), " +
-            $"skipped {summary.SkippedBooks}, failed {summary.FailedBooks} of {totalBooks}.");
+            $"skipped {summary.SkippedBooks}, not found {summary.MissingBooks}, " +
+            $"failed {summary.FailedBooks} of {totalBooks}.");
         return summary;
     }
 
     /// <summary>What a single file, or a whole book, needed.</summary>
     private enum CopyOutcome
     {
-        /// <summary>Already up to date, or nothing to copy.</summary>
+        /// <summary>Already up to date, so nothing was written.</summary>
         Skipped = 0,
 
         /// <summary>Written where nothing was before.</summary>
         Created = 1,
 
         /// <summary>An existing, out-of-date file was replaced.</summary>
-        Updated = 2
+        Updated = 2,
+
+        /// <summary>No file to copy: the book is in the export but not in the source folder.</summary>
+        NotFound = 3
     }
 
     private static async Task<CopyOutcome> ProcessPlannedCopy(
@@ -211,9 +224,12 @@ public class FileSorter
         FileComparisonMode comparisonMode,
         CancellationToken cancellationToken)
     {
+        // Nothing to copy is not the same as nothing to do. A book listed in the export whose file
+        // is not in the source folder has to be reported as missing, not as up to date — telling
+        // someone their un-downloaded books are already organised is worse than saying nothing.
         if (!item.HasWork)
         {
-            return CopyOutcome.Skipped;
+            return CopyOutcome.NotFound;
         }
 
         Directory.CreateDirectory(item.TargetDirectory!);

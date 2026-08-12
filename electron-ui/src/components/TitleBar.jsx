@@ -24,16 +24,19 @@ export default function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false);
 
   useEffect(() => {
-    if (!isElectron) return;
+    if (!isElectron) return undefined;
+
     // Ask once on mount: the window can start maximised, and assuming otherwise shows the wrong
     // restore/maximise glyph until the user clicks it.
     window.electronAPI?.isMaximized().then((value) => setIsMaximized(!!value));
+
+    // And keep listening, because the window can also be snapped or restored by the OS without
+    // the button ever being pressed.
+    return window.electronAPI?.onMaximizedChanged?.((value) => setIsMaximized(!!value));
   }, [isElectron]);
 
-  const handleMaximize = async () => {
-    await window.electronAPI?.maximize();
-    setIsMaximized(!!(await window.electronAPI?.isMaximized()));
-  };
+  // The maximize/unmaximize event updates the glyph; this only asks for the change.
+  const handleMaximize = () => window.electronAPI?.maximize();
 
   return (
     <header

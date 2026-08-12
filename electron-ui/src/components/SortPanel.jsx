@@ -133,11 +133,17 @@ function outcomeAnnouncement({ sorting, progress, error }) {
 
   const copied = progress.copiedBooks || 0;
   const failed = progress.failedBooks || 0;
+  const missing = progress.missingBooks || 0;
 
   if (progress.error) return `Sort failed: ${progress.error}`;
   if (progress.isCanceled) return `Sort canceled after ${copied} books`;
 
-  return `Sort complete. ${copied} copied${failed > 0 ? `, ${failed} failed` : ''}.`;
+  return [
+    `Sort complete. ${copied} copied`,
+    missing > 0 ? `, ${missing} not found in the source folder` : '',
+    failed > 0 ? `, ${failed} failed` : '',
+    '.',
+  ].join('');
 }
 
 function ProgressCard({ sorting, progress }) {
@@ -158,6 +164,7 @@ function ProgressCard({ sorting, progress }) {
   const copied = progress?.copiedBooks || 0;
   const updated = progress?.updatedBooks || 0;
   const failedCount = progress?.failedBooks || 0;
+  const missing = progress?.missingBooks || 0;
   const skipped =
     progress?.skippedBooks ?? Math.max(0, (progress?.currentBook || 0) - copied);
   const warnings = progress?.warningCount || 0;
@@ -183,10 +190,16 @@ function ProgressCard({ sorting, progress }) {
           )}
         </div>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {/*
+          Not found is its own number rather than part of Skipped. They are counted differently
+          for a reason: skipped means "already organised", not found means "the export lists it
+          but the file is not in the folder you chose" — usually a book that was never downloaded.
+        */}
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
           <Stat label="Copied" value={copied} tone="positive" />
           <Stat label="Updated" value={updated} tone="accent" />
           <Stat label="Skipped" value={skipped} tone="caution" />
+          <Stat label="Not found" value={missing} tone="caution" />
           <Stat label="Failed" value={failedCount} tone="critical" />
         </div>
 
@@ -195,12 +208,22 @@ function ProgressCard({ sorting, progress }) {
         )}
 
         {complete && (
-          <Banner tone="positive">
-            {copied.toLocaleString()} book{copied === 1 ? '' : 's'} copied
-            {updated > 0 && `, ${updated.toLocaleString()} updated in place`}
-            {skipped > 0 && `, ${skipped.toLocaleString()} already up to date`}
-            {failedCount > 0 && `, ${failedCount.toLocaleString()} failed`}.
-          </Banner>
+          <>
+            <Banner tone="positive">
+              {copied.toLocaleString()} book{copied === 1 ? '' : 's'} copied
+              {updated > 0 && `, ${updated.toLocaleString()} updated in place`}
+              {skipped > 0 && `, ${skipped.toLocaleString()} already up to date`}
+              {failedCount > 0 && `, ${failedCount.toLocaleString()} failed`}.
+            </Banner>
+
+            {missing > 0 && (
+              <Banner tone="caution">
+                {missing.toLocaleString()} book{missing === 1 ? '' : 's'} in the export had no
+                matching file in the source folder and {missing === 1 ? 'was' : 'were'} not copied.
+                These are usually books that have not been downloaded yet.
+              </Banner>
+            )}
+          </>
         )}
 
         {canceled && (

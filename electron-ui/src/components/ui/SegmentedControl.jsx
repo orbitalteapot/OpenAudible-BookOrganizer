@@ -20,6 +20,10 @@ export default function SegmentedControl({ label, value, options, onChange, disa
   };
 
   const handleKeyDown = (event) => {
+    // The buttons refuse clicks while disabled; the arrow keys are handled on the group, so they
+    // have to refuse them too rather than changing a setting the UI is showing as locked.
+    if (disabled) return;
+
     const { key } = event;
 
     if (key === 'ArrowRight' || key === 'ArrowDown') {

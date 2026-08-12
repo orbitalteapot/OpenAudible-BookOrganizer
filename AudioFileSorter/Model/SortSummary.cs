@@ -14,8 +14,11 @@ public sealed class SortSummary
     /// </summary>
     public int UpdatedBooks { get; init; }
 
-    /// <summary>Books that were already up to date, or had no file to copy.</summary>
+    /// <summary>Books already present and up to date at the destination.</summary>
     public int SkippedBooks { get; init; }
+
+    /// <summary>Books listed in the export with no matching file in the source folder.</summary>
+    public int MissingBooks { get; init; }
 
     /// <summary>Books that could not be processed because of an error.</summary>
     public int FailedBooks { get; init; }
