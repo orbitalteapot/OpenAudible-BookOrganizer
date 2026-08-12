@@ -11,7 +11,40 @@ Supported targets include Windows, Linux, macOS, and Docker.
 - Loads an OpenAudible CSV export
 - Organizes audiobook files into `Author / Series / Book` folders
 - Copies companion PDFs when they are available in the CSV metadata
+- Replaces books you have re-downloaded, so an organized library stays current
 - Ships as a desktop app and as a Docker image for watcher-based automation
+
+## Keeping Books Up To Date
+
+Publishers re-issue audiobooks: a corrected chapter, a re-recorded narration, an updated edition.
+When you download the new version, a sort should replace the copy already in your organized
+library rather than leave the old one sitting there.
+
+Every run compares each book against the copy at the destination and only writes when they differ,
+so re-running a sort is cheap and safe. How closely it compares is up to you — the **Update check**
+setting on the Sort page toggles between the two:
+
+| Update check | What it compares | When to use it |
+| --- | --- | --- |
+| **Quick** (default) | File size, plus the first, middle and last 4 KB | Every day. It catches any re-release whose length changed, which is nearly all of them, and costs almost nothing to run over a large library. |
+| **Verify contents** | Every byte of both files | When you suspect a book was re-issued at exactly the same size, or you want certainty after a bad disk or an interrupted copy. Slower: it reads both files in full. |
+
+Either way, a book that already matches is left untouched. The sort summary counts it as
+**Skipped**, along with any book whose source file could not be found at all, and reports
+**Updated** — books replaced because their source had changed — as a subset of **Copied**, which
+also includes books written to the destination for the first time.
+
+In Docker, set the default with the `COMPARISON_MODE` environment variable (`quick` or `full`);
+the Sort page can still override it for an individual run.
+
+Two things worth knowing about re-releases:
+
+- The organiser never deletes from your destination folder. If a re-release also changes the book's
+  title enough to be filed under a different name, the new file is written alongside the old one,
+  and removing the old copy is up to you. A title that differs only in punctuation or spacing still
+  resolves to the existing file, which is replaced in place as usual.
+- Replacing a book is atomic: the new version is written beside the old one and renamed over it, so
+  an interrupted update leaves you with either the old copy or the new one, never half of each.
 
 ## Screenshots
 
@@ -59,6 +92,17 @@ npm install
 npm run dev
 ```
 
+### Run the Tests
+
+The sorting engine is covered by a test suite that runs on Linux, macOS, and Windows:
+
+```sh
+dotnet test OpenAudibleBookManager.sln
+```
+
+It exercises path sanitisation, author and series folder resolution, planning determinism,
+atomic and repeatable copying, cancellation, and CSV import robustness.
+
 ### Build Installers
 
 ```sh
@@ -84,8 +128,10 @@ Installers are output to `electron-ui/release/`.
 The web app container is published to GitHub Container Registry under GitHub Packages as:
 
 ```text
-ghcr.io/orbitalteapot/openaudible-book-organizer
+ghcr.io/orbitalteapot/openaudible-bookorganizer
 ```
+
+Note that the image name has no hyphen between "book" and "organizer".
 
 Available tags are published by the release workflow:
 
@@ -93,10 +139,14 @@ Available tags are published by the release workflow:
 - Major/minor version, for example `1.2`
 - `latest`
 
+A pre-release such as `3.1.0-beta.1` is published under its exact version only. `latest` and the
+major/minor tag keep pointing at the most recent stable release, so pulling `latest` never lands
+you on a beta by accident — you have to ask for the version by name.
+
 ### Pull the Image
 
 ```sh
-docker pull ghcr.io/orbitalteapot/openaudible-book-organizer:latest
+docker pull ghcr.io/orbitalteapot/openaudible-bookorganizer:latest
 ```
 
 ### How the Docker Image Works
@@ -108,6 +158,14 @@ At startup and while running, it uses:
 - `CSV_PATH` to load book metadata from your OpenAudible export
 - `SOURCE_PATH` as the mounted source folder that contains your audiobook files
 - `DESTINATION_PATH` as the folder where organized books are written
+
+Optional:
+
+- `OABO_MAX_PARALLELISM` sets how many books are copied at once. It defaults to a quarter of the
+  available CPU cores, capped at 8. Lower it to `1` or `2` if the destination is a network share
+  or a spinning disk, where more concurrency makes transfers slower rather than faster.
+- `COMPARISON_MODE` sets the default update check, `quick` (the default) or `full`. See
+  [Keeping books up to date](#keeping-books-up-to-date). The Sort page can override it per run.
 
 ### How the Website Works
 
@@ -161,6 +219,7 @@ The container expects these environment variables:
 - `CSV_PATH=/data/books.csv`
 - `SOURCE_PATH=/source`
 - `DESTINATION_PATH=/destination`
+- `COMPARISON_MODE=quick` (optional; use `full` to compare every byte)
 
 Example:
 
@@ -175,7 +234,7 @@ docker run -d \
   -v /path/to/local/audiobooks:/source \
   -v /path/to/local/organized:/destination \
   --restart unless-stopped \
-  ghcr.io/orbitalteapot/openaudible-book-organizer:latest
+  ghcr.io/orbitalteapot/openaudible-bookorganizer:latest
 ```
 
 ### What to Do After the Container Starts
@@ -263,7 +322,7 @@ docker restart openaudible-book-organizer
 
 ### Use docker-compose.yml
 
-This repository already includes a sample [docker-compose.yml](d:/Development/test/newtest/OpenAudible-BookOrganizer/docker-compose.yml).
+This repository already includes a sample [docker-compose.yml](docker-compose.yml).
 
 1. Put your OpenAudible CSV export in `./data/books.csv`.
 2. Replace the example source and destination mount paths with your real folders.
@@ -275,7 +334,7 @@ Example service using the published image:
 ```yaml
 services:
   book-organizer-web:
-    image: ghcr.io/orbitalteapot/openaudible-book-organizer:latest
+    image: ghcr.io/orbitalteapot/openaudible-bookorganizer:latest
     environment:
       CSV_PATH: /data/books.csv
       SOURCE_PATH: /source
@@ -306,7 +365,7 @@ http://localhost:5123
 The Docker image is published to GitHub Packages, not attached to the GitHub Release assets.
 
 - Repo owner packages page: `https://github.com/users/orbitalteapot/packages`
-- Package URL: `https://github.com/users/orbitalteapot/packages/container/package/openaudible-book-organizer`
+- Package URL: `https://github.com/users/orbitalteapot/packages/container/package/openaudible-bookorganizer`
 
 Depending on GitHub package visibility and linkage, it may appear under the owner Packages page before it appears in the repository sidebar.
 

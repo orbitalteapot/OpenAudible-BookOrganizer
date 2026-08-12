@@ -3,62 +3,103 @@ const isElectron = isBrowser && !!window.electronAPI;
 const isViteDev = isBrowser && window.location.port === '5173';
 const API_BASE = isElectron || isViteDev ? 'http://localhost:5123' : '';
 
+/**
+ * Pulls the error message out of a failed response. The backend answers with JSON, but a crashed
+ * or not-yet-started backend answers with HTML or nothing at all, and letting res.json() throw
+ * there replaces a useful message with a JSON parse error.
+ */
+async function readError(res) {
+  try {
+    const text = await res.text();
+    if (!text) return `Request failed (HTTP ${res.status})`;
+
+    try {
+      const parsed = JSON.parse(text);
+      return parsed?.error || `Request failed (HTTP ${res.status})`;
+    } catch {
+      return `Request failed (HTTP ${res.status})`;
+    }
+  } catch {
+    return `Request failed (HTTP ${res.status})`;
+  }
+}
+
+async function requestJson(path, options, fallbackMessage) {
+  let res;
+  try {
+    res = await fetch(`${API_BASE}${path}`, options);
+  } catch {
+    throw new Error('Could not reach the backend. Check that it is still running.');
+  }
+
+  if (!res.ok) {
+    throw new Error((await readError(res)) || fallbackMessage);
+  }
+
+  return res.json();
+}
+
 export async function healthCheck() {
-  const res = await fetch(`${API_BASE}/api/health`);
-  return res.ok;
+  try {
+    const res = await fetch(`${API_BASE}/api/health`);
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 export async function parseBooks(csvPath) {
-  const res = await fetch(`${API_BASE}/api/books/parse`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ csvPath }),
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to parse books');
+  const data = await requestJson(
+    '/api/books/parse',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csvPath }),
+    },
+    'Failed to parse books'
+  );
+
+  // Older backends replied with a bare array of books.
+  if (Array.isArray(data)) {
+    return { books: data, skippedRows: 0, warnings: [] };
   }
-  return res.json();
+
+  return {
+    books: data?.books ?? [],
+    skippedRows: data?.skippedRows ?? 0,
+    warnings: data?.warnings ?? [],
+  };
 }
 
 export async function getBooks() {
-  const res = await fetch(`${API_BASE}/api/books`);
-  return res.json();
+  const data = await requestJson('/api/books', undefined, 'Failed to load books');
+  return Array.isArray(data) ? data : [];
 }
 
-export async function startSort(csvPath, sourcePath, destinationPath) {
-  const res = await fetch(`${API_BASE}/api/sort/start`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ csvPath, sourcePath, destinationPath }),
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to start sort');
-  }
-  return res.json();
+/**
+ * @param comparisonMode 'quick' | 'full'. Omitted lets the backend pick its default, which keeps
+ * this working against a backend that predates the setting.
+ */
+export function startSort(csvPath, sourcePath, destinationPath, comparisonMode) {
+  return requestJson(
+    '/api/sort/start',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ csvPath, sourcePath, destinationPath, comparisonMode }),
+    },
+    'Failed to start sort'
+  );
 }
 
-export async function getSortProgress() {
-  const res = await fetch(`${API_BASE}/api/sort/progress`);
-  return res.json();
+export function getSortProgress() {
+  return requestJson('/api/sort/progress', undefined, 'Failed to read progress');
 }
 
-export async function cancelSort() {
-  const res = await fetch(`${API_BASE}/api/sort/cancel`, {
-    method: 'POST',
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    throw new Error(err.error || 'Failed to cancel sort');
-  }
-  return res.json();
+export function cancelSort() {
+  return requestJson('/api/sort/cancel', { method: 'POST' }, 'Failed to cancel sort');
 }
 
-export async function getAppConfig() {
-  const res = await fetch(`${API_BASE}/api/config`);
-  if (!res.ok) {
-    throw new Error('Failed to load app configuration');
-  }
-  return res.json();
+export function getAppConfig() {
+  return requestJson('/api/config', undefined, 'Failed to load app configuration');
 }

@@ -2,25 +2,86 @@
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Design tokens.
+ *
+ * Every colour in the app resolves to one of these. They are stored as raw RGB channels so
+ * Tailwind's opacity modifiers (bg-surface/60) keep working, and they are the single place to
+ * change the palette. Components must not reach for a raw slate-700 style value.
+ */
 @layer base {
+  :root {
+    /* Neutrals, darkest to lightest. */
+    --color-canvas: 12 14 17;
+    --color-surface: 22 25 30;
+    --color-raised: 30 34 40;
+    --color-line: 38 43 50;
+    --color-line-strong: 55 62 71;
+
+    /* Text, in descending emphasis. All three clear WCAG AA 4.5:1 on canvas, surface AND raised. */
+    --color-fg: 232 235 239;
+    --color-fg-muted: 161 170 181;
+    --color-fg-subtle: 141 150 161;
+
+    /* One accent, used sparingly: the primary action and the current selection. */
+    --color-accent: 88 143 255;
+    --color-accent-hover: 118 164 255;
+    --color-accent-fg: 8 12 20;
+
+    /* Status. Only ever paired with a label or an icon, never colour alone. */
+    --color-positive: 63 185 80;
+    --color-caution: 214 164 60;
+    --color-critical: 248 97 91;
+
+    --radius-sm: 6px;
+    --radius: 8px;
+    --radius-lg: 12px;
+
+    /* Uniform height for every control, so rows of them line up without ad hoc padding. */
+    --control-height: 36px;
+  }
+
   * {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
   }
 
-  html, body, #root {
+  html,
+  body,
+  #root {
     height: 100%;
     overflow: hidden;
   }
 
   body {
-    @apply bg-slate-900 text-slate-100 antialiased;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    @apply bg-canvas text-fg antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+      sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  /* Counts and durations line up in columns instead of jittering as digits change. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /*
+   * One focus treatment everywhere, and only for keyboard users: :focus alone would ring every
+   * button on click, which is the usual reason apps end up removing focus styles altogether.
+   *
+   * A real outline rather than a Tailwind ring: rings are drawn as box-shadows, which ancestors
+   * with hidden overflow clip. The sticky table header sits inside two such containers, and its
+   * focus indicator was losing its top and outer edges.
+   */
+  :focus-visible {
+    outline: 2px solid rgb(var(--color-accent) / 0.9);
+    outline-offset: 2px;
   }
 
   ::-webkit-scrollbar {
-    @apply w-2;
+    @apply h-2 w-2;
   }
 
   ::-webkit-scrollbar-track {
@@ -28,11 +89,21 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply bg-slate-600/50 rounded-full;
+    @apply rounded-full bg-line-strong;
   }
 
   ::-webkit-scrollbar-thumb:hover {
-    @apply bg-slate-500/70;
+    @apply bg-fg-subtle;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
   }
 }
 
@@ -43,33 +114,5 @@
 
   .titlebar-no-drag {
     -webkit-app-region: no-drag;
-  }
-
-  .glass-card {
-    @apply bg-slate-800/60 backdrop-blur-sm border border-slate-700/50 rounded-xl;
-  }
-
-  .input-field {
-    @apply w-full bg-slate-800/80 border border-slate-600/50 rounded-lg px-4 py-2.5
-           text-slate-200 placeholder-slate-500
-           focus:outline-none focus:ring-2 focus:ring-brand-500/50 focus:border-brand-500/50
-           transition-all duration-200;
-  }
-
-  .btn-primary {
-    @apply px-6 py-2.5 bg-gradient-to-r from-brand-600 to-brand-500
-           text-white font-medium rounded-lg
-           hover:from-brand-500 hover:to-brand-400
-           focus:outline-none focus:ring-2 focus:ring-brand-500/50
-           disabled:opacity-50 disabled:cursor-not-allowed
-           transition-all duration-200 shadow-lg shadow-brand-500/20;
-  }
-
-  .btn-secondary {
-    @apply px-4 py-2.5 bg-slate-700/80 border border-slate-600/50
-           text-slate-200 font-medium rounded-lg
-           hover:bg-slate-600/80 hover:border-slate-500/50
-           focus:outline-none focus:ring-2 focus:ring-slate-500/50
-           transition-all duration-200;
   }
 }

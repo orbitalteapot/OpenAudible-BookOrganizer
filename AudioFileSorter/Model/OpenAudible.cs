@@ -6,9 +6,9 @@ public class OpenAudible
     public string? Title { get; set; }
     public string? Author { get; set; }
     public string? NarratedBy { get; set; }
-    public DateTime PurchaseDate { get; set; }
+    public DateTime? PurchaseDate { get; set; }
     public string? Duration { get; set; }
-    public DateTime ReleaseDate { get; set; }
+    public DateTime? ReleaseDate { get; set; }
     public double AveRating { get; set; }
     public string? Genre { get; set; }
     public string? SeriesName { get; set; }

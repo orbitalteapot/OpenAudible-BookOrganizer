@@ -12,4 +12,8 @@
       <PackageReference Include="CsvHelper" Version="33.0.1" />
     </ItemGroup>
 
+    <ItemGroup>
+      <InternalsVisibleTo Include="AudioFileSorter.Tests" />
+    </ItemGroup>
+
 </Project>

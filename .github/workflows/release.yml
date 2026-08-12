@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version number to release and tag (e.g. 1.2.3)'
+        description: 'Version to release and tag (e.g. 1.2.3, or 1.2.3-beta.1 for a pre-release)'
         required: true
         type: string
   push:
@@ -28,8 +28,8 @@ jobs:
 
       - name: Validate version format
         run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Error: version must be in X.Y.Z format (e.g. 1.2.3)"
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "Error: version must be X.Y.Z or X.Y.Z-<pre-release> (e.g. 1.2.3, 1.2.3-beta.1)"
             exit 1
           fi
 
@@ -61,6 +61,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       major_minor: ${{ steps.version.outputs.major_minor }}
       tag: ${{ steps.version.outputs.tag }}
+      is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
       - name: Compute version
         id: version
@@ -70,18 +71,59 @@ jobs:
           else
             VERSION="${GITHUB_REF_NAME}"
           fi
-          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "Error: release tag must be in X.Y.Z format (for example 1.2.3)"
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
+            echo "Error: release tag must be X.Y.Z or X.Y.Z-<pre-release> (for example 1.2.3, 1.2.3-beta.1)"
             exit 1
           fi
+
+          # 1.2.3-beta.1 is a pre-release: it is published, but it must not become the version
+          # that 'latest' or the X.Y Docker tag point at.
+          CORE="${VERSION%%-*}"
+          if [ "$CORE" != "$VERSION" ]; then
+            IS_PRERELEASE=true
+          else
+            IS_PRERELEASE=false
+          fi
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "major_minor=${VERSION%.*}" >> $GITHUB_OUTPUT
+          echo "major_minor=${CORE%.*}" >> $GITHUB_OUTPUT
           echo "tag=$VERSION" >> $GITHUB_OUTPUT
+          echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
+          echo "Releasing $VERSION (pre-release: $IS_PRERELEASE)"
+
+  # ── Build and test before anything is published ──────────────────────────────
+  verify:
+    name: Build and test
+    needs: [resolve-version]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: electron-ui/package-lock.json
+
+      - name: Run backend tests
+        run: dotnet test OpenAudibleBookManager.sln -c Release
+
+      - name: Install frontend dependencies
+        working-directory: electron-ui
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: electron-ui
+        run: npm test
 
   # ── Windows x64 NSIS installer ───────────────────────────────────────────────
   build-windows:
     name: Windows x64 installer
-    needs: [resolve-version]
+    needs: [resolve-version, verify]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v6
@@ -117,7 +159,7 @@ jobs:
   # ── Linux x64 installers (AppImage + deb) ───────────────────────────────────
   build-linux:
     name: Linux x64 installers
-    needs: [resolve-version]
+    needs: [resolve-version, verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -157,7 +199,7 @@ jobs:
   # ── macOS x64 installer (dmg) ────────────────────────────────────────────────
   build-mac-x64:
     name: macOS x64 installer
-    needs: [resolve-version]
+    needs: [resolve-version, verify]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -198,7 +240,7 @@ jobs:
   # ── macOS arm64 installer (dmg) ──────────────────────────────────────────────
   build-mac-arm64:
     name: macOS arm64 installer
-    needs: [resolve-version]
+    needs: [resolve-version, verify]
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -238,7 +280,7 @@ jobs:
   # ── Docker image → ghcr.io ───────────────────────────────────────────────────
   build-docker:
     name: Docker image (Web App)
-    needs: [resolve-version]
+    needs: [resolve-version, verify]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -254,13 +296,18 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/OpenAudible-BookOrganizer
+          # Spelled out in lower case rather than reusing the repository name: GHCR requires
+          # lower case, and leaving the folding implicit is what let the README document a
+          # pull command ("openaudible-book-organizer") that never matched what was published.
+          images: ghcr.io/${{ github.repository_owner }}/openaudible-bookorganizer
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          # A pre-release is published under its exact version only: 'latest' and the X.Y tag
+          # must keep pointing at the last stable release.
           tags: |
             type=raw,value=${{ needs.resolve-version.outputs.version }}
-            type=raw,value=${{ needs.resolve-version.outputs.major_minor }}
-            type=raw,value=latest
+            type=raw,value=${{ needs.resolve-version.outputs.major_minor }},enable=${{ needs.resolve-version.outputs.is_prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ needs.resolve-version.outputs.is_prerelease == 'false' }}
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v6
@@ -292,12 +339,22 @@ jobs:
         with:
           path: artifacts
 
+      - name: Choose release notes
+        id: notes
+        run: |
+          if [ "${{ needs.resolve-version.outputs.is_prerelease }}" == "true" ] && [ -f .github/release-body-beta.md ]; then
+            echo "path=.github/release-body-beta.md" >> $GITHUB_OUTPUT
+          else
+            echo "path=.github/release-body.md" >> $GITHUB_OUTPUT
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.resolve-version.outputs.tag }}
           name: OpenAudible Book Organizer ${{ needs.resolve-version.outputs.version }}
-          body_path: .github/release-body.md
+          body_path: ${{ steps.notes.outputs.path }}
+          prerelease: ${{ needs.resolve-version.outputs.is_prerelease == 'true' }}
           generate_release_notes: true
           files: |
             artifacts/windows-installer/*.exe
