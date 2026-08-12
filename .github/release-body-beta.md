@@ -59,9 +59,31 @@ the only indication of the window's state, and it was only ever asked once, when
 Snapping the window with a keyboard shortcut, dragging it to a screen edge, or double-clicking the
 title bar left it showing the opposite of the truth. It now follows the window.
 
+**The library list grew every time it was scrolled or re-sorted.** Each row was identified by the
+book's Key or ASIN, and a real export repeats those — a book bought twice, a re-issue kept beside
+the original. Two rows sharing an identity meant stale rows were kept instead of being replaced:
+22 rows on screen became 36 after scrolling and 57 after re-sorting, the scrollbar described half
+again as much content as existed, and a screen reader was read a table that made no sense. The
+list also went briefly blank behind an over-tall scrollbar when a smaller library was loaded over
+a larger one.
+
+**Re-exporting your library did not take effect until you reloaded it by hand.** OpenAudible writes
+over the same file every export, and in Docker `CSV_PATH` never changes at all, so the app took
+"same file" to mean "same library" and sorted whatever it had read the first time — in a
+long-running container, potentially days earlier, reporting success against a list nobody could
+see was stale. The export is now re-read whenever it has changed on disk, and left alone when it
+has not.
+
+**An export whose column headers were in a different case produced a library of blank books.** The
+check that decides whether a file is an OpenAudible export ignores case; the column matching that
+followed it did not. A hand-edited export, or one round-tripped through a spreadsheet, was
+therefore accepted as genuine and then read as though every column were missing — every book
+untitled, unattributed, and filed under Unknown. Headers now match regardless of case and spacing.
+
 **Smaller ones.** The sidebar's buttons had no name for a screen reader once the window was narrow
-enough to collapse them to icons, and the update-check setting could still be changed with the
-arrow keys while a sort was running and the control was showing as locked.
+enough to collapse them to icons; the update-check setting could still be changed with the arrow
+keys while a sort was running and the control was showing as locked; and a release whose tests
+failed still left its version tag behind, so re-running that version was refused.
 
 ## Fixed since beta.1
 
@@ -154,11 +176,14 @@ The app has been reworked to stay usable with a large collection and to get out 
 
 ## Testing
 
-181 backend tests cover path safety, name resolution, planning determinism, atomic and idempotent
-copying, both update checks, missing source files, cancellation and CSV robustness. 27 frontend
-tests cover the search and ordering rules, including a regression test for every sorting bug
-listed above and for both duration spellings. Both suites run in CI on Linux and Windows, and now
-gate the release itself.
+192 backend tests cover path safety, name resolution, planning determinism, atomic and idempotent
+copying, both update checks, missing source files, cancellation, re-reading a changed export, and
+CSV robustness — including Windows line endings, semicolon-separated and UTF-16 files, headers in
+the wrong case, and rows with too many fields. 38 frontend tests cover the search and ordering
+rules, including a regression test for every sorting bug listed above and for both duration
+spellings, and the row-windowing arithmetic at both ends of a list, on an empty one, and on a
+library that shrinks under a stale scroll position. Both suites run in CI on Linux and Windows,
+and now gate the release tag itself.
 
 This beta was also driven by hand against a deliberately hostile library — books with no author,
 no series and no duration, a 400 character title, Arabic and Japanese text, emoji, markup in a
