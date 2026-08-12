@@ -28,8 +28,9 @@ only writes when they differ; the Sort page now lets you choose *how closely* it
 
 Books that already match are left untouched either way. The progress panel now reports **Updated**
 — books replaced because their source had changed — separately from books copied for the first
-time. In Docker, set the default with `COMPARISON_MODE=quick|full`; the Sort page still overrides
-it for an individual run.
+time, and **Not found** — books the export lists but that are not in your source folder —
+separately from books that are genuinely already up to date. In Docker, set the default with
+`COMPARISON_MODE=quick|full`; the Sort page still overrides it for an individual run.
 
 ## Fixed since beta.2
 
@@ -38,6 +39,29 @@ book's length as a clock value — `18:22:00` — and the app only understood th
 ("12 hrs and 34 mins"). A clock value was therefore shown raw instead of as `18h 22m`, and, worse,
 counted as *unreadable*: since books with no duration sink to the bottom of the column, sorting a
 real library by Duration left it in no particular order at all. Both spellings are now understood.
+
+**Books that were never downloaded were reported as "already up to date".** Your export lists
+everything you own; the source folder holds only what you have actually downloaded. A book with no
+file in the source folder was counted as *skipped*, the same bucket as a book that is already
+filed correctly, and the finished run described that bucket as "already up to date". On a real
+library that turns every un-downloaded book into a false reassurance. There is now a separate
+**Not found** counter, **Skipped** means strictly "already at the destination and up to date", and
+a run that could not find some of its books says so and explains why.
+
+**The backend served files based on wherever it happened to be launched from.** Its content root
+came from the current working directory rather than from where the binary lives, so on the desktop
+app — where the backend is started as a child process — it inherited whatever folder the app was
+launched from. Every launch also logged a missing-web-root error twice and answered unknown routes
+with a page that does not exist in the desktop build.
+
+**The maximise/restore button showed the wrong icon.** The window is frameless, so that icon is
+the only indication of the window's state, and it was only ever asked once, when the app started.
+Snapping the window with a keyboard shortcut, dragging it to a screen edge, or double-clicking the
+title bar left it showing the opposite of the truth. It now follows the window.
+
+**Smaller ones.** The sidebar's buttons had no name for a screen reader once the window was narrow
+enough to collapse them to icons, and the update-check setting could still be changed with the
+arrow keys while a sort was running and the control was showing as locked.
 
 ## Fixed since beta.1
 
@@ -130,15 +154,22 @@ The app has been reworked to stay usable with a large collection and to get out 
 
 ## Testing
 
-178 backend tests cover path safety, name resolution, planning determinism, atomic and idempotent
-copying, both update checks, cancellation and CSV robustness. 27 frontend tests cover the search
-and ordering rules, including a regression test for every sorting bug listed above and for both
-duration spellings. Both suites run in CI on Linux and Windows, and now gate the release itself.
+181 backend tests cover path safety, name resolution, planning determinism, atomic and idempotent
+copying, both update checks, missing source files, cancellation and CSV robustness. 27 frontend
+tests cover the search and ordering rules, including a regression test for every sorting bug
+listed above and for both duration spellings. Both suites run in CI on Linux and Windows, and now
+gate the release itself.
 
 This beta was also driven by hand against a deliberately hostile library — books with no author,
 no series and no duration, a 400 character title, Arabic and Japanese text, emoji, markup in a
 title, and duplicate titles — checking that nothing crashed, nothing was written outside the
 destination folder, and a second run copied nothing.
+
+The packaged desktop app and the Docker image were then driven end to end: launching the app,
+letting it start and later stop its own backend, picking a CSV, running a real sort and checking
+what landed on disk; a library where a third of the books are not downloaded; a run cancelled
+half way through and then resumed; a same-size re-issue that only the verify-contents check can
+see; a port already taken by something else; and a backend killed while the app was open.
 
 ## Feedback
 
