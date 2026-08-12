@@ -64,7 +64,39 @@ internal sealed class LenientDoubleConverter : DefaultTypeConverter
             return double.IsFinite(parsed) ? parsed : 0d;
         }
 
+        // A rating written the European way — "4,6". Neither parse above accepts it: NumberStyles
+        // .Float does not allow a group separator, and the server's culture is whatever the
+        // container happens to run with. Left alone, the whole Rating column of a European export
+        // silently reads as zero, showing as "—" and sorting to the bottom.
+        if (LooksLikeACommaDecimal(value) &&
+            double.TryParse(value.Replace(',', '.'), NumberStyles.Float, CultureInfo.InvariantCulture, out var commaDecimal))
+        {
+            return double.IsFinite(commaDecimal) ? commaDecimal : 0d;
+        }
+
         return 0d;
+    }
+
+    /// <summary>
+    /// One comma, no dot, a digit before it and one or two digits after — "4,6" and "4,65". Three
+    /// trailing digits is the shape of a group separator ("1,234"), not of a decimal, and "1,2,3"
+    /// is not a number at all; both read as no rating rather than as a wrong one.
+    /// </summary>
+    private static bool LooksLikeACommaDecimal(string value)
+    {
+        if (value.Contains('.') || value.Count(character => character == ',') != 1)
+        {
+            return false;
+        }
+
+        var comma = value.IndexOf(',');
+        if (comma <= 0 || !char.IsAsciiDigit(value[comma - 1]))
+        {
+            return false;
+        }
+
+        var fraction = value[(comma + 1)..];
+        return fraction.Length is 1 or 2 && fraction.All(char.IsAsciiDigit);
     }
 }
 

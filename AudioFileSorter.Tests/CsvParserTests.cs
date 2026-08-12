@@ -75,6 +75,47 @@ public class CsvParserTests : IDisposable
     }
 
     [Theory]
+    [InlineData("4.6", 4.6)]
+    [InlineData("4,6", 4.6)]   // written the European way, as a spreadsheet on a European locale saves it
+    [InlineData("4,65", 4.65)]
+    [InlineData("5", 5.0)]
+    [InlineData("0", 0.0)]
+    [InlineData("", 0.0)]
+    [InlineData("n/a", 0.0)]
+    [InlineData("1,234", 0.0)] // three trailing digits is a group separator, not a decimal
+    [InlineData("1,2,3", 0.0)]
+    [InlineData(",6", 0.0)]
+    [InlineData("4,", 0.0)]
+    public async Task Reads_a_rating_however_the_decimal_point_is_written(string cell, double expected)
+    {
+        // The Rating column reading as zero shows every book as "—" and sinks the lot to the
+        // bottom of that column, which looks like a sorting bug rather than an import one.
+        var path = WriteCsv(
+            "Title,Author,File name,Ave. Rating",
+            $"The Hobbit,Tolkien,the-hobbit,\"{cell}\"");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Equal(expected, Assert.Single(result.Books).AveRating);
+    }
+
+    [Fact]
+    public async Task Reads_a_european_export_end_to_end()
+    {
+        // Semicolon separated with comma decimals: what a European spreadsheet writes.
+        var path = WriteRaw(
+            "Title;Author;File name;Ave. Rating;Rating Count\n" +
+            "The Hobbit;Tolkien;the-hobbit;4,6;1234\n");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        var book = Assert.Single(result.Books);
+        Assert.Equal("The Hobbit", book.Title);
+        Assert.Equal(4.6, book.AveRating);
+        Assert.Equal(1234, book.RatingCount);
+    }
+
+    [Theory]
     [InlineData("2020-05-04")]
     [InlineData("05/04/2020")]
     [InlineData("5/4/2020")]
