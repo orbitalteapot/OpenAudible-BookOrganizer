@@ -74,6 +74,11 @@ long-running container, potentially days earlier, reporting success against a li
 see was stale. The export is now re-read whenever it has changed on disk, and left alone when it
 has not.
 
+**Ratings written the European way read as no rating at all.** A cell of `4,6` — what a spreadsheet
+saves on a European locale, and what goes with the semicolon-separated exports now understood —
+parsed as nothing and became zero. The whole Rating column then showed `—` and the entire library
+sank to the bottom of it, which looks like a sorting fault rather than an import one.
+
 **An export whose column headers were in a different case produced a library of blank books.** The
 check that decides whether a file is an OpenAudible export ignores case; the column matching that
 followed it did not. A hand-edited export, or one round-tripped through a spreadsheet, was
@@ -82,8 +87,10 @@ untitled, unattributed, and filed under Unknown. Headers now match regardless of
 
 **Smaller ones.** The sidebar's buttons had no name for a screen reader once the window was narrow
 enough to collapse them to icons; the update-check setting could still be changed with the arrow
-keys while a sort was running and the control was showing as locked; and a release whose tests
-failed still left its version tag behind, so re-running that version was refused.
+keys while a sort was running and the control was showing as locked; a release whose tests failed
+still left its version tag behind, so re-running that version was refused; and the Docker image was
+built from a 408 MB context that included the desktop installers and could bake a developer's
+local files into the published image.
 
 ## Fixed since beta.1
 
@@ -176,10 +183,11 @@ The app has been reworked to stay usable with a large collection and to get out 
 
 ## Testing
 
-192 backend tests cover path safety, name resolution, planning determinism, atomic and idempotent
+204 backend tests cover path safety, name resolution, planning determinism, atomic and idempotent
 copying, both update checks, missing source files, cancellation, re-reading a changed export, and
 CSV robustness — including Windows line endings, semicolon-separated and UTF-16 files, headers in
-the wrong case, and rows with too many fields. 38 frontend tests cover the search and ordering
+the wrong case, rows with too many fields, and ratings with a comma for a decimal point. 38
+frontend tests cover the search and ordering
 rules, including a regression test for every sorting bug listed above and for both duration
 spellings, and the row-windowing arithmetic at both ends of a list, on an empty one, and on a
 library that shrinks under a stale scroll position. Both suites run in CI on Linux and Windows,
@@ -195,6 +203,12 @@ letting it start and later stop its own backend, picking a CSV, running a real s
 what landed on disk; a library where a third of the books are not downloaded; a run cancelled
 half way through and then resumed; a same-size re-issue that only the verify-contents check can
 see; a port already taken by something else; and a backend killed while the app was open.
+
+Finally, against a library the size and shape of a real one — 1,273 books, a third of them not
+downloaded, with missing authors, missing durations, a 300 character title, markup, emoji,
+Japanese, Arabic, Cyrillic, both duration spellings and both decimal separators. It loads in
+0.4 seconds holding 331 elements rather than one per book, sorts on any column in about
+130 milliseconds, and every one of the 1,273 books comes out accounted for.
 
 ## Feedback
 
