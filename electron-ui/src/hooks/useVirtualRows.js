@@ -1,6 +1,31 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 /**
+ * Which slice of the list to render, and how tall the spacers standing in for the rest must be.
+ *
+ * Pure, and exported, so the arithmetic can be tested directly: every defect this has had was in
+ * these five lines rather than in the wiring around them.
+ */
+export function computeWindow({ count, rowHeight, overscan, viewportHeight, scrollTop }) {
+  const visibleCount = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
+
+  // Clamped to the last full window rather than taken from scrollTop alone. Reloading a smaller
+  // library shrinks the list without moving the scroll position, and for the frame before the
+  // browser clamps the scroll and tells us about it, an unclamped start points past the end: no
+  // rows at all, and a spacer taller than the content it is standing in for.
+  const maxStart = Math.max(0, count - visibleCount);
+  const start = Math.min(Math.max(0, Math.floor(scrollTop / rowHeight) - overscan), maxStart);
+  const end = Math.min(count, start + visibleCount);
+
+  return {
+    start,
+    end,
+    paddingTop: start * rowHeight,
+    paddingBottom: Math.max(0, (count - end) * rowHeight),
+  };
+}
+
+/**
  * Renders only the rows that are actually on screen.
  *
  * A 10,000 book library is perfectly normal, and rendering 10,000 rows costs tens of thousands of
@@ -63,16 +88,9 @@ export default function useVirtualRows({ count, rowHeight, overscan = 6 }) {
     setScrollTop(0);
   }, []);
 
-  const visibleCount = Math.ceil(viewportHeight / rowHeight) + overscan * 2;
-  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
-  const end = Math.min(count, start + visibleCount);
-
   return {
     scrollRef,
-    start,
-    end,
     scrollToTop,
-    paddingTop: start * rowHeight,
-    paddingBottom: Math.max(0, (count - end) * rowHeight),
+    ...computeWindow({ count, rowHeight, overscan, viewportHeight, scrollTop }),
   };
 }

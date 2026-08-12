@@ -197,7 +197,13 @@ export default function LibraryTable({
 
             {visible.map((book, index) => (
               <Row
-                key={book.key || book.asin || start + index}
+                // Keyed by position in the list, not by anything from the book. A real export
+                // repeats ASINs — a book bought twice, a re-issue kept beside the original — and
+                // two rows sharing a key made React keep stale rows in the table instead of
+                // replacing them: the list grew on every scroll and every re-sort, the scrollbar
+                // described more content than existed, and row indices repeated. A development
+                // build would have warned about it; the shipped build strips that warning.
+                key={start + index}
                 book={book}
                 columns={columns}
                 // +2: ARIA row indices are 1-based and the header occupies row 1.
