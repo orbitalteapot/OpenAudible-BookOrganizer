@@ -46,48 +46,18 @@ jobs:
         working-directory: electron-ui
         run: npm test
 
-  # ── Create tag (only when triggered manually) ─────────────────────────────────
-  create-tag:
-    name: Create release tag ${{ inputs.version }}
-    needs: [verify]
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Validate version format
-        run: |
-          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
-            echo "Error: version must be X.Y.Z or X.Y.Z-<pre-release> (e.g. 1.2.3, 1.2.3-beta.1)"
-            exit 1
-          fi
-
-      - name: Create and push tag
-        run: |
-          VERSION="${{ inputs.version }}"
-          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" > /dev/null 2>&1; then
-            echo "Error: tag ${VERSION} already exists"
-            exit 1
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${VERSION}" -m "Release ${VERSION}"
-          git push origin "${VERSION}"
-
-  # ── Resolve version (single source of truth for all build jobs) ──────────────
+  # ── Resolve the version, and create the tag when there is not one yet ────────
+  #
+  # Deliberately one job rather than two. Tagging used to live in its own job that was skipped
+  # when the run came from pushing a tag, because there was nothing left to tag — and a skipped
+  # job skips everything downstream of it, all the way through the graph, whatever conditions the
+  # jobs in between carry. Releasing by pushing a tag therefore produced a run that reported
+  # success while quietly building nothing: every installer job, the image, and the release itself
+  # were skipped. A skipped *step* has no such effect, so the choice lives at step level and every
+  # job below runs unconditionally on both paths.
   resolve-version:
     name: Resolve release version
-    needs: [verify, create-tag]
-    if: |
-      always() &&
-      needs.verify.result == 'success' &&
-      (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped') &&
-      (
-        github.event_name == 'workflow_dispatch' ||
-        (github.event_name == 'push' && github.actor != 'github-actions[bot]')
-      )
+    needs: [verify]
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -95,6 +65,10 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       is_prerelease: ${{ steps.version.outputs.is_prerelease }}
     steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
       - name: Compute version
         id: version
         run: |
@@ -104,7 +78,7 @@ jobs:
             VERSION="${GITHUB_REF_NAME}"
           fi
           if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$'; then
-            echo "Error: release tag must be X.Y.Z or X.Y.Z-<pre-release> (for example 1.2.3, 1.2.3-beta.1)"
+            echo "Error: release version must be X.Y.Z or X.Y.Z-<pre-release> (for example 1.2.3, 1.2.3-beta.1)"
             exit 1
           fi
 
@@ -122,6 +96,38 @@ jobs:
           echo "tag=$VERSION" >> $GITHUB_OUTPUT
           echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
           echo "Releasing $VERSION (pre-release: $IS_PRERELEASE)"
+
+      # Only the manual trigger needs a tag made; a run started by pushing one already has it.
+      - name: Create and push tag
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          if git ls-remote --exit-code --tags origin "refs/tags/${VERSION}" > /dev/null 2>&1; then
+            # Resolve through an annotated tag to the commit it actually points at.
+            EXISTING="$(git ls-remote origin "refs/tags/${VERSION}^{}" | cut -f1)"
+            if [ -z "$EXISTING" ]; then
+              EXISTING="$(git ls-remote origin "refs/tags/${VERSION}" | cut -f1)"
+            fi
+
+            # An existing tag on this very commit means the last attempt at this release did not
+            # finish — the usual reason being that it produced no installers. Refusing that is
+            # refusing to retry, which leaves a published release permanently empty and forces a
+            # version number to be burned to get out of it.
+            if [ "$EXISTING" = "$GITHUB_SHA" ]; then
+              echo "Tag ${VERSION} already points at ${GITHUB_SHA}; re-running the release for it."
+              exit 0
+            fi
+
+            echo "Error: tag ${VERSION} already exists and points at ${EXISTING}, not at ${GITHUB_SHA}."
+            echo "Release a new version, or move the tag deliberately if that is what you meant."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${VERSION}" -m "Release ${VERSION}"
+          git push origin "${VERSION}"
 
   # ── Windows x64 NSIS installer ───────────────────────────────────────────────
   build-windows:
