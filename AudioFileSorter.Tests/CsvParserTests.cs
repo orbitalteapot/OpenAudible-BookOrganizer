@@ -191,6 +191,117 @@ public class CsvParserTests : IDisposable
             () => new CsvParser().ParseAsync(path, CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Reads_an_export_with_windows_line_endings()
+    {
+        var path = WriteRaw("Title,Author\r\nThe Hobbit,J.R.R. Tolkien\r\nDune,Frank Herbert\r\n");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Equal(2, result.Books.Count);
+        Assert.Equal("J.R.R. Tolkien", result.Books[0].Author);
+    }
+
+    [Fact]
+    public async Task Reads_a_semicolon_separated_export()
+    {
+        var path = WriteRaw("Title;Author;File name\nThe Hobbit;J.R.R. Tolkien;the-hobbit\n");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        var book = Assert.Single(result.Books);
+        Assert.Equal("The Hobbit", book.Title);
+        Assert.Equal("J.R.R. Tolkien", book.Author);
+    }
+
+    [Fact]
+    public async Task Reads_headers_whatever_their_casing_and_spacing()
+    {
+        var path = WriteCsv(
+            "  TITLE  ,  author ,  File Name  ",
+            "The Hobbit,J.R.R. Tolkien,the-hobbit");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        var book = Assert.Single(result.Books);
+        Assert.Equal("The Hobbit", book.Title);
+        Assert.Equal("J.R.R. Tolkien", book.Author);
+        Assert.Equal("the-hobbit", book.Filename);
+    }
+
+    [Fact]
+    public async Task Keeps_the_good_rows_when_one_row_has_extra_fields()
+    {
+        var path = WriteCsv(
+            "Title,Author",
+            "The Hobbit,J.R.R. Tolkien",
+            "Dune,Frank Herbert,stray,extra,fields",
+            "Neuromancer,William Gibson");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Equal(3, result.Books.Count);
+        Assert.Equal(["The Hobbit", "Dune", "Neuromancer"], result.Books.Select(b => b.Title));
+    }
+
+    [Fact]
+    public async Task Reads_a_utf16_export()
+    {
+        // Exported from a Windows tool that writes UTF-16; the byte order mark identifies it.
+        var path = Path.Combine(_directory, $"{Guid.NewGuid():N}.csv");
+        await File.WriteAllTextAsync(path, "Title,Author\nHavamal,Snorri Sturluson\n", new UnicodeEncoding(false, true));
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        var book = Assert.Single(result.Books);
+        Assert.Equal("Havamal", book.Title);
+    }
+
+    [Fact]
+    public async Task Keeps_non_ascii_titles_intact()
+    {
+        var path = WriteCsv(
+            "Title,Author,File name",
+            "\"日本語のタイトル\",\"著者\",jp-1",
+            "\"عنوان عربي\",\"مؤلف\",ar-1",
+            "\"Émile 🎧\",\"Zola\",fr-1");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Equal(3, result.Books.Count);
+        Assert.Equal("日本語のタイトル", result.Books[0].Title);
+        Assert.Equal("عنوان عربي", result.Books[1].Title);
+        Assert.Equal("Émile 🎧", result.Books[2].Title);
+    }
+
+    [Fact]
+    public async Task Reads_an_export_with_no_trailing_newline()
+    {
+        var path = WriteRaw("Title,Author\nThe Hobbit,J.R.R. Tolkien");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Single(result.Books);
+    }
+
+    [Fact]
+    public async Task Skips_blank_lines_in_the_middle_of_an_export()
+    {
+        var path = WriteRaw("Title,Author\nThe Hobbit,J.R.R. Tolkien\n\n\nDune,Frank Herbert\n");
+
+        var result = await new CsvParser().ParseAsync(path, CancellationToken.None);
+
+        Assert.Equal(2, result.Books.Count);
+        Assert.Equal(0, result.SkippedRows);
+    }
+
+    private string WriteRaw(string content)
+    {
+        var path = Path.Combine(_directory, $"{Guid.NewGuid():N}.csv");
+        File.WriteAllText(path, content);
+        return path;
+    }
+
     private string WriteCsv(params string[] lines)
     {
         var path = Path.Combine(_directory, $"{Guid.NewGuid():N}.csv");
