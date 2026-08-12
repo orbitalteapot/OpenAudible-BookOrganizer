@@ -50,6 +50,12 @@ public class CsvParser
             IgnoreBlankLines = true,
             MissingFieldFound = null,
             HeaderValidated = null,
+            // Applied to both the file's headers and the names the map declares, so "Series Name",
+            // "series name" and "SERIES  NAME" all describe the same column. Without it, a file
+            // whose headers differ only in case still passes the "is this an export" check — which
+            // is deliberately case-insensitive — and then produces a library of entirely blank
+            // books, every one of them filed under Unknown.
+            PrepareHeaderForMatch = args => NormaliseHeader(args.Header),
             BadDataFound = args =>
                 AddWarning(warnings, $"Malformed data on row {args.Context.Parser?.Row ?? 0} was read as-is.")
         };
@@ -104,12 +110,44 @@ public class CsvParser
         };
     }
 
+    /// <summary>
+    /// Case, surrounding space and runs of internal space are all things a hand-edited or
+    /// spreadsheet-round-tripped export varies without meaning anything by it.
+    /// </summary>
+    private static string NormaliseHeader(string? header)
+    {
+        if (string.IsNullOrWhiteSpace(header))
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder(header.Length);
+        var lastWasSpace = false;
+
+        foreach (var character in header.Trim())
+        {
+            if (char.IsWhiteSpace(character))
+            {
+                if (!lastWasSpace)
+                {
+                    builder.Append(' ');
+                    lastWasSpace = true;
+                }
+
+                continue;
+            }
+
+            builder.Append(char.ToLowerInvariant(character));
+            lastWasSpace = false;
+        }
+
+        return builder.ToString();
+    }
+
     private static void EnsureLooksLikeOpenAudibleExport(string[]? headerRecord)
     {
         var headers = headerRecord ?? [];
-        var recognised = headers.Any(header =>
-            !string.IsNullOrWhiteSpace(header) &&
-            RecognisedHeaders.Contains(header.Trim().ToLowerInvariant()));
+        var recognised = headers.Any(header => RecognisedHeaders.Contains(NormaliseHeader(header)));
 
         if (!recognised)
         {

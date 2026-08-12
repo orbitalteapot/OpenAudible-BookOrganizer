@@ -1,4 +1,4 @@
-﻿**/.dockerignore
+**/.dockerignore
 **/.env
 **/.git
 **/.gitignore
@@ -23,3 +23,21 @@
 **/values.dev.yaml
 LICENSE
 README.md
+CONTRIBUTING.md
+
+# Build output. The image builds all of this from source in its own stages, so sending it wastes
+# the upload and, worse, bakes whatever happens to be sitting in a developer's working tree into
+# the image. electron-ui/release and backend-bin between them were 400 MB of desktop installers
+# and self-contained binaries that the container has no use for at all.
+electron-ui/release
+electron-ui/backend-bin
+electron-ui/dist
+
+# Written by the image build itself, from the freshly built frontend. A copy left behind by a
+# local test run would be merged into it rather than replaced, shipping stale assets.
+ManagerApi/wwwroot
+
+# Not part of the image.
+AudioFileSorter.Tests
+.github
+images

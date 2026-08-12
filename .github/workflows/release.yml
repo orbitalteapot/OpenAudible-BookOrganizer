@@ -16,9 +16,40 @@ permissions:
   packages: write
 
 jobs:
+  # ── Build and test before anything is tagged or published ────────────────────
+  # First, deliberately: tagging ahead of the tests meant a failed release still left its tag
+  # behind, and re-running the same version then failed with "tag already exists".
+  verify:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: electron-ui/package-lock.json
+
+      - name: Run backend tests
+        run: dotnet test OpenAudibleBookManager.sln -c Release
+
+      - name: Install frontend dependencies
+        working-directory: electron-ui
+        run: npm ci
+
+      - name: Run frontend tests
+        working-directory: electron-ui
+        run: npm test
+
   # ── Create tag (only when triggered manually) ─────────────────────────────────
   create-tag:
     name: Create release tag ${{ inputs.version }}
+    needs: [verify]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -48,9 +79,10 @@ jobs:
   # ── Resolve version (single source of truth for all build jobs) ──────────────
   resolve-version:
     name: Resolve release version
-    needs: [create-tag]
+    needs: [verify, create-tag]
     if: |
       always() &&
+      needs.verify.result == 'success' &&
       (needs.create-tag.result == 'success' || needs.create-tag.result == 'skipped') &&
       (
         github.event_name == 'workflow_dispatch' ||
@@ -90,35 +122,6 @@ jobs:
           echo "tag=$VERSION" >> $GITHUB_OUTPUT
           echo "is_prerelease=$IS_PRERELEASE" >> $GITHUB_OUTPUT
           echo "Releasing $VERSION (pre-release: $IS_PRERELEASE)"
-
-  # ── Build and test before anything is published ──────────────────────────────
-  verify:
-    name: Build and test
-    needs: [resolve-version]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-dotnet@v5
-        with:
-          dotnet-version: '10.0.x'
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: electron-ui/package-lock.json
-
-      - name: Run backend tests
-        run: dotnet test OpenAudibleBookManager.sln -c Release
-
-      - name: Install frontend dependencies
-        working-directory: electron-ui
-        run: npm ci
-
-      - name: Run frontend tests
-        working-directory: electron-ui
-        run: npm test
 
   # ── Windows x64 NSIS installer ───────────────────────────────────────────────
   build-windows:

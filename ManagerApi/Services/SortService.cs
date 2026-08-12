@@ -14,6 +14,7 @@ public class SortService
 
     private List<OpenAudible> _books = [];
     private string? _booksCsvPath;
+    private (DateTime LastWriteUtc, long Length)? _booksCsvStamp;
     private SortProgressInfo _currentProgress = new();
     private CancellationTokenSource? _sortCancellation;
     private bool _isSorting;
@@ -41,6 +42,7 @@ public class SortService
             }
         }
 
+        var stamp = ReadFileStamp(csvPath);
         var result = await _csvParser.ParseAsync(csvPath, cancellationToken);
 
         lock (_sortLock)
@@ -54,6 +56,7 @@ public class SortService
 
             _books = result.Books;
             _booksCsvPath = Path.GetFullPath(csvPath);
+            _booksCsvStamp = stamp;
         }
 
         return result;
@@ -218,21 +221,33 @@ public class SortService
     }
 
     /// <summary>
-    /// Returns the loaded library, re-reading the CSV when nothing is loaded or when the caller
-    /// asked to sort a different file than the one in memory.
+    /// Returns the loaded library, re-reading the CSV when nothing is loaded, when the caller asked
+    /// to sort a different file than the one in memory, or when that file has changed on disk since
+    /// it was read.
     /// </summary>
     private async Task<List<OpenAudible>> EnsureBooksLoaded(string csvPath, CancellationToken cancellationToken)
     {
         string? loadedPath;
+        (DateTime, long)? loadedStamp;
         List<OpenAudible> books;
         lock (_sortLock)
         {
             loadedPath = _booksCsvPath;
+            loadedStamp = _booksCsvStamp;
             books = _books;
         }
 
         var requestedPath = Path.GetFullPath(csvPath);
-        if (books.Count > 0 && string.Equals(loadedPath, requestedPath, StringComparison.OrdinalIgnoreCase))
+        var currentStamp = ReadFileStamp(csvPath);
+
+        // OpenAudible exports over the top of the same file every time, and a container's CSV_PATH
+        // never changes at all. Matching on the path alone meant that re-exporting your library and
+        // pressing Start sorting quietly sorted whatever was read the first time — in a long-lived
+        // container, potentially days earlier.
+        var sameFile = books.Count > 0 && string.Equals(loadedPath, requestedPath, StringComparison.OrdinalIgnoreCase);
+        var unchanged = loadedStamp is not null && currentStamp is not null && loadedStamp == currentStamp;
+
+        if (sameFile && unchanged)
         {
             return books;
         }
@@ -243,9 +258,28 @@ public class SortService
         {
             _books = result.Books;
             _booksCsvPath = requestedPath;
+            _booksCsvStamp = currentStamp;
         }
 
         return result.Books;
+    }
+
+    /// <summary>
+    /// How the file looked when it was read. Null when it cannot be inspected, which counts as
+    /// "changed" — re-reading costs milliseconds, and sorting a stale library costs the user a
+    /// wrong answer they have no way of noticing.
+    /// </summary>
+    private static (DateTime LastWriteUtc, long Length)? ReadFileStamp(string csvPath)
+    {
+        try
+        {
+            var info = new FileInfo(csvPath);
+            return info.Exists ? (info.LastWriteTimeUtc, info.Length) : null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
