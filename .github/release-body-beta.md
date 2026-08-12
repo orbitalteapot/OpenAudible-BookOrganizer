@@ -3,7 +3,15 @@
 > exact version tag to try this build.
 
 A stability-focused release for the book organiser. The sorting engine has been reworked so that
-a run is predictable, repeatable, and safe to interrupt.
+a run is predictable, repeatable, and safe to interrupt, and the interface has been rebuilt.
+
+![Library](https://raw.githubusercontent.com/orbitalteapot/OpenAudible-BookOrganizer/main/images/app-library.png)
+
+Installing: the builds are not code-signed, so Windows shows "Windows protected your PC"
+(**More info** → **Run anyway**) and macOS says it cannot check the app for malicious software
+(right-click the app → **Open**). The
+[README](https://github.com/orbitalteapot/OpenAudible-BookOrganizer#these-builds-are-not-code-signed)
+has the details for each platform.
 
 ## New: choose how books are kept up to date
 
@@ -23,13 +31,21 @@ Books that already match are left untouched either way. The progress panel now r
 time. In Docker, set the default with `COMPARISON_MODE=quick|full`; the Sort page still overrides
 it for an individual run.
 
+## Fixed since beta.2
+
+**Durations from a real export were neither shown nor sorted correctly.** OpenAudible writes a
+book's length as a clock value — `18:22:00` — and the app only understood the prose form
+("12 hrs and 34 mins"). A clock value was therefore shown raw instead of as `18h 22m`, and, worse,
+counted as *unreadable*: since books with no duration sink to the bottom of the column, sorting a
+real library by Duration left it in no particular order at all. Both spellings are now understood.
+
 ## Fixed since beta.1
 
 **The library list was ordering two columns wrongly.** Sorting by Duration compared the raw text
-OpenAudible writes ("45 mins", "9 hrs and 9 mins"), so a 45 minute book was filed *after* a nine
-hour one — 45 reads as larger than 9. Sorting by Series compared the series name alone, leaving
-every book in a series tied and in whatever order the export happened to use, which routinely put
-#10 above #2. Both now sort on what the column means rather than how the value is spelled.
+rather than the length it represented, so a 45 minute book was filed *after* a nine hour one — 45
+reads as larger than 9. Sorting by Series compared the series name alone, leaving every book in a
+series tied and in whatever order the export happened to use, which routinely put #10 above #2.
+Both now sort on what the column means rather than how the value is spelled.
 
 **Linux windows are associated with the installed app.** The `.desktop` entry's name did not match
 the window class, so a running window appeared as a separate generic entry rather than grouping
@@ -108,16 +124,16 @@ The app has been reworked to stay usable with a large collection and to get out 
   the true size of your library.
 - Narrow windows shed optional columns and collapse the sidebar to icons rather than squeezing
   everything into ellipses.
-- Durations read "12h 34m" rather than truncating to "12 hrs and…".
+- Durations read "18h 22m" rather than "18:22:00" or a truncated "12 hrs and…".
 - Flatter, quieter visuals: one accent colour, no gradients or glow, and text that meets the
   WCAG AA contrast minimum on every surface it sits on.
 
 ## Testing
 
 178 backend tests cover path safety, name resolution, planning determinism, atomic and idempotent
-copying, both update checks, cancellation and CSV robustness. 20 frontend tests cover the search
-and ordering rules, including regression tests for the two sorting bugs above. Both suites run in
-CI on Linux and Windows, and now gate the release itself.
+copying, both update checks, cancellation and CSV robustness. 27 frontend tests cover the search
+and ordering rules, including a regression test for every sorting bug listed above and for both
+duration spellings. Both suites run in CI on Linux and Windows, and now gate the release itself.
 
 This beta was also driven by hand against a deliberately hostile library — books with no author,
 no series and no duration, a 400 character title, Arabic and Japanese text, emoji, markup in a

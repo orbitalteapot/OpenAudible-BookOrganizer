@@ -1,335 +1,231 @@
 # OpenAudible Book Organizer
 
-Organize your audiobook collection with a modern desktop app.
+Turn a folder full of downloaded audiobooks into a library you can navigate.
 
-OpenAudible Book Organizer is a cross-platform Electron application with a C# backend that helps organize your audiobook collection into a structured directory format based on the OpenAudible book list export.
+OpenAudible gives you your books, but it leaves them as a flat pile of files with names like
+`B08XYZ123.m4b`. This app reads the CSV export from OpenAudible and copies each book into an
+`Author / Series / Book` folder structure, keeping the originals untouched.
 
-Supported targets include Windows, Linux, macOS, and Docker.
+It runs as a desktop app on **Windows, macOS and Linux**, and as a **Docker** container with a
+browser interface for a NAS or home server.
 
-## What It Does
+![Library](images/app-library.png)
 
-- Loads an OpenAudible CSV export
-- Organizes audiobook files into `Author / Series / Book` folders
-- Copies companion PDFs when they are available in the CSV metadata
-- Replaces books you have re-downloaded, so an organized library stays current
-- Ships as a desktop app and as a Docker image for watcher-based automation
+## What it does
 
-## Keeping Books Up To Date
+- Reads an OpenAudible CSV export and shows your library, searchable and sortable
+- Copies each book into `Author / Series / Book` folders
+- Brings companion PDFs along with the audiobook
+- Replaces books you have re-downloaded, so an organised library stays current
+- Never moves or deletes anything in your source folder — it only ever copies out of it
 
-Publishers re-issue audiobooks: a corrected chapter, a re-recorded narration, an updated edition.
-When you download the new version, a sort should replace the copy already in your organized
-library rather than leave the old one sitting there.
+---
 
-Every run compares each book against the copy at the destination and only writes when they differ,
-so re-running a sort is cheap and safe. How closely it compares is up to you — the **Update check**
-setting on the Sort page toggles between the two:
+# Using the desktop app
+
+## 1. Install
+
+Download the file for your platform from the
+[latest release](https://github.com/orbitalteapot/OpenAudible-BookOrganizer/releases). Nothing else
+is required — the app bundles everything it needs, so you do **not** need .NET or Node installed.
+
+| Platform | File | How to install |
+| --- | --- | --- |
+| Windows | `...-windows-x64.exe` | Run the installer. |
+| macOS (Apple Silicon) | `...-macos-arm64.dmg` | Open the disk image, drag the app to Applications. |
+| macOS (Intel) | `...-macos-x64.dmg` | Open the disk image, drag the app to Applications. |
+| Linux | `...-linux-x86_64.AppImage` | `chmod +x` the file, then run it. |
+| Linux (Debian/Ubuntu) | `...-linux-amd64.deb` | `sudo apt install ./<file>.deb` |
+
+### These builds are not code-signed
+
+Signing certificates cost money per platform, so the releases are unsigned. Your operating system
+will say so, in language that sounds more alarming than the situation warrants. This is what you
+will see and what to do about it:
+
+**Windows** shows *"Windows protected your PC"*. Click **More info**, then **Run anyway**.
+
+**macOS** refuses to open the app, saying Apple cannot check it for malicious software. Either
+right-click the app in Applications and choose **Open** (which offers an Open button the normal
+double-click does not), or clear the quarantine flag from a terminal:
+
+```sh
+xattr -dr com.apple.quarantine "/Applications/OpenAudible Book Organizer.app"
+```
+
+**Linux** has no such prompt. For the AppImage, just make it executable:
+
+```sh
+chmod +x OpenAudible-Book-Organizer-*-linux-x86_64.AppImage
+./OpenAudible-Book-Organizer-*-linux-x86_64.AppImage
+```
+
+If you would rather not run unsigned binaries, [build from source](#building-from-source) — it is
+two commands.
+
+## 2. Export your library from OpenAudible
+
+In OpenAudible, export your book list to CSV. This file is what tells the organiser which file is
+which book.
+
+![Exporting from OpenAudible](images/export.png)
+
+Re-export whenever you buy or download more books, then reload it in the app.
+
+## 3. Load your library
+
+Open the app, stay on the **Library** page and click **Load CSV export**. Pick the CSV you just
+exported.
+
+Your books appear in a table you can search and sort. Click any column heading to sort by it;
+click again to reverse it. Sorting by **Series** orders books within each series by their number,
+so a series reads in order rather than alphabetically.
+
+![Searching the library](images/app-library-search.png)
+
+Loading the CSV only reads it. Nothing is copied until you say so.
+
+## 4. Sort your books
+
+Go to the **Sort** page and fill in three paths:
+
+| Field | What to choose |
+| --- | --- |
+| **OpenAudible CSV export** | The CSV file from step 2. |
+| **Source folder** | Where OpenAudible put your downloaded books. |
+| **Destination folder** | Where you want the organised library. Must not be inside the source folder. |
+
+![The Sort page](images/app-sort.png)
+
+Then click **Start sorting**. Progress appears on the right as it works, and you can cancel at any
+point — books already copied are complete files, and re-running picks up where you left off.
+
+![A finished sort](images/app-sort-complete.png)
+
+When it finishes you get four numbers:
+
+| Counter | Meaning |
+| --- | --- |
+| **Copied** | Books written to the destination, whether new or replaced. |
+| **Updated** | Of those, the ones that replaced an out-of-date copy. |
+| **Skipped** | Already up to date, or no matching file found in the source folder. |
+| **Failed** | Could not be processed. Details are in the backend log. |
+
+Running a sort again after adding books is cheap: everything already in place is skipped.
+
+## Keeping books up to date
+
+Publishers re-issue audiobooks — a corrected chapter, a re-recorded narration, a new edition. When
+you download the new version, a sort should replace the copy in your organised library rather than
+leave the old one sitting there.
+
+Every run compares each book against the copy at the destination and only writes when they differ.
+How closely it compares is up to you, using the **Update check** setting on the Sort page:
 
 | Update check | What it compares | When to use it |
 | --- | --- | --- |
-| **Quick** (default) | File size, plus the first, middle and last 4 KB | Every day. It catches any re-release whose length changed, which is nearly all of them, and costs almost nothing to run over a large library. |
+| **Quick** (default) | File size, plus the first, middle and last 4 KB | Every day. It catches any re-release whose length changed, which is nearly all of them, and costs almost nothing over a large library. |
 | **Verify contents** | Every byte of both files | When you suspect a book was re-issued at exactly the same size, or you want certainty after a bad disk or an interrupted copy. Slower: it reads both files in full. |
-
-Either way, a book that already matches is left untouched. The sort summary counts it as
-**Skipped**, along with any book whose source file could not be found at all, and reports
-**Updated** — books replaced because their source had changed — as a subset of **Copied**, which
-also includes books written to the destination for the first time.
-
-In Docker, set the default with the `COMPARISON_MODE` environment variable (`quick` or `full`);
-the Sort page can still override it for an individual run.
 
 Two things worth knowing about re-releases:
 
-- The organiser never deletes from your destination folder. If a re-release also changes the book's
-  title enough to be filed under a different name, the new file is written alongside the old one,
-  and removing the old copy is up to you. A title that differs only in punctuation or spacing still
-  resolves to the existing file, which is replaced in place as usual.
-- Replacing a book is atomic: the new version is written beside the old one and renamed over it, so
-  an interrupted update leaves you with either the old copy or the new one, never half of each.
+- **Nothing is ever deleted from your destination folder.** If a re-release changes a book's title
+  enough to be filed under a different name, the new file is written alongside the old one and
+  removing the old copy is up to you. A title differing only in punctuation or spacing still
+  resolves to the existing file and is replaced in place.
+- **Replacing a book is atomic.** The new version is written beside the old one and renamed over
+  it, so an interrupted update leaves you with either the old copy or the new one, never half of
+  each.
 
-## Screenshots
+## How your books get organised
 
-### Library View
-Browse, search, and sort your entire audiobook collection.
-
-![Library View](images/bookmanagerapplib.png)
-
-### Library with Books Loaded
-See your imported library populated and ready to browse, filter, and manage.
-
-![Loaded Books](images/loadedbooks.png)
-
-### File Sorter
-Configure source and destination paths, then sort your audiobooks into organized folders with real-time progress tracking.
-
-![File Sorter](images/bookmanagerappfilesort.png)
-
-### Export Book List from OpenAudible
-Export your OpenAudible library, then use that export to organize your books automatically.
-
-![OpenAudible Export](images/export.png)
-
-### Start Sorting
-Select your OpenAudible export file, choose your source and destination directories, and let the app handle the rest. Your audiobooks will be neatly organized into folders by author and series.
-
-![Start Sorting](images/sorting.png)
-
-## Desktop App
-
-### Prerequisites
-
-- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- [Node.js](https://nodejs.org/) (v18+)
-
-### Run in Development Mode
-
-```sh
-# Start the C# API backend
-dotnet run --project ManagerApi
-
-# In a separate terminal, start the Electron app
-cd electron-ui
-npm install
-npm run dev
+```text
+Terry Mancour/
+  Spellmonger/
+    Book 1/
+      Spellmonger.m4b
+      Spellmonger.pdf
+    Book 2/
+      Warmage.m4b
+Andy Weir/
+  Project Hail Mary.m4b
 ```
 
-### Run the Tests
+A book with no series goes directly in the author's folder. A companion PDF is copied next to its
+audiobook when the export mentions one and the file is present.
 
-The sorting engine is covered by a test suite that runs on Linux, macOS, and Windows:
+Names come from your metadata, cleaned up so the result is portable:
 
-```sh
-dotnet test OpenAudibleBookManager.sln
-```
+- Characters that are illegal in Windows file names (`: ? * " < > | \ /`) are removed on every
+  platform, so the library can be moved to a NAS or an external drive without breaking.
+- Very long names are shortened to 200 characters.
+- Two spellings of the same author (`J.K. Rowling` and `JK Rowling`) resolve to one folder, and an
+  existing folder that means the same thing is reused rather than duplicated.
+- If two different books would end up with the same file name, the second gets a `(2)` suffix
+  instead of overwriting the first.
 
-It exercises path sanitisation, author and series folder resolution, planning determinism,
-atomic and repeatable copying, cancellation, and CSV import robustness.
+## If something goes wrong
 
-### Build Installers
+| Symptom | Likely cause |
+| --- | --- |
+| Books show as **Skipped** and nothing is copied | The source folder does not contain the files named in the CSV. Check the source path, and re-export the CSV if you have moved files since. |
+| The app window opens but stays empty | Port `5123` is in use by something else. The app runs its backend there. Close the other program and restart the app. |
+| "Sort already in progress" | A run is still going. Wait for it, or cancel it. |
+| Some books land under **Unknown** | Those rows have no author in the CSV. Fix them in OpenAudible and re-export. |
+| A row is missing from the library | The CSV row could not be read. The app reports how many rows it skipped when loading. |
 
-```sh
-cd electron-ui
+---
 
-# Windows (NSIS installer)
-npm run dist:win
+# Docker (web app)
 
-# Linux (AppImage + deb)
-npm run dist:linux
+The container runs the same organiser with a browser interface instead of a desktop window, which
+suits a NAS or home server. Unlike the desktop app, its paths are fixed by the container's
+environment rather than chosen in the browser — the web page is a control panel for the container.
 
-# macOS x64 (dmg)
-npm run dist:mac-x64
-
-# macOS Apple Silicon (dmg)
-npm run dist:mac-arm
-```
-
-Installers are output to `electron-ui/release/`.
-
-## Docker Image
-
-The web app container is published to GitHub Container Registry under GitHub Packages as:
+## The image
 
 ```text
 ghcr.io/orbitalteapot/openaudible-bookorganizer
 ```
 
-Note that the image name has no hyphen between "book" and "organizer".
-
-Available tags are published by the release workflow:
-
-- Exact release version, for example `1.2.3`
-- Major/minor version, for example `1.2`
-- `latest`
-
-A pre-release such as `3.1.0-beta.1` is published under its exact version only. `latest` and the
-major/minor tag keep pointing at the most recent stable release, so pulling `latest` never lands
-you on a beta by accident — you have to ask for the version by name.
-
-### Pull the Image
+Note there is **no hyphen** between "book" and "organizer" in the image name.
 
 ```sh
 docker pull ghcr.io/orbitalteapot/openaudible-bookorganizer:latest
 ```
 
-### How the Docker Image Works
+Tags published by the release workflow:
 
-The Docker image runs the ASP.NET Core `ManagerApi` together with the built frontend, so the container exposes a browser-based interface instead of an automatic watcher process.
+| Tag | Points at |
+| --- | --- |
+| `latest` | The most recent stable release. |
+| `3.1` | The most recent `3.1.x` stable release. |
+| `3.1.0` | That exact release, forever. |
+| `3.1.0-beta.1` | A pre-release, under its exact version **only**. |
 
-At startup and while running, it uses:
+A pre-release never becomes `latest` or the major/minor tag, so pulling `latest` cannot land you on
+a beta by accident — you have to ask for it by name.
 
-- `CSV_PATH` to load book metadata from your OpenAudible export
-- `SOURCE_PATH` as the mounted source folder that contains your audiobook files
-- `DESTINATION_PATH` as the folder where organized books are written
+## Run it
 
-Optional:
-
-- `OABO_MAX_PARALLELISM` sets how many books are copied at once. It defaults to a quarter of the
-  available CPU cores, capped at 8. Lower it to `1` or `2` if the destination is a network share
-  or a spinning disk, where more concurrency makes transfers slower rather than faster.
-- `COMPARISON_MODE` sets the default update check, `quick` (the default) or `full`. See
-  [Keeping books up to date](#keeping-books-up-to-date). The Sort page can override it per run.
-
-### How the Website Works
-
-When the container is running, it serves a website on port `5123`.
-
-That website has two main jobs:
-
-- `Library` page: loads and displays the books from the CSV file configured inside the container
-- `Sort` page: starts a sort run using the container's fixed `CSV_PATH`, `SOURCE_PATH`, and `DESTINATION_PATH`
-
-In the Docker version, those paths are not chosen in the browser. They are supplied by the container environment and mounts, which means the website is acting as a control panel for the container rather than a file-picker UI.
-
-The normal website flow is:
-
-1. Start the container.
-2. Open `http://localhost:5123`.
-3. Go to the `Library` page and load the configured CSV.
-4. Review your books in the browser.
-5. Go to the `Sort` page and click `Start Sorting`.
-6. Watch progress in the website while files are copied into the destination folder.
-
-The web UI lets you:
-
-- load the configured CSV into the library view
-- browse the books in your OpenAudible export
-- manually trigger a sort operation
-- monitor progress in the browser while files are copied
-
-The sort process matches files against the CSV metadata and then writes them into an output structure like:
-
-```text
-Author/
-  Series/
-    Book 1/
-      Book Title.m4b
-      Book Title.pdf
-```
-
-If a companion PDF is present in the CSV metadata and available in the source data, it is copied alongside the audiobook.
-
-### Run the Web App Container
-
-Mount three directories:
-
-- A local `./data` folder containing your OpenAudible CSV export as `books.csv`
-- Your source audiobook folder
-- Your destination folder for organized books
-
-The container expects these environment variables:
-
-- `CSV_PATH=/data/books.csv`
-- `SOURCE_PATH=/source`
-- `DESTINATION_PATH=/destination`
-- `COMPARISON_MODE=quick` (optional; use `full` to compare every byte)
-
-Example:
+You need three directories on the host: one holding your CSV export, your source audiobooks, and
+the destination for the organised library.
 
 ```sh
 docker run -d \
-  --name openaudible-book-organizer \
+  --name openaudible-bookorganizer \
   -e CSV_PATH=/data/books.csv \
   -e SOURCE_PATH=/source \
   -e DESTINATION_PATH=/destination \
   -p 5123:5123 \
   -v ./data:/data \
-  -v /path/to/local/audiobooks:/source \
-  -v /path/to/local/organized:/destination \
+  -v /path/to/your/audiobooks:/source \
+  -v /path/to/your/organized:/destination \
   --restart unless-stopped \
   ghcr.io/orbitalteapot/openaudible-bookorganizer:latest
 ```
 
-### What to Do After the Container Starts
-
-Once the container is running, the normal flow is:
-
-1. Export your library from OpenAudible to a CSV file.
-2. Put that CSV file at the mounted path expected by the container, usually `./data/books.csv`.
-3. Make sure your audiobook files exist in the mounted source folder.
-4. Open `http://localhost:5123` in your browser.
-5. Load the library from the configured CSV path.
-6. Trigger sorting from the Sort page in the web UI.
-
-You can think of the website as the front door to the container:
-
-- Docker mounts provide the files and folders
-- the API inside the container reads those paths
-- the browser UI tells the API when to load the library and when to run sorting
-
-The container-to-host mapping used by the sample setup is:
-
-- `./data` on the host -> `/data` in the container
-- your audiobook source folder on the host -> `/source` in the container
-- your organized library folder on the host -> `/destination` in the container
-- host port `5123` -> container port `5123`
-
-In practice, that means:
-
-- the source and destination paths are fixed by the container environment variables
-- sorting only happens when you trigger it from the web app
-- organized output will appear in your destination folder on the host machine
-
-### Verifying That It Is Working
-
-After startup, you should verify three things:
-
-1. The container is running:
-
-```sh
-docker ps
-```
-
-2. The web app is reachable in the browser:
-
-```sh
-http://localhost:5123
-```
-
-3. Books begin appearing in your destination folder after you start a sort from the UI.
-
-Typical things to look for in the logs:
-
-- the API started successfully
-- the configured paths are what you expected
-- the CSV file exists at the mounted location
-- sort requests complete without errors
-
-View logs with:
-
-```sh
-docker logs -f openaudible-book-organizer
-```
-
-### Updating the CSV
-
-If you export a new CSV from OpenAudible, replace the existing `books.csv` file in your mounted data folder. Then refresh the browser and reload the library from the web UI before starting another sort.
-
-### Stopping or Restarting the Container
-
-Use these commands for normal management:
-
-```sh
-docker stop openaudible-book-organizer
-docker start openaudible-book-organizer
-docker restart openaudible-book-organizer
-```
-
-### Common Setup Issues
-
-- If the site does not load, verify that port `5123` is published and not already in use.
-- If the library does not load, check that `books.csv` exists and matches the mounted `CSV_PATH`.
-- If sorting fails, verify that your source and destination host folder mounts are correct.
-- If the package cannot be pulled, confirm that the package exists under GitHub Packages and that your GHCR login has access.
-- If files are present but not being matched, export a fresh CSV from OpenAudible, replace `books.csv`, and reload the library in the web app.
-
-### Use docker-compose.yml
-
-This repository already includes a sample [docker-compose.yml](docker-compose.yml).
-
-1. Put your OpenAudible CSV export in `./data/books.csv`.
-2. Replace the example source and destination mount paths with your real folders.
-3. If you want to use the published package instead of building locally, change the service from `build:` to `image:`.
-4. Start the stack and open `http://localhost:5123` in your browser.
-
-Example service using the published image:
+Or with the [docker-compose.yml](docker-compose.yml) in this repository:
 
 ```yaml
 services:
@@ -348,34 +244,105 @@ services:
     restart: unless-stopped
 ```
 
-Then start it with:
-
 ```sh
 docker compose up -d
 ```
 
-Then open:
+Then open <http://localhost:5123>, load the library, and start a sort — the same two pages as the
+desktop app, minus the file pickers.
 
-```text
-http://localhost:5123
+## Configuration
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `CSV_PATH` | yes | — | The OpenAudible CSV export, inside the container. |
+| `SOURCE_PATH` | yes | — | Mounted folder holding your downloaded audiobooks. |
+| `DESTINATION_PATH` | yes | — | Mounted folder to write the organised library into. |
+| `COMPARISON_MODE` | no | `quick` | Default update check: `quick` or `full`. The Sort page can override it per run. |
+| `OABO_MAX_PARALLELISM` | no | cores ÷ 4, max 8 | How many books are copied at once. Set `1` or `2` for a network share or a spinning disk, where more concurrency is slower, not faster. |
+| `ASPNETCORE_URLS` | no | `http://0.0.0.0:5123` | Change the port the container listens on. |
+
+## Updating your library
+
+Replace `books.csv` in the mounted data folder with a fresh export, reload the library in the
+browser, then start a sort.
+
+## Checking it works
+
+```sh
+docker ps                                    # container is running
+curl http://localhost:5123/api/health        # {"status":"ok"}
+docker logs -f openaudible-bookorganizer     # startup, configured paths, sort results
 ```
 
-### Where to Find It on GitHub
+The log lines at startup show which paths the container resolved, which is the quickest way to
+spot a mount that is not where you thought it was.
 
-The Docker image is published to GitHub Packages, not attached to the GitHub Release assets.
+## Docker troubleshooting
 
-- Repo owner packages page: `https://github.com/users/orbitalteapot/packages`
-- Package URL: `https://github.com/users/orbitalteapot/packages/container/package/openaudible-bookorganizer`
+| Symptom | Likely cause |
+| --- | --- |
+| Page does not load | Port `5123` is not published, or is taken on the host. |
+| "CSV file not found" | `CSV_PATH` does not match where the file is mounted. |
+| Everything is skipped | `SOURCE_PATH` is mounted somewhere other than where the books are. |
+| "The destination folder cannot be the source folder or live inside it" | Copying a folder into itself never terminates cleanly, so it is refused. Mount them separately. |
+| `docker pull` fails | Check the image name has no hyphen between "book" and "organizer", and that you are logged in to GHCR if the package is private. |
 
-Depending on GitHub package visibility and linkage, it may appear under the owner Packages page before it appears in the repository sidebar.
+The image is published to GitHub Packages, not attached to release assets:
+`https://github.com/users/orbitalteapot/packages/container/package/openaudible-bookorganizer`
 
-## Directory Structure
+---
 
-Books are organized into the following folder structure:
+# Building from source
 
-```text
-J.K. Rowling (Author)
-\-- Wizarding World (Series)
-    +-- Book 1
-        \-- Harry Potter and the Sorcerer's Stone.mp3
+### Prerequisites
+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
+- [Node.js](https://nodejs.org/) 20 or newer
+
+### Run in development
+
+```sh
+# Terminal 1 — the C# backend
+dotnet run --project ManagerApi
+
+# Terminal 2 — the Electron app
+cd electron-ui
+npm install
+npm run dev
 ```
+
+### Run the tests
+
+```sh
+dotnet test OpenAudibleBookManager.sln     # sorting engine
+npm --prefix electron-ui test              # library search and ordering
+```
+
+The backend suite covers path sanitisation, author and series folder resolution, planning
+determinism, atomic and repeatable copying, both update checks, cancellation and CSV import
+robustness. The frontend suite covers searching, and the ordering rules behind each column.
+
+### Build installers
+
+```sh
+cd electron-ui
+npm run dist:win        # Windows NSIS installer
+npm run dist:linux      # Linux AppImage + deb
+npm run dist:mac-x64    # macOS Intel dmg
+npm run dist:mac-arm    # macOS Apple Silicon dmg
+```
+
+Output lands in `electron-ui/release/`. Each build publishes the backend as a self-contained
+binary first, which is why the installers are large and why users need no runtime installed.
+
+### How it fits together
+
+| Project | Role |
+| --- | --- |
+| `AudioFileSorter` | The organiser: reads the CSV, decides where every book goes, copies it there. |
+| `ManagerApi` | ASP.NET Core host exposing that over HTTP, and serving the web UI in Docker. |
+| `electron-ui` | React interface, running either in an Electron window or in a browser. |
+
+The desktop app is the same web interface in an Electron window, with the backend started as a
+child process on port 5123 and native file pickers wired in.
