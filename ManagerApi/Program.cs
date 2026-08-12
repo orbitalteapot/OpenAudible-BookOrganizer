@@ -1,7 +1,16 @@
 using AudioFileSorter.Model;
 using ManagerApi.Services;
 
-var builder = WebApplication.CreateBuilder(args);
+// Pin the content root to where the binary actually lives. The default is the current working
+// directory, which is fine for the container (WORKDIR is the app) but arbitrary for the desktop
+// app, where the backend is spawned as a child process and inherits whatever directory the user
+// happened to launch from. That made "which files does the server serve" depend on how it was
+// started.
+var builder = WebApplication.CreateBuilder(new WebApplicationOptions
+{
+    Args = args,
+    ContentRootPath = AppContext.BaseDirectory
+});
 
 var csvPath = Environment.GetEnvironmentVariable("CSV_PATH") ?? string.Empty;
 var sourcePath = Environment.GetEnvironmentVariable("SOURCE_PATH") ?? string.Empty;
@@ -36,8 +45,21 @@ var app = builder.Build();
 var logger = app.Logger;
 
 app.UseCors();
-app.UseDefaultFiles();
-app.UseStaticFiles();
+
+// The desktop app ships the backend without a wwwroot: its window loads the interface straight
+// off disk, and the backend is only an API. Only wire up static hosting when there is something
+// to host, rather than logging "the WebRootPath was not found" on every desktop launch and
+// answering unknown routes with an index.html that does not exist.
+var servesWebUi = Directory.Exists(Path.Combine(app.Environment.ContentRootPath, "wwwroot"));
+if (servesWebUi)
+{
+    app.UseDefaultFiles();
+    app.UseStaticFiles();
+}
+else
+{
+    logger.LogInformation("No wwwroot alongside the backend: serving the API only.");
+}
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 
@@ -172,7 +194,10 @@ app.MapPost("/api/sort/cancel", (SortService sortService) =>
         : Results.BadRequest(new { error = "No sort is currently running" });
 });
 
-app.MapFallbackToFile("index.html");
+if (servesWebUi)
+{
+    app.MapFallbackToFile("index.html");
+}
 
 app.Run();
 

@@ -143,6 +143,17 @@ function createWindow() {
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
+
+  // The window is frameless, so the title bar draws its own maximise/restore glyph. Snapping the
+  // window with an OS shortcut changes the state without going through our IPC, and the glyph
+  // would keep showing the previous one until the button was clicked.
+  const publishMaximized = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:maximized-changed', mainWindow.isMaximized());
+    }
+  };
+  mainWindow.on('maximize', publishMaximized);
+  mainWindow.on('unmaximize', publishMaximized);
 }
 
 function withWindow(action) {
