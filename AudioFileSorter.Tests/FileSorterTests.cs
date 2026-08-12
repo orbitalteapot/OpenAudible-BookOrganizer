@@ -98,8 +98,75 @@ public class FileSorterTests
 
         Assert.Empty(workspace.DestinationDirectories());
         Assert.Equal(0, summary.CopiedBooks);
-        Assert.Equal(1, summary.SkippedBooks);
+        Assert.Equal(1, summary.MissingBooks);
         Assert.Equal(1, summary.WarningCount);
+    }
+
+    [Fact]
+    public async Task Sort_counts_a_book_with_no_source_file_as_missing_not_as_up_to_date()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("present.m4b");
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Present Book", filename: "present"),
+            TempWorkspace.Book(title: "Absent Book", filename: "absent"));
+
+        Assert.Equal(1, summary.CopiedBooks);
+        Assert.Equal(1, summary.MissingBooks);
+
+        // The distinction is the whole point: reporting a book that was never downloaded as
+        // "already up to date" tells someone their library is organised when it is not.
+        Assert.Equal(0, summary.SkippedBooks);
+        Assert.Equal(0, summary.FailedBooks);
+    }
+
+    [Fact]
+    public async Task Sort_separates_missing_books_from_books_that_are_genuinely_up_to_date()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("present.m4b");
+
+        var books = new[]
+        {
+            TempWorkspace.Book(title: "Present Book", filename: "present"),
+            TempWorkspace.Book(title: "Absent Book", filename: "absent")
+        };
+
+        await Sort(workspace, books);
+        var second = await Sort(workspace, books);
+
+        Assert.Equal(0, second.CopiedBooks);
+        Assert.Equal(1, second.SkippedBooks);
+        Assert.Equal(1, second.MissingBooks);
+    }
+
+    [Fact]
+    public async Task Progress_reports_missing_books_while_the_run_is_going()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("present.m4b");
+
+        var reports = new List<SortProgressInfo>();
+        var progress = new Progress<SortProgressInfo>(report => { lock (reports) { reports.Add(report); } });
+
+        await Sort(
+            workspace,
+            progress,
+            TempWorkspace.Book(title: "Present Book", filename: "present"),
+            TempWorkspace.Book(title: "Absent Book", filename: "absent"));
+
+        await WaitForAsync(() => { lock (reports) { return reports.Any(r => r.IsComplete); } });
+
+        SortProgressInfo final;
+        lock (reports)
+        {
+            final = reports.Last(r => r.IsComplete);
+        }
+
+        Assert.Equal(1, final.MissingBooks);
+        Assert.Equal(0, final.SkippedBooks);
     }
 
     [Fact]

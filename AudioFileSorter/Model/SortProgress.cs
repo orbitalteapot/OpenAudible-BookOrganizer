@@ -9,8 +9,15 @@ public class SortProgressInfo
     /// <summary>Books where an out-of-date file at the destination was replaced. Part of <see cref="CopiedBooks"/>.</summary>
     public int UpdatedBooks { get; set; }
 
-    /// <summary>Books that needed no work: already up to date, or with no matching source file.</summary>
+    /// <summary>Books already present and up to date at the destination, so nothing was written.</summary>
     public int SkippedBooks { get; set; }
+
+    /// <summary>
+    /// Books listed in the export with no matching file in the source folder — usually books that
+    /// have not been downloaded. Counted apart from <see cref="SkippedBooks"/>, because "not here"
+    /// and "already organised" mean very different things to whoever is reading the number.
+    /// </summary>
+    public int MissingBooks { get; set; }
 
     /// <summary>Books that could not be processed because of an error.</summary>
     public int FailedBooks { get; set; }

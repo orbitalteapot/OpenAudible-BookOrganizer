@@ -102,13 +102,14 @@ point — books already copied are complete files, and re-running picks up where
 
 ![A finished sort](images/app-sort-complete.png)
 
-When it finishes you get four numbers:
+When it finishes you get five numbers:
 
 | Counter | Meaning |
 | --- | --- |
 | **Copied** | Books written to the destination, whether new or replaced. |
 | **Updated** | Of those, the ones that replaced an out-of-date copy. |
-| **Skipped** | Already up to date, or no matching file found in the source folder. |
+| **Skipped** | Already at the destination and up to date, so nothing was written. |
+| **Not found** | Listed in the export, but no matching file in the source folder — usually books you have not downloaded. |
 | **Failed** | Could not be processed. Details are in the backend log. |
 
 Running a sort again after adding books is cheap: everything already in place is skipped.
@@ -168,7 +169,7 @@ Names come from your metadata, cleaned up so the result is portable:
 
 | Symptom | Likely cause |
 | --- | --- |
-| Books show as **Skipped** and nothing is copied | The source folder does not contain the files named in the CSV. Check the source path, and re-export the CSV if you have moved files since. |
+| Books show as **Not found** and nothing is copied | The source folder does not contain the files named in the CSV. Check the source path, and re-export the CSV if you have moved files since. |
 | The app window opens but stays empty | Port `5123` is in use by something else. The app runs its backend there. Close the other program and restart the app. |
 | "Sort already in progress" | A run is still going. Wait for it, or cancel it. |
 | Some books land under **Unknown** | Those rows have no author in the CSV. Fix them in OpenAudible and re-export. |
@@ -284,7 +285,7 @@ spot a mount that is not where you thought it was.
 | --- | --- |
 | Page does not load | Port `5123` is not published, or is taken on the host. |
 | "CSV file not found" | `CSV_PATH` does not match where the file is mounted. |
-| Everything is skipped | `SOURCE_PATH` is mounted somewhere other than where the books are. |
+| Everything is **Not found** | `SOURCE_PATH` is mounted somewhere other than where the books are. |
 | "The destination folder cannot be the source folder or live inside it" | Copying a folder into itself never terminates cleanly, so it is refused. Mount them separately. |
 | `docker pull` fails | Check the image name has no hyphen between "book" and "organizer", and that you are logged in to GHCR if the package is private. |
 
