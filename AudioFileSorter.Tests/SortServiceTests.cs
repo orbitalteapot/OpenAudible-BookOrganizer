@@ -240,6 +240,81 @@ public class SortServiceTests
         Assert.Equal(["Author/Book Two.m4b"], workspace.DestinationFiles());
     }
 
+    [Fact]
+    public async Task Sorting_re_reads_the_csv_when_it_has_been_re_exported_over_the_top()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("book-one.m4b");
+        workspace.WriteSourceFile("book-two.m4b");
+
+        // OpenAudible writes over the same file every export, and a container's CSV_PATH never
+        // changes at all, so "same path" cannot be taken to mean "same library".
+        var csv = WriteCsv(workspace, "Book One,Author,book-one");
+
+        var service = new SortService();
+        await service.ParseBooks(csv);
+
+        await OverwriteCsv(csv, "Book One,Author,book-one", "Book Two,Author,book-two");
+
+        Assert.True(service.TryStartSort(csv, workspace.Source, workspace.Destination, out var sortTask));
+        await sortTask;
+
+        Assert.Equal(["Author/Book One.m4b", "Author/Book Two.m4b"], workspace.DestinationFiles());
+    }
+
+    [Fact]
+    public async Task Sorting_reuses_the_loaded_library_when_the_csv_has_not_changed()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("book-one.m4b");
+
+        var csv = WriteCsv(workspace, "Book One,Author,book-one");
+
+        var service = new SortService();
+        await service.ParseBooks(csv);
+        var loaded = service.GetBooks();
+
+        Assert.True(service.TryStartSort(csv, workspace.Source, workspace.Destination, out var sortTask));
+        await sortTask;
+
+        // Same instance, not merely equal: an untouched file must not be read again, and the
+        // library on screen must not be swapped out underneath the person looking at it.
+        Assert.Same(loaded, service.GetBooks());
+    }
+
+    [Fact]
+    public async Task A_re_export_that_removes_books_is_picked_up_too()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("book-one.m4b");
+        workspace.WriteSourceFile("book-two.m4b");
+
+        var csv = WriteCsv(workspace, "Book One,Author,book-one", "Book Two,Author,book-two");
+
+        var service = new SortService();
+        await service.ParseBooks(csv);
+        Assert.Equal(2, service.GetBooks().Count);
+
+        await OverwriteCsv(csv, "Book Two,Author,book-two");
+
+        Assert.True(service.TryStartSort(csv, workspace.Source, workspace.Destination, out var sortTask));
+        await sortTask;
+
+        Assert.Equal(["Author/Book Two.m4b"], workspace.DestinationFiles());
+    }
+
+    /// <summary>
+    /// Rewrites an export in place. The delay is deliberate: the change is detected from the
+    /// file's last-write time, and a same-millisecond rewrite of the same length would be
+    /// indistinguishable from no change at all on a coarse filesystem clock.
+    /// </summary>
+    private static async Task OverwriteCsv(string path, params string[] rows)
+    {
+        await Task.Delay(20);
+        await File.WriteAllTextAsync(path, "Title,Author,File name\n" + string.Join("\n", rows) + "\n");
+        File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
+    }
+
     private static string WriteCsv(TempWorkspace workspace, params string[] rows)
     {
         var path = Path.Combine(workspace.Root, $"{Guid.NewGuid():N}.csv");
