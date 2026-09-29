@@ -14,11 +14,13 @@ import { getSchedule } from '../api';
  *
  * `error` says why the last change was refused. A refusal about a path ("The destination folder
  * does not exist") is the one `fieldErrors` holds for that path, shown until that one goes: a
- * different path is picked, or the folder turns up.
+ * different path is picked, or the folder turns up. A refusal about no one setting (the settings
+ * file cannot be written, the backend is unreachable) is left to `useSettings`' own `error`, which
+ * the page already shows above every card and clears once a save succeeds.
  */
 export default function useSchedule({ settings, update, fieldErrors, runFinishedUtc }) {
   const [schedule, setSchedule] = useState(null);
-  const [refusal, setRefusal] = useState(null);
+  const [refusedField, setRefusedField] = useState(null);
   const [saving, setSaving] = useState(false);
   const latest = useRef(0);
 
@@ -47,7 +49,7 @@ export default function useSchedule({ settings, update, fieldErrors, runFinished
   const changeInterval = useCallback(
     async (minutes) => {
       setSaving(true);
-      setRefusal(null);
+      setRefusedField(null);
       const patch =
         minutes === null
           ? { scheduleIntervalMinutes: null, keepRunningInBackground: false, openAtLogin: false }
@@ -55,13 +57,13 @@ export default function useSchedule({ settings, update, fieldErrors, runFinished
 
       const refused = await update(patch);
       setSaving(false);
-      if (refused) setRefusal({ field: refused.field, message: refused.message });
+      setRefusedField(refused?.field ?? null);
       return !refused;
     },
     [update]
   );
 
-  const error = refusal?.field ? (fieldErrors?.[refusal.field] ?? null) : (refusal?.message ?? null);
+  const error = refusedField ? (fieldErrors?.[refusedField] ?? null) : null;
 
   return useMemo(
     () => ({ schedule, error, saving, changeInterval }),
