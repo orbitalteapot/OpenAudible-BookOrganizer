@@ -135,6 +135,9 @@ async function start({ packaged, settingsPath, onUnexpectedExit }) {
   console.log(`[API] Starting backend on ${baseUrl}: ${command.file} ${command.args.join(' ')}`);
   child = spawn(command.file, command.args, {
     stdio: 'pipe',
+    // The backend is a console program; started from this windowed app, Windows would give it
+    // its own visible console window, and closing that window would stop the backend mid-sort.
+    windowsHide: true,
     // OABO_PARENT_PID: the backend stops itself when this process is gone, so a crash or a
     // force-quit never leaves it running automatic sorts on its own.
     env: {
@@ -201,7 +204,8 @@ function stop() {
 
   try {
     if (process.platform === 'win32') {
-      spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t']);
+      // windowsHide: taskkill is a console program too, and would flash a window on every quit.
+      spawn('taskkill', ['/pid', String(proc.pid), '/f', '/t'], { windowsHide: true });
     } else {
       proc.kill('SIGTERM');
     }
