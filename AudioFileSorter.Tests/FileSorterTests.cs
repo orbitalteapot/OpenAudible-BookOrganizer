@@ -176,6 +176,27 @@ public class FileSorterTests
     }
 
     [Fact]
+    public async Task Sort_keeps_the_only_copy_of_a_missing_book_that_shares_a_title_with_another()
+    {
+        // As main left two books called "Collected Works"; the first has since gone from the source.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("second.m4b", "second-book");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "first-book");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works (2).m4b"), "second-book");
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Collected Works", filename: "first"),
+            TempWorkspace.Book(title: "Collected Works", filename: "second"));
+
+        Assert.Equal(
+            ["An Author/Collected Works (2)/Collected Works.m4b", "An Author/Collected Works.m4b"],
+            workspace.DestinationFiles());
+        Assert.Equal("first-book", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "Collected Works.m4b")));
+        Assert.Equal(SortCounts.Empty with { Moved = 1, NotFound = 1 }, summary.Counts);
+    }
+
+    [Fact]
     public async Task Sort_moves_a_loose_book_from_an_older_version_into_its_own_folder()
     {
         using var workspace = new TempWorkspace();

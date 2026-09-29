@@ -1,7 +1,7 @@
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { BookOpen, FileUp, RefreshCw, Search } from 'lucide-react';
-import { chooseCsvFile } from '../desktop';
-import { useDebounced } from '../hooks';
+import { choosePath } from '../desktop';
+import { useDebounced, useFocusFallback } from '../hooks';
 import { CSV_FIELD, describePath } from '../paths';
 import { compareBooks, filterBooks, SORT_LABELS } from '../sorting';
 import Button from './ui/Button';
@@ -32,17 +32,20 @@ function ImportNotice({ skippedRows, warnings }) {
   );
 }
 
-/** Reload, and on the desktop "Choose export…". The browser build reads the export the server names. */
-function LibraryActions({ library, isElectron, onChoose, csvPath }) {
+/**
+ * Reload, and on the desktop "Choose export…". The browser build reads the export the server names.
+ * `buttonProps` go on both buttons.
+ */
+function LibraryActions({ library, isElectron, onChoose, csvPath, buttonProps }) {
   return (
     <>
       {csvPath && (
-        <Button icon={RefreshCw} loading={library.loading} onClick={library.reload}>
+        <Button icon={RefreshCw} loading={library.loading} onClick={library.reload} {...buttonProps}>
           Reload
         </Button>
       )}
       {isElectron && (
-        <Button variant={csvPath ? 'secondary' : 'primary'} icon={FileUp} onClick={onChoose}>
+        <Button variant={csvPath ? 'secondary' : 'primary'} icon={FileUp} onClick={onChoose} {...buttonProps}>
           Choose export…
         </Button>
       )}
@@ -74,6 +77,10 @@ function emptyStateText({ library, csvPath, isElectron }) {
 function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState({ field: 'title', dir: 'asc' });
+  // Why the last "Choose export…" was refused, when that is not about the export itself: saving a
+  // new export checks every folder, and an unplugged destination or a settings file that cannot be
+  // written would otherwise leave the click looking as if it did nothing.
+  const [chooseError, setChooseError] = useState(null);
   const debouncedSearch = useDebounced(search);
 
   const { books } = library;
@@ -81,14 +88,28 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
   // An export the backend cannot see is explained the way the Folders card does, which in the browser
   // names the container's mapping and CSV_PATH; any other failure to read it is the backend's own words.
   const csvStatus = describePath(CSV_FIELD, settings, fieldErrors.csvPath, isElectron);
-  const error = csvStatus.tone === 'critical' ? csvStatus.text : library.error;
+  const error = chooseError
+    ? `Couldn't use this export: ${chooseError}`
+    : csvStatus.tone === 'critical'
+      ? csvStatus.text
+      : library.error;
+
+  // The empty page's buttons go when the books arrive; the search field is where the table starts.
+  const searchRef = useRef(null);
+  const emptyActionFocus = useFocusFallback(books.length > 0, searchRef);
 
   const handleChoose = useCallback(async () => {
-    const path = await chooseCsvFile();
+    const path = await choosePath(CSV_FIELD, csvPath);
     if (!path) return;
+    setChooseError(null);
     // A different export is loaded as soon as the saved path changes; the same one is just re-read.
-    if (path === csvPath) library.reload();
-    else await update({ csvPath: path });
+    if (path === csvPath) {
+      library.reload();
+      return;
+    }
+    const refusal = await update({ csvPath: path });
+    // One about the export itself is already shown, as the Folders card shows it.
+    if (refusal && refusal.field !== CSV_FIELD.field) setChooseError(refusal.message);
   }, [csvPath, library, update]);
 
   const handleSort = useCallback((field) => {
@@ -126,7 +147,13 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
     return (
       <EmptyState icon={BookOpen} title={title} description={description}>
         <div className="flex flex-wrap justify-center gap-2">
-          <LibraryActions library={library} isElectron={isElectron} onChoose={handleChoose} csvPath={csvPath} />
+          <LibraryActions
+            library={library}
+            isElectron={isElectron}
+            onChoose={handleChoose}
+            csvPath={csvPath}
+            buttonProps={emptyActionFocus}
+          />
         </div>
         {error && <Banner tone="critical">{error}</Banner>}
         <ImportNotice skippedRows={library.skippedRows} warnings={library.warnings} />
@@ -151,6 +178,7 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
 
         <div className="flex items-center gap-2">
           <TextInput
+            ref={searchRef}
             type="search"
             icon={Search}
             className="w-56"

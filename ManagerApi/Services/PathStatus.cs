@@ -22,8 +22,8 @@ public sealed record PathStatus(string Csv, string Source, string Destination)
 
     /// <summary>
     /// Why a sort with these settings could not start, without writing anything, or null when
-    /// nothing visible is wrong. A path fixed by the environment is named by its variable, since
-    /// that is where it has to be fixed.
+    /// nothing visible is wrong. A path fixed by the environment is explained in its terms (see
+    /// <see cref="ServerConfig.Explain"/>), since that is where it has to be fixed.
     /// </summary>
     public static string? BlockedReason(AppSettings settings, ServerConfig config)
     {
@@ -32,12 +32,7 @@ public sealed record PathStatus(string Csv, string Source, string Destination)
             SortPathValidator.ValidateSource(settings.SourcePath) ??
             SortPathValidator.InspectDestination(settings.SourcePath, settings.DestinationPath);
 
-        return problem switch
-        {
-            null => null,
-            { Code: SortPathProblemCode.NotSet } when config.PathsLocked => $"{ServerConfig.VariableFor(problem.Field)} is not set.",
-            _ => problem.Message
-        };
+        return problem is null ? null : config.Explain(problem).Message;
     }
 
     private static string Describe(SortPathProblem? problem) => problem?.Code switch

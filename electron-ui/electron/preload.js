@@ -9,8 +9,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Where the backend listens, e.g. "http://127.0.0.1:49731". Empty if it could not be started. */
   backendUrl,
 
-  openFile: (filters) => ipcRenderer.invoke('dialog:openFile', filters),
-  openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
+  /** Both take `{ title, message, buttonLabel, defaultPath }`; openFile also `filters`. */
+  openFile: (options) => ipcRenderer.invoke('dialog:openFile', options),
+  openFolder: (options) => ipcRenderer.invoke('dialog:openFolder', options),
   minimize: () => ipcRenderer.invoke('window:minimize'),
   maximize: () => ipcRenderer.invoke('window:maximize'),
   close: () => ipcRenderer.invoke('window:close'),

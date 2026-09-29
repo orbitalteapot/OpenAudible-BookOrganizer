@@ -1,6 +1,6 @@
-import { fireEvent, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { parseLibrary } from '../../api';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError, parseLibrary, updateSettings } from '../../api';
 import { settingsResponse } from '../../test/fixtures';
 import { renderApp } from '../../test/renderApp';
 
@@ -48,5 +48,58 @@ describe('Library', () => {
     fireEvent.click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getByText('Row 7: no title')).toBeTruthy();
+  });
+
+  describe('on the desktop', () => {
+    beforeEach(() => {
+      window.electronAPI = {
+        openFile: vi.fn(),
+        openFolder: vi.fn(),
+        isMaximized: vi.fn().mockResolvedValue(false),
+        onMaximizedChanged: vi.fn(() => () => {}),
+        setBackgroundOptions: vi.fn(),
+        setTheme: vi.fn(),
+      };
+    });
+    afterEach(() => {
+      delete window.electronAPI;
+    });
+
+    it('says why a chosen export was refused when the reason is not the export', async () => {
+      renderApp({ library: { books: [book('We Are Legion')], skippedRows: 0, warnings: [] } });
+      await screen.findByText('1 audiobooks');
+      vi.mocked(window.electronAPI.openFile).mockResolvedValue('/media/usb/new.csv');
+      vi.mocked(updateSettings).mockRejectedValueOnce(
+        new ApiError('The destination folder does not exist. Is the drive connected?', {
+          status: 400,
+          code: 'destinationMissing',
+          field: 'destinationPath',
+        })
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Choose export…' }));
+
+      expect(
+        await screen.findByText("Couldn't use this export: The destination folder does not exist. Is the drive connected?")
+      ).toBeTruthy();
+      // The dialog said what it was for and opened at the export in use.
+      expect(window.electronAPI.openFile).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Choose the CSV export', defaultPath: '/books/library.csv' })
+      );
+    });
+
+    it('puts focus on the search field when books chosen from the empty page arrive', async () => {
+      renderApp({ settings: settingsResponse({ csvPath: null, pathStatus: { csv: 'notSet', source: 'ok', destination: 'ok' } }) });
+      const choose = await screen.findByRole('button', { name: 'Choose export…' });
+      vi.mocked(window.electronAPI.openFile).mockResolvedValue('/books/library.csv');
+      vi.mocked(updateSettings).mockResolvedValueOnce(settingsResponse());
+      vi.mocked(parseLibrary).mockResolvedValue({ books: [book('We Are Legion')], skippedRows: 0, warnings: [] });
+
+      choose.focus();
+      fireEvent.click(choose);
+
+      await screen.findByText('1 audiobooks');
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('searchbox', { name: 'Search books' })));
+    });
   });
 });

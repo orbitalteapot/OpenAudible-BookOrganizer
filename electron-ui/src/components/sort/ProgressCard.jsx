@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Square } from 'lucide-react';
 import { formatDateTime, RUN_COUNTS, summariseRun } from '../../format';
-import { isRunning } from '../../hooks';
+import { isRunning, useFocusFallback } from '../../hooks';
 import Button from '../ui/Button';
 import { Banner, Card, ProgressBar, Stat } from '../ui/Surface';
 import ProblemsList from './ProblemsList';
@@ -56,6 +56,11 @@ export default function ProgressCard({ status, cancel, lostContact }) {
   const [canceling, setCanceling] = useState(false);
   const cancelError = cancelFailure?.run === status?.startedUtc ? cancelFailure.message : null;
 
+  const running = isRunning(status);
+  // Cancel goes when the run ends, whether it was cancelled or finished on its own.
+  const headingRef = useRef(null);
+  const cancelFocus = useFocusFallback(!running, headingRef);
+
   if (!status || status.state === 'idle') {
     return (
       <Card title="Progress">
@@ -65,7 +70,6 @@ export default function ProgressCard({ status, cancel, lostContact }) {
     );
   }
 
-  const running = isRunning(status);
   const counts = status.counts ?? {};
   const percentage = status.percentage || 0;
   const summary = running ? null : summariseRun(status);
@@ -86,10 +90,11 @@ export default function ProgressCard({ status, cancel, lostContact }) {
   return (
     <Card
       title="Progress"
+      titleRef={headingRef}
       description={describeRun(status)}
       actions={
         running && (
-          <Button icon={Square} loading={canceling} onClick={handleCancel}>
+          <Button icon={Square} loading={canceling} onClick={handleCancel} {...cancelFocus}>
             Cancel
           </Button>
         )

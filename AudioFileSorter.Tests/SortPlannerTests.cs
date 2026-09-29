@@ -466,6 +466,90 @@ public class SortPlannerTests
     }
 
     [Fact]
+    public void Upgrade_never_gives_a_missing_books_loose_file_to_another_book_of_the_same_title()
+    {
+        // The first "Collected Works" is still in the export, but its file is gone from the source.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("second.m4b");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "first-book");
+        var secondLoose = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works (2).m4b"), "second-book");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Collected Works", filename: "first"),
+            TempWorkspace.Book(title: "Collected Works", filename: "second"));
+
+        Assert.True(planned[0].IsMissingFromSource);
+        Assert.Null(planned[0].AudioLegacyPath);
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "Collected Works (2)", "Collected Works.m4b"),
+            planned[1].AudioDestination);
+        Assert.Equal(secondLoose, planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void A_later_run_never_gives_a_missing_books_folder_to_another_book_of_the_same_title()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("second.m4b");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works", "Collected Works.m4b"), "first-book");
+        var secondFile = workspace.WriteDestinationFile(
+            Path.Combine("An Author", "Collected Works (2)", "Collected Works.m4b"), "second-book");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Collected Works", filename: "first"),
+            TempWorkspace.Book(title: "Collected Works", filename: "second"));
+
+        Assert.Equal(secondFile, planned[1].AudioDestination);
+        Assert.Null(planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_never_moves_a_missing_standalone_books_file_into_a_series_book_of_the_same_title()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("dune-series.m4b");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Dune", "Dune.m4b"), "standalone-edition");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Dune", filename: "dune-standalone"),
+            TempWorkspace.Book(title: "Dune", filename: "dune-series", seriesName: "Dune Chronicles", seriesSequence: "1"));
+
+        Assert.True(planned[0].IsMissingFromSource);
+        Assert.Null(planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_moves_a_loose_file_whose_name_the_disk_stores_decomposed()
+    {
+        // HFS+, and files a Mac wrote to a NAS, store "é" as "e" + a combining accent; the export
+        // spells it as one character.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b");
+        var loose = workspace.WriteDestinationFile(Path.Combine("An Author", "Cafe\u0301.m4b"), "audio");
+
+        var planned = Plan(workspace, TempWorkspace.Book(title: "Caf\u00e9"));
+
+        Assert.Equal(loose, planned[0].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Plan_reuses_an_author_folder_whose_name_the_disk_stores_decomposed()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b");
+        Directory.CreateDirectory(Path.Combine(workspace.Destination, "Rene\u0301 Author"));
+
+        var planned = Plan(workspace, TempWorkspace.Book(author: "Ren\u00e9 Author"));
+
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "Rene\u0301 Author", "A Book", "A Book.m4b"),
+            planned[0].AudioDestination);
+    }
+
+    [Fact]
     public void Plan_keeps_a_traversal_attempt_inside_the_destination()
     {
         using var workspace = new TempWorkspace();

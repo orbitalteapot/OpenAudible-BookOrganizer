@@ -182,4 +182,44 @@ describe('SortPage', () => {
     expect(document.activeElement).toBe(verify);
     expect(updateSettings).toHaveBeenCalledTimes(1);
   });
+
+  it('drops a refused start once the folder it was about turns up', async () => {
+    const unplugged = settingsResponse({ pathStatus: { csv: 'ok', source: 'notFound', destination: 'ok' } });
+    await openSortPage({ settings: unplugged });
+    vi.mocked(startSort).mockRejectedValueOnce(
+      new ApiError('The source folder was not found: /books/source', {
+        status: 400,
+        code: 'notFound',
+        field: 'sourcePath',
+      })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start sorting' }));
+    const source = screen.getByLabelText('Source folder');
+    await waitFor(() => expect(statusLine(source).textContent).toBe('The source folder was not found: /books/source'));
+    expect(screen.getByText(/Couldn't start the sort/)).toBeTruthy();
+
+    // The drive is plugged back in and the window comes back into view.
+    vi.mocked(getSettings).mockResolvedValue(settingsResponse());
+    fireEvent.focus(window);
+
+    await waitFor(() => expect(statusLine(source).textContent).toBe('Found'));
+    expect(screen.queryByText(/Couldn't start the sort/)).toBeNull();
+  });
+
+  it('never offers to create a destination the server sets', async () => {
+    await openSortPage({ settings: settingsResponse({ locks: { paths: true, schedule: false } }) });
+    vi.mocked(startSort).mockRejectedValueOnce(
+      new ApiError('The destination folder /destination was not found inside the container. Check the volume mapping for DESTINATION_PATH.', {
+        status: 400,
+        code: 'destinationMissing',
+        field: 'destinationPath',
+      })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start sorting' }));
+
+    expect(await screen.findByText(/Couldn't start the sort: The destination folder \/destination was not found inside the container/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Create folder and sort' })).toBeNull();
+  });
 });

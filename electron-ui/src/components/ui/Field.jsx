@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef } from 'react';
+import { forwardRef, useId, useLayoutEffect, useRef } from 'react';
 
 /**
  * A labelled control. The label is bound to the control by id rather than by wrapping, so the
@@ -91,7 +91,7 @@ export function PathInput({ id, value, placeholder, icon: Icon, invalid = false,
   );
 }
 
-export function TextInput({ id, icon: Icon, className = '', ...props }) {
+export const TextInput = forwardRef(function TextInput({ id, icon: Icon, className = '', ...props }, ref) {
   return (
     <div className={`relative ${className}`}>
       {Icon && (
@@ -102,6 +102,7 @@ export function TextInput({ id, icon: Icon, className = '', ...props }) {
         />
       )}
       <input
+        ref={ref}
         id={id}
         className={[
           'h-control w-full rounded border border-line-strong bg-surface pr-3 text-sm text-fg',
@@ -112,4 +113,4 @@ export function TextInput({ id, icon: Icon, className = '', ...props }) {
       />
     </div>
   );
-}
+});

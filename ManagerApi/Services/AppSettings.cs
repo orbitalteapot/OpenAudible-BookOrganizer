@@ -73,7 +73,11 @@ public sealed record AppSettingsPatch
 
 /// <summary>Why a settings change was refused, worded for the user.</summary>
 /// <param name="Field">The setting at fault, as named on the wire ("csvPath"), or null when it is not one field.</param>
-public sealed record SettingsError(string Message, string? Field);
+/// <param name="Code">
+/// What is wrong with a path, as a start's refusal names it ("destinationMissing"), so the page can
+/// tell an error the folder turning up answers from one it does not. Null for anything else.
+/// </param>
+public sealed record SettingsError(string Message, string? Field, string? Code = null);
 
 /// <summary>The history automatic sorting keeps. Its timing lives in <see cref="AppSettings"/>.</summary>
 public sealed record ScheduleState

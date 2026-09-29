@@ -35,6 +35,6 @@ public sealed record SettingsResponse(
             settings.OpenAtLogin,
             new SettingsLocks(config.PathsLocked, config.ScheduleLocked),
             PathStatus.For(settings),
-            service.SaveWarning is { } saveWarning ? [.. config.Warnings, saveWarning] : config.Warnings);
+            service.Warnings);
     }
 }

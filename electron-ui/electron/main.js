@@ -39,6 +39,8 @@ let keepRunningThisSession = false;
 let hiddenInTray = false;
 // Someone asked for the window (a second launch, the Dock) before startup had created it.
 let showRequestedBeforeWindow = false;
+// The backend has answered once. Until then a failure is reported as "did not start", not "stopped".
+let backendReady = false;
 
 function isDev() {
   return !app.isPackaged;
@@ -284,21 +286,39 @@ async function applySavedBackgroundOptions() {
   if (settings) applyBackgroundOptions(settings);
 }
 
+/**
+ * What the page may say about a file or folder dialog: what it is for (the title, and the message
+ * macOS shows in the sheet), the button that accepts, and where it opens. Only strings are taken.
+ */
+function pickerOptions(request) {
+  const options = {};
+  for (const key of ['title', 'message', 'buttonLabel', 'defaultPath']) {
+    if (typeof request?.[key] === 'string' && request[key]) options[key] = request[key];
+  }
+  return options;
+}
+
 function registerIpcHandlers() {
-  ipcMain.handle('dialog:openFile', async (_, filters) => {
+  ipcMain.handle('dialog:openFile', async (_, request) => {
     if (!hasWindow()) return null;
 
     const result = await dialog.showOpenDialog(mainWindow, {
+      ...pickerOptions(request),
       properties: ['openFile'],
-      filters: filters || [{ name: 'CSV Files', extensions: ['csv'] }],
+      filters: Array.isArray(request?.filters) ? request.filters : [{ name: 'CSV Files', extensions: ['csv'] }],
     });
     return result.canceled ? null : result.filePaths[0];
   });
 
-  ipcMain.handle('dialog:openFolder', async () => {
+  ipcMain.handle('dialog:openFolder', async (_, request) => {
     if (!hasWindow()) return null;
 
-    const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+    // createDirectory: macOS only offers "New Folder" with it, and a first destination is often a
+    // folder that has yet to be made.
+    const result = await dialog.showOpenDialog(mainWindow, {
+      ...pickerOptions(request),
+      properties: ['openDirectory', 'createDirectory'],
+    });
     return result.canceled ? null : result.filePaths[0];
   });
 
@@ -325,16 +345,18 @@ function withWindow(action) {
 // ---------------------------------------------------------------------------------------------
 // Backend problems
 
+// Worded as the page words it: the user knows "Book Organizer", not a backend or an exit code.
 function reportBackendStopped(reason) {
-  if (quitting || !hasWindow()) return;
+  // Before it first answered, startup reports the failure itself (reportBackendDidNotStart).
+  if (quitting || !hasWindow() || !backendReady) return;
 
   // It may have died while the app sat in the tray; the user needs to see this either way.
   showWindow();
   showMessage({
     type: 'error',
-    title: 'Backend stopped',
-    message: 'The Book Organizer backend stopped unexpectedly.',
-    detail: `Sorting and library loading will not work until the app is restarted. ${reason}`,
+    title: 'Book Organizer stopped working',
+    message: 'Book Organizer stopped working.',
+    detail: `Sorting and your library are unavailable until the app is restarted. ${reason}`,
     buttons: ['OK'],
   });
 }
@@ -343,11 +365,11 @@ function reportBackendDidNotStart() {
   console.error('Backend did not start in time');
   showMessage({
     type: 'error',
-    title: 'Backend did not start',
-    message: 'The Book Organizer backend could not be started.',
+    title: "Book Organizer didn't start",
+    message: "Book Organizer didn't start.",
     detail:
       backend.failure() ||
-      'It did not answer within a minute. Restart the app; if this keeps happening, reinstall it.',
+      'It did not respond within a minute. Restart the app; if this keeps happening, reinstall it.',
     buttons: ['OK'],
   });
 }
@@ -383,20 +405,26 @@ if (!app.requestSingleInstanceLock()) {
       onUnexpectedExit: reportBackendStopped,
     });
 
-    console.log('Waiting for backend...');
-    const backendReady = await backend.waitUntilReady();
-    if (backendReady) await applySavedBackgroundOptions();
-
-    // Started at sign-in: wait in the tray. If the backend failed, show the window anyway so the
-    // error is not lost, and show it if the user opened the app while the backend was starting.
-    const startHidden = backendReady && launchedAtLogin() && !showRequestedBeforeWindow;
+    // The window comes up at once, without waiting for the backend: it can take a while to answer
+    // (the copy that just quit still letting go of the settings file, a virus scan of a new install),
+    // and the page says "Starting the organizer…" meanwhile instead of nothing appearing at all.
+    // Started at sign-in, it waits in the tray, unless the user opened the app in the meantime.
+    const startHidden = launchedAtLogin() && !showRequestedBeforeWindow;
     createWindow({ reveal: !startHidden });
-
     if (startHidden) {
       hiddenInTray = true;
       updateTray();
     }
-    if (!backendReady) reportBackendDidNotStart();
+
+    console.log('Waiting for backend...');
+    backendReady = await backend.waitUntilReady();
+    if (backendReady) {
+      await applySavedBackgroundOptions();
+    } else {
+      // Shown even after a sign-in start, or the problem would sit unseen in the tray.
+      showWindow();
+      reportBackendDidNotStart();
+    }
   });
 }
 

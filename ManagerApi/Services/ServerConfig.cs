@@ -75,6 +75,36 @@ public sealed record ServerConfig
         .All(url => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
                     (uri.IsLoopback || IPAddress.TryParse(uri.Host, out var address) && IPAddress.IsLoopback(address)));
 
+    /// <summary>
+    /// <paramref name="problem"/>, worded for where it has to be fixed. A path the environment sets is
+    /// a container mount, so "Is the drive connected?" would send its admin looking for a USB drive
+    /// when the fix is the variable or the volume mapping. The one wording for a server-set path that
+    /// is missing, wherever the problem is shown: a refused start or save, a failed automatic run, or
+    /// why automatic sorting cannot run.
+    /// </summary>
+    public SortPathProblem Explain(SortPathProblem problem)
+    {
+        if (!PathsLocked)
+        {
+            return problem;
+        }
+
+        var variable = VariableFor(problem.Field);
+        var message = (problem.Code, problem.Field) switch
+        {
+            (SortPathProblemCode.NotSet, _) => $"{variable} is not set.",
+            (SortPathProblemCode.NotFound, SortPathField.Csv) =>
+                $"The library export {CsvPath} was not found inside the container. Check that the folder holding it is mapped, and that {variable} names the file.",
+            (SortPathProblemCode.NotFound or SortPathProblemCode.DestinationMissing, SortPathField.Source) =>
+                $"The source folder {SourcePath} was not found inside the container. Check the volume mapping for {variable}.",
+            (SortPathProblemCode.NotFound or SortPathProblemCode.DestinationMissing, SortPathField.Destination) =>
+                $"The destination folder {DestinationPath} was not found inside the container. Check the volume mapping for {variable}.",
+            _ => problem.Message
+        };
+
+        return problem with { Message = message };
+    }
+
     /// <summary>The variable that fixes <paramref name="field"/>, for messages that tell the user where to change it.</summary>
     public static string VariableFor(SortPathField field) => field switch
     {

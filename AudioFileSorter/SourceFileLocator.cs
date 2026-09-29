@@ -9,7 +9,8 @@ namespace AudioFileSorter;
 /// </summary>
 public static class SourceFileLocator
 {
-    private static readonly string[] AudioExtensions = [".m4b", ".mp3", ".m4a"];
+    /// <summary>Every audio format a book's file can have.</summary>
+    internal static readonly string[] AudioExtensions = [".m4b", ".mp3", ".m4a"];
 
     /// <summary>Locates the audio file for a book, or null when none of the candidates exist.</summary>
     public static string? FindAudioFile(OpenAudible book, string sourceRoot)

@@ -7,13 +7,18 @@ import { AlertCircle, CheckCircle2, Info } from 'lucide-react';
 export const PANEL = 'rounded-lg border border-line bg-surface shadow-card';
 
 /** A titled panel. */
-export function Card({ title, description, actions, children, className = '', bodyClassName = '' }) {
+export function Card({ title, titleRef, description, actions, children, className = '', bodyClassName = '' }) {
   return (
     <section className={`flex min-h-0 flex-col ${PANEL} ${className}`}>
       {(title || actions) && (
         <header className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
           <div className="min-w-0">
-            {title && <h2 className="text-base font-semibold text-fg">{title}</h2>}
+            {/* `titleRef` makes the heading a place focus can be moved to, though not a Tab stop. */}
+            {title && (
+              <h2 ref={titleRef} tabIndex={titleRef ? -1 : undefined} className="text-base font-semibold text-fg">
+                {title}
+              </h2>
+            )}
             {description && <p className="mt-1 text-xs text-fg-muted">{description}</p>}
           </div>
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}

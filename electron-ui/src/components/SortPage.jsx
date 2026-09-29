@@ -1,5 +1,6 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { isRunning } from '../hooks';
+import { isFoundAgain } from '../paths';
 import FoldersCard from './sort/FoldersCard';
 import OptionsCard from './sort/OptionsCard';
 import ProgressCard from './sort/ProgressCard';
@@ -16,8 +17,15 @@ export default function SortPage({ settingsState, run, scheduleState, isElectron
   const [startError, setStartError] = useState(null);
   const runActive = isRunning(run.status);
 
+  // A start refused because the drive was unplugged goes once the backend finds the folder again,
+  // by the same rule as a refused save's error about it.
+  const pathStatus = settings?.pathStatus;
+  useEffect(() => {
+    if (startError && isFoundAgain(startError, pathStatus)) setStartError(null);
+  }, [startError, pathStatus]);
+
   // A start refused because of one path is shown under that path too, until a newer save speaks
-  // for it or a different path is picked there.
+  // for it, a different path is picked there, or the folder turns up.
   const pathErrors = useMemo(
     () => ({ ...(startError?.field ? { [startError.field]: startError.message } : {}), ...fieldErrors }),
     [startError, fieldErrors]

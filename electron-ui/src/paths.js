@@ -71,6 +71,20 @@ export function describePath({ field, status, kind, variable }, settings, error,
   }
 }
 
+/** Error codes that say a path is not there, which the backend finding it later answers. */
+const NOT_THERE_CODES = new Set(['notSet', 'notFound', 'destinationMissing', 'csvNotFound']);
+
+/**
+ * Whether an error about a path (`{ field, code }`, as the backend sent it) is moot because the
+ * backend now finds that path: a drive was plugged in, a volume mounted. The one rule for every
+ * path error, however it came about (a refused save, a refused start). Only errors that said the path
+ * was not there: "can't write" or "inside the source" are not answered by the folder being found.
+ */
+export function isFoundAgain({ field, code }, pathStatus) {
+  const path = PATH_FIELDS.find((candidate) => candidate.field === field);
+  return Boolean(path) && NOT_THERE_CODES.has(code) && pathStatus?.[path.status] === 'ok';
+}
+
 /** "a", "a and b", "a, b and c". */
 function listOf(items) {
   return items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;

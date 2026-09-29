@@ -56,7 +56,7 @@ public sealed class SortService
         var csvPath = _settings.Effective.CsvPath;
         if (SortPathValidator.ValidateCsv(csvPath) is { } problem)
         {
-            throw new SortPathException(problem);
+            throw new SortPathException(_settings.Config.Explain(problem));
         }
 
         return await LoadBooks(csvPath!, cancellationToken);
@@ -102,7 +102,7 @@ public sealed class SortService
         var settings = _settings.Effective;
         if (SortPathValidator.Validate(settings.CsvPath ?? "", settings.SourcePath, settings.DestinationPath, options.CreateDestination) is { } problem)
         {
-            throw new SortPathException(problem);
+            throw new SortPathException(_settings.Config.Explain(problem));
         }
 
         lock (_lock)
@@ -174,7 +174,8 @@ public sealed class SortService
         catch (SortPathException ex)
         {
             // The paths passed when the run started, and something (a drive unplugged) changed since.
-            final = Finish(run, status => status.Failed(ex.Message, RunErrors.Code(ex.Problem), RunErrors.Field(ex.Problem.Field), UtcNow()));
+            var problem = _settings.Config.Explain(ex.Problem);
+            final = Finish(run, status => status.Failed(problem.Message, RunErrors.Code(problem), RunErrors.Field(problem.Field), UtcNow()));
         }
         catch (FileNotFoundException ex)
         {

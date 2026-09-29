@@ -60,12 +60,16 @@ describe('useSettings', () => {
 
     // Turning automatic sorting on is refused because of the destination...
     vi.mocked(updateSettings).mockRejectedValueOnce(
-      new ApiError('The destination folder does not exist. Is the drive connected?', { status: 400, field: 'destinationPath' })
+      new ApiError('The destination folder does not exist. Is the drive connected?', {
+        status: 400,
+        code: 'destinationMissing',
+        field: 'destinationPath',
+      })
     );
     await act(() => result.current.update({ scheduleIntervalMinutes: 1440 }));
     // ...and a new source folder is refused on its own account.
     vi.mocked(updateSettings).mockRejectedValueOnce(
-      new ApiError('The source folder does not exist.', { status: 400, field: 'sourcePath' })
+      new ApiError('The source folder does not exist.', { status: 400, code: 'notFound', field: 'sourcePath' })
     );
     await act(() => result.current.update({ sourcePath: '/elsewhere' }));
     expect(Object.keys(result.current.fieldErrors).sort()).toEqual(['destinationPath', 'sourcePath']);
@@ -75,6 +79,23 @@ describe('useSettings', () => {
     await act(() => result.current.refresh());
 
     expect(result.current.fieldErrors).toEqual({ sourcePath: 'The source folder does not exist.' });
+  });
+
+  it('keeps an error a found folder does not answer', async () => {
+    const { result } = await renderLoaded();
+    vi.mocked(updateSettings).mockRejectedValueOnce(
+      new ApiError('Cannot write to the destination folder: Access denied', {
+        status: 400,
+        code: 'notWritable',
+        field: 'destinationPath',
+      })
+    );
+    await act(() => result.current.update({ scheduleIntervalMinutes: 1440 }));
+
+    // The folder is there, which it always was; it still cannot be written.
+    await act(() => result.current.refresh());
+
+    expect(result.current.fieldErrors.destinationPath).toMatch(/Cannot write/);
   });
 
   it('sends one save at a time, in order, and shows what the backend saved', async () => {

@@ -13,7 +13,8 @@ public sealed record SavedState(AppSettings Settings, ScheduleState Schedule);
 ///
 /// A file that cannot be read or written is logged rather than allowed to stop the app, and a value
 /// in it that makes no sense falls back to its default on its own, so one bad entry (a hand edit, a
-/// newer version's value) does not throw away the rest.
+/// newer version's value) does not throw away the rest. A file that cannot be read at all is moved
+/// aside before anything saves the defaults over it (see <see cref="SetAsideUnreadableFile"/>).
 /// </summary>
 public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
 {
@@ -26,6 +27,15 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
     };
 
     private readonly string? _path = string.IsNullOrWhiteSpace(path) ? null : path;
+
+    /// <summary>The file could not be read and could not be moved aside, so it must not be saved over.</summary>
+    private bool _keepUnreadableFile;
+
+    /// <summary>
+    /// What happened to a settings file that could not be read at startup, worded for the user, or
+    /// null when it was read (or there was none).
+    /// </summary>
+    public string? LoadWarning { get; private set; }
 
     /// <summary>The saved state, with the defaults for anything the file does not hold, or holds wrongly.</summary>
     public SavedState Load()
@@ -48,6 +58,7 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
                 logger.LogWarning(
                     "The settings file at {Path} does not hold settings ({Kind}); starting with the default settings",
                     _path, root.ValueKind);
+                SetAsideUnreadableFile();
                 return empty;
             }
 
@@ -58,7 +69,33 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
             logger.LogWarning(ex, "Could not read the settings file at {Path}; starting with the default settings", _path);
+            SetAsideUnreadableFile();
             return empty;
+        }
+    }
+
+    /// <summary>
+    /// Keeps a settings file that could not be read out of the way of the next save, which would
+    /// otherwise write the defaults over every path and choice in it, lost to one hand-edited comma
+    /// or a disk that was busy at startup. When it cannot even be moved, it is left where it is and
+    /// saving is refused instead.
+    /// </summary>
+    private void SetAsideUnreadableFile()
+    {
+        var keptPath = $"{_path}.unreadable-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
+        try
+        {
+            File.Move(_path!, keptPath);
+            logger.LogWarning("Kept the unreadable settings file as {KeptPath}", keptPath);
+            LoadWarning =
+                $"The saved settings could not be read, so the app started with the default settings. The old file was kept as {keptPath}.";
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            logger.LogWarning(ex, "Could not move the unreadable settings file at {Path} aside; it will not be saved over", _path);
+            _keepUnreadableFile = true;
+            LoadWarning =
+                $"The saved settings in {_path} could not be read, so the app is using the default settings and will not save over that file. Fix or remove it, then restart the app.";
         }
     }
 
@@ -73,6 +110,12 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
         if (_path is null)
         {
             return true;
+        }
+
+        if (_keepUnreadableFile)
+        {
+            error = $"{_path} could not be read when the app started, and is left as it is so nothing in it is lost";
+            return false;
         }
 
         var partialPath = _path + ".tmp";

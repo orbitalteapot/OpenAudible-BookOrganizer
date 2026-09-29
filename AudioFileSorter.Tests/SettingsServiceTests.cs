@@ -85,6 +85,58 @@ public class SettingsServiceTests
         Assert.Equal(new ScheduleState(), state.Schedule);
     }
 
+    [Fact]
+    public void An_unreadable_file_is_kept_aside_before_the_defaults_are_saved_and_the_page_is_told()
+    {
+        using var workspace = new TempWorkspace();
+        var config = new ServerConfig { SettingsPath = Path.Combine(workspace.Root, "settings.json") };
+        const string handEdited = """{ "version": 1, "settings": { "csvPath": "/data/books.csv", }, }""";
+        File.WriteAllText(config.SettingsPath, handEdited);
+        using var backend = new TestBackend(config);
+
+        // What a scheduled run does first; it used to write the defaults over the user's file.
+        backend.Settings.UpdateSchedule(state => state);
+
+        var kept = Assert.Single(Directory.GetFiles(workspace.Root, "settings.json.unreadable-*"));
+        Assert.Equal(handEdited, File.ReadAllText(kept));
+        Assert.Contains(
+            SettingsResponse.From(backend.Settings).ServerWarnings,
+            warning => warning.StartsWith("The saved settings could not be read") && warning.Contains(kept));
+    }
+
+    [Fact]
+    public void An_unreadable_file_that_cannot_be_moved_aside_is_never_saved_over()
+    {
+        // Permission bits do not stop root, and Windows has no Unix modes to set.
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        {
+            return;
+        }
+
+        using var workspace = new TempWorkspace();
+        var folder = Path.Combine(workspace.Root, "settings");
+        Directory.CreateDirectory(folder);
+        var config = new ServerConfig { SettingsPath = Path.Combine(folder, "settings.json") };
+        File.WriteAllText(config.SettingsPath, "{ not json");
+        File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        try
+        {
+            using var backend = new TestBackend(config);
+
+            Assert.False(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out var error));
+
+            Assert.StartsWith("Could not save the settings: ", error!.Message);
+            Assert.Equal("{ not json", File.ReadAllText(config.SettingsPath));
+            Assert.Contains(
+                SettingsResponse.From(backend.Settings).ServerWarnings,
+                warning => warning.Contains("will not save over that file"));
+        }
+        finally
+        {
+            File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
     [Theory]
     [InlineData("null")]
     [InlineData("[]")]
@@ -269,6 +321,7 @@ public class SettingsServiceTests
         Assert.False(backend.Settings.TryUpdate(new AppSettingsPatch { ScheduleIntervalMinutes = 360 }, out var error));
 
         Assert.Equal("destinationPath", error!.Field);
+        Assert.Equal("destinationMissing", error.Code);
         Assert.Null(backend.Settings.Effective.ScheduleIntervalMinutes);
         Assert.False(Directory.Exists(unplugged));
     }

@@ -57,6 +57,13 @@ public sealed class SettingsService
     }
 
     /// <summary>
+    /// Everything the page should warn about the settings: the environment's, what happened to a
+    /// settings file that could not be read at startup, and the last failed save.
+    /// </summary>
+    public IReadOnlyList<string> Warnings =>
+        [.. _config.Warnings, .. new[] { _store.LoadWarning, SaveWarning }.OfType<string>()];
+
+    /// <summary>
     /// The settings in force: the saved ones, with the paths and the interval replaced by the
     /// environment's wherever it sets them, and the environment's update check until one is picked.
     /// </summary>
@@ -94,7 +101,12 @@ public sealed class SettingsService
         {
             ComparisonMode = comparisonMode ?? settings.ComparisonMode!.Value,
             MaxParallelism = SortOptions.ParallelismFor(settings.CopySpeed, _config.NormalParallelism),
-            CreateDestination = createDestination
+
+            // Paths set by the server are container mounts: a missing destination is a mount that was
+            // forgotten or mistyped, and creating it would copy the library into the container, to be
+            // lost when it is recreated (see the Dockerfile). Enforced here, not only on the page, so
+            // no client can ask for it.
+            CreateDestination = createDestination && !_config.PathsLocked
         };
     }
 
@@ -215,7 +227,7 @@ public sealed class SettingsService
     /// checked when the paths or the interval change: an unplugged drive should not stop someone
     /// changing the copy speed.
     /// </summary>
-    private static SettingsError? CheckPaths(AppSettings current, AppSettings next)
+    private SettingsError? CheckPaths(AppSettings current, AppSettings next)
     {
         if (SortPathValidator.InspectDestination(next.SourcePath, next.DestinationPath) is
             { Code: SortPathProblemCode.DestinationInsideSource } overlap)
@@ -296,5 +308,6 @@ public sealed class SettingsService
             StringComparison.Ordinal);
     }
 
-    private static SettingsError ToError(SortPathProblem problem) => new(problem.Message, RunErrors.Field(problem.Field));
+    private SettingsError ToError(SortPathProblem problem) =>
+        new(_config.Explain(problem).Message, RunErrors.Field(problem.Field), RunErrors.Code(problem));
 }

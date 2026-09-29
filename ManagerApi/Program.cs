@@ -70,20 +70,17 @@ if (settingsLock is null)
 
 app.UseCors();
 
-if (config.IsLoopbackOnly)
+app.Use(async (context, next) =>
 {
-    app.Use(async (context, next) =>
+    if (LocalRequestGuard.Refusal(context.Request, checkOrigin: config.IsLoopbackOnly) is { } refusal)
     {
-        if (LocalRequestGuard.Refusal(context.Request) is { } refusal)
-        {
-            context.Response.StatusCode = refusal.Status;
-            await context.Response.WriteAsJsonAsync(new { error = refusal.Error });
-            return;
-        }
+        context.Response.StatusCode = refusal.Status;
+        await context.Response.WriteAsJsonAsync(new { error = refusal.Error });
+        return;
+    }
 
-        await next(context);
-    });
-}
+    await next(context);
+});
 
 // The desktop app ships the backend without a wwwroot: its window loads the interface straight
 // off disk, and the backend is only an API. Only wire up static hosting when there is something
@@ -113,7 +110,7 @@ app.MapPut("/api/settings", (AppSettingsPatch? patch, SettingsService settings) 
 
     return settings.TryUpdate(patch, out var error)
         ? Results.Ok(SettingsResponse.From(settings))
-        : Results.BadRequest(new { error = error!.Message, field = error.Field });
+        : Results.BadRequest(new { error = error!.Message, field = error.Field, code = error.Code });
 });
 
 app.MapPost("/api/books/parse", async (SortService sortService, CancellationToken cancellationToken) =>

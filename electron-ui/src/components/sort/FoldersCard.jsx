@@ -1,5 +1,5 @@
 import { FileSpreadsheet, FolderOpen, FolderOutput } from 'lucide-react';
-import { chooseCsvFile, chooseFolder } from '../../desktop';
+import { choosePath } from '../../desktop';
 import { describePath, PATH_FIELDS } from '../../paths';
 import Button from '../ui/Button';
 import { Field, PathInput } from '../ui/Field';
@@ -23,8 +23,9 @@ function browseBlockedReason({ variable }, locked, runActive) {
  * `onPicked(field)` is told before a new path is saved, so an error about the old one can go.
  */
 export default function FoldersCard({ settings, update, errors, runActive, isElectron, onPicked }) {
-  const browse = async ({ field, kind }) => {
-    const path = kind === 'file' ? await chooseCsvFile() : await chooseFolder();
+  const browse = async (pathField) => {
+    const { field } = pathField;
+    const path = await choosePath(pathField, settings[field]);
     if (!path) return;
     onPicked(field);
     await update({ [field]: path });

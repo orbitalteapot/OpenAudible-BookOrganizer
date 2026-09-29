@@ -11,14 +11,25 @@ import { useIsElectron, useLibrary, useRunStatus, useSchedule, useSettings, useT
 // How often the folder statuses (and with them the schedule) are asked for again.
 const STATUS_REFRESH_MS = 30_000;
 
-/** Shown until the backend has answered with the settings, which every page is built from. */
-function Starting({ error }) {
+/**
+ * Shown until the backend has answered with the settings, which every page is built from. One
+ * message at a time: on the desktop the app itself says, in a dialog, if the organizer never
+ * starts, so the page only says it is taking a while; in the browser, only the page can say that
+ * the container is not answering.
+ */
+function Starting({ error, isElectron }) {
+  if (error && isElectron) {
+    return (
+      <EmptyState
+        icon={Headphones}
+        title="Starting the organizer…"
+        description="This is taking longer than usual. Still trying."
+      />
+    );
+  }
+
   return (
-    <EmptyState
-      icon={Headphones}
-      title="Starting the organizer…"
-      description={error ? 'The organizer is not answering yet. Still trying.' : undefined}
-    >
+    <EmptyState icon={Headphones} title="Starting the organizer…">
       {error && <Banner tone="critical">{error}</Banner>}
     </EmptyState>
   );
@@ -91,7 +102,7 @@ export default function App() {
 
         <main className="flex min-w-0 flex-1 flex-col p-5">
           {!settings ? (
-            <Starting error={settingsState.error} />
+            <Starting error={settingsState.error} isElectron={isElectron} />
           ) : currentPage === 'library' ? (
             <Library
               library={library}

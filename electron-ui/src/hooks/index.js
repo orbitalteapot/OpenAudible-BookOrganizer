@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { isDesktop } from '../mode';
 
 export { default as useVirtualRows } from './useVirtualRows';
+export { default as useFocusFallback } from './useFocusFallback';
 export { default as useLibrary } from './useLibrary';
 export { default as useRunStatus, isRunning } from './useRunStatus';
 export { default as useSchedule } from './useSchedule';

@@ -116,8 +116,7 @@ public static class PathSanitizer
             return string.Empty;
         }
 
-        var normalized = value.Trim().ToLowerInvariant();
-        return new string(normalized.Where(char.IsLetterOrDigit).ToArray());
+        return new string(FoldForComparison(value).Where(char.IsLetterOrDigit).ToArray());
     }
 
     /// <summary>
@@ -131,7 +130,7 @@ public static class PathSanitizer
             return string.Empty;
         }
 
-        var normalized = value.Trim().ToLowerInvariant();
+        var normalized = FoldForComparison(value);
 
         foreach (var article in LeadingArticles)
         {
@@ -152,6 +151,27 @@ public static class PathSanitizer
         }
 
         return new string(normalized.Where(char.IsLetterOrDigit).ToArray());
+    }
+
+    /// <summary>
+    /// Trims, lower-cases and composes accents, so "Café" typed in an export and "Café" read back
+    /// from a disk that stores it decomposed ("e" + U+0301: HFS+, and files a Mac wrote to a NAS
+    /// or ext4) give the same key. Otherwise the combining accent is dropped as "not a letter",
+    /// the two never match, and an existing file or folder is copied again beside itself.
+    /// </summary>
+    private static string FoldForComparison(string value)
+    {
+        var trimmed = value.Trim();
+        try
+        {
+            trimmed = trimmed.Normalize(NormalizationForm.FormC);
+        }
+        catch (ArgumentException)
+        {
+            // A lone surrogate cannot be normalised; compare the name as it is rather than fail the sort.
+        }
+
+        return trimmed.ToLowerInvariant();
     }
 
     /// <summary>

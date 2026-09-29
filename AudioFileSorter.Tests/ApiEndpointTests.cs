@@ -189,8 +189,16 @@ public class ApiEndpointTests
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("the-hobbit.m4b");
         var missing = Path.Combine(workspace.Root, "new-destination");
-        await using var app = new ApiFactory(Locked(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), missing));
+        await using var app = new ApiFactory(new ServerConfig());
         using var client = app.CreateClient();
+        await ExpectStatus(
+            await client.PutAsJsonAsync("/api/settings", new
+            {
+                csvPath = workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"),
+                sourcePath = workspace.Source,
+                destinationPath = missing
+            }),
+            HttpStatusCode.OK);
 
         var refused = await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.BadRequest);
         Assert.Equal("destinationMissing", refused.GetProperty("code").GetString());
@@ -203,6 +211,29 @@ public class ApiEndpointTests
         var finished = await WaitForFinish(client);
         Assert.Equal(1, finished.GetProperty("counts").GetProperty("new").GetInt32());
         Assert.True(Directory.Exists(missing));
+    }
+
+    [Fact]
+    public async Task A_destination_set_by_the_server_is_never_created_whoever_asks()
+    {
+        // In a container that is a forgotten mount; creating it would copy the library into the
+        // container, to be lost when it is recreated.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        var missing = Path.Combine(workspace.Root, "unmounted");
+        await using var app = new ApiFactory(Locked(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), missing));
+        using var client = app.CreateClient();
+
+        var refused = await ExpectStatus(
+            await client.PostAsJsonAsync("/api/sort/start", new { createDestination = true }), HttpStatusCode.BadRequest);
+
+        Assert.Equal("destinationMissing", refused.GetProperty("code").GetString());
+        Assert.False(Directory.Exists(missing));
+
+        // Worded for the container's admin, not for someone with a USB drive.
+        Assert.Equal(
+            $"The destination folder {missing} was not found inside the container. Check the volume mapping for DESTINATION_PATH.",
+            refused.GetProperty("error").GetString());
     }
 
     [Fact]
@@ -319,6 +350,35 @@ public class ApiEndpointTests
             request.Headers.Add("Origin", origin);
             await ExpectStatus(await client.SendAsync(request), HttpStatusCode.OK);
         }
+    }
+
+    [Fact]
+    public async Task A_container_refuses_changes_a_web_site_can_send_without_a_preflight()
+    {
+        using var workspace = new TempWorkspace();
+        var config = Locked(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit")) with { BindUrl = "http://0.0.0.0:5123" };
+        await using var app = new ApiFactory(config);
+        using var client = app.CreateClient();
+
+        // fetch(..., { method: 'POST', mode: 'no-cors' }) from any page: no body, no preflight.
+        using var crossSite = new HttpRequestMessage(HttpMethod.Post, "/api/sort/start");
+        crossSite.Headers.Add("Origin", "https://evil.example");
+        await ExpectStatus(await client.SendAsync(crossSite), HttpStatusCode.UnsupportedMediaType);
+        await ExpectStatus(await client.PostAsync("/api/sort/cancel", null), HttpStatusCode.UnsupportedMediaType);
+
+        Assert.Equal("idle", (await client.GetFromJsonAsync<JsonElement>("/api/sort/progress")).GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task A_containers_own_page_may_send_changes_through_a_proxy_that_changes_its_address()
+    {
+        await using var app = new ApiFactory(new ServerConfig { BindUrl = "http://0.0.0.0:5123" });
+        using var client = app.CreateClient();
+
+        // TLS ends at the proxy, which forwards plain http under another name.
+        using var request = new HttpRequestMessage(HttpMethod.Put, "/api/settings") { Content = JsonContent.Create(new { copySpeed = "gentle" }) };
+        request.Headers.Add("Origin", "https://books.example.com");
+        await ExpectStatus(await client.SendAsync(request), HttpStatusCode.OK);
     }
 
     [Fact]

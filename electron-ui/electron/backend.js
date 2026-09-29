@@ -12,6 +12,19 @@ const POLL_INTERVAL_MS = 500;
 const REQUEST_TIMEOUT_MS = 3_000;
 // What the backend exits with when another copy of it still holds the settings file (SettingsFileLock).
 const SETTINGS_IN_USE_EXIT_CODE = 75;
+// The Docker image's settings, which the backend reads from its environment (ServerConfig). They are
+// generic names a desktop user may have set for something else, or left exported after trying the
+// Docker instructions, and any one of the paths would lock every folder on the Sort page to a
+// "server setting" they never made. To try them on the desktop, run the backend by hand and point
+// a development build at it with OABO_BACKEND_URL.
+const CONTAINER_ONLY_VARIABLES = new Set([
+  'CSV_PATH',
+  'SOURCE_PATH',
+  'DESTINATION_PATH',
+  'SORT_INTERVAL',
+  'COMPARISON_MODE',
+  'OABO_MAX_PARALLELISM',
+]);
 
 let baseUrl = null;
 let child = null;
@@ -53,7 +66,7 @@ function backendCommand(packaged) {
 
   const exe = packagedExecutable();
   if (!fs.existsSync(exe)) {
-    failure = `The backend program is missing from the installation (${exe}). Reinstall the app.`;
+    failure = `Part of the app is missing from the installation. Reinstall the app. (Missing: ${exe})`;
     return null;
   }
 
@@ -73,7 +86,7 @@ function attachProcessLogging(proc, onUnexpectedExit) {
 
   proc.on('error', (err) => {
     console.error('[API] Failed to start backend:', err.message);
-    failure = `The backend could not be started: ${err.message}`;
+    failure = `Part of the app could not be started. Restart the app; if this keeps happening, reinstall it. (${err.message})`;
   });
 
   // Without this, a backend that dies mid-session leaves the UI waiting forever on requests
@@ -83,10 +96,18 @@ function attachProcessLogging(proc, onUnexpectedExit) {
     failure ??=
       code === SETTINGS_IN_USE_EXIT_CODE
         ? 'Another copy of the Book Organizer is still running. Wait a moment, then open the app again.'
-        : `The backend stopped (exit code ${code === null ? signal : code}).`;
+        : `It closed unexpectedly. Restart the app to continue. (Error code: ${code === null ? signal : code})`;
     child = null;
     if (!stopping) onUnexpectedExit(failure);
   });
+}
+
+/** This process's environment, without the Docker image's settings (see CONTAINER_ONLY_VARIABLES). */
+function desktopEnvironment() {
+  // Upper-cased, because Windows matches variable names in any case and so does the backend there.
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => !CONTAINER_ONLY_VARIABLES.has(name.toUpperCase()))
+  );
 }
 
 /**
@@ -104,7 +125,7 @@ async function start({ packaged, settingsPath, onUnexpectedExit }) {
   try {
     baseUrl = `http://127.0.0.1:${await findFreePort()}`;
   } catch (err) {
-    failure = `No free network port for the backend: ${err.message}`;
+    failure = `No free network port was available on this computer. Restart the app. (${err.message})`;
     return null;
   }
 
@@ -117,7 +138,7 @@ async function start({ packaged, settingsPath, onUnexpectedExit }) {
     // OABO_PARENT_PID: the backend stops itself when this process is gone, so a crash or a
     // force-quit never leaves it running automatic sorts on its own.
     env: {
-      ...process.env,
+      ...desktopEnvironment(),
       ASPNETCORE_URLS: baseUrl,
       OABO_SETTINGS_PATH: settingsPath,
       OABO_PARENT_PID: String(process.pid),

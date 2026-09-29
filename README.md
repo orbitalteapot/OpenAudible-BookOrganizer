@@ -416,10 +416,11 @@ problems list for every run, and any ignored setting as a warning on the Automat
 | A path says *"not found inside the container"* | The volume for it is missing from `docker-compose.yml` or the `docker run` command, or the variable does not match where it is mounted. The startup log lists what the container sees. |
 | Everything is **Not found** | `SOURCE_PATH` is mounted somewhere other than where the books are. |
 | *"The destination folder cannot be the source folder or a folder inside it."* | Copying a folder into itself never terminates cleanly, so it is refused. Mount them separately. |
-| *"The destination folder does not exist. Is the drive connected?"* | The volume behind `DESTINATION_PATH` is not mounted, or the host folder is missing. Automatic sorts retry every 15 minutes until it is back. |
+| *"The destination folder … was not found inside the container"* | The volume behind `DESTINATION_PATH` is not mounted, or the host folder is missing. The container never creates it, so a forgotten mount cannot fill the container with a copy of your library. Automatic sorts retry every 15 minutes until it is back. |
 | *"Cannot write to the destination folder"* | The container's user cannot write to the mounted folder. Check the host folder's permissions. |
 | A warning on the Automatic sorting card, such as ``SORT_INTERVAL="6x" was ignored`` | The value could not be read. Use something like `6h`, `12h` or `1d`, or `off`. |
 | A warning on the Automatic sorting card: *"The settings could not be saved…"* | The `./data` folder is mounted read-only, or its disk is full. The Sort page's choices and when automatic sorting last ran are forgotten on every restart until `settings.json` can be written. |
+| A warning on the Automatic sorting card: *"The saved settings could not be read…"* | `settings.json` was not valid JSON (a hand edit, say). The container started with the default settings and kept the old file beside it as `settings.json.unreadable-<date>`, so nothing in it is lost. |
 | `docker pull` fails | Check the image name has no hyphen between "book" and "organizer", and that you are logged in to GHCR if the package is private. |
 
 The image is published to GitHub Packages, not attached to release assets:
@@ -458,7 +459,10 @@ OABO_BACKEND_URL=http://127.0.0.1:5123 npm run dev
 ```
 
 A backend started by hand keeps its settings in memory unless `OABO_SETTINGS_PATH` names a file,
-and takes the same environment variables as the [Docker image](#configuration). With it running,
+and takes the same environment variables as the [Docker image](#configuration). The backend the
+app starts itself ignores those (`CSV_PATH`, `SOURCE_PATH`, `DESTINATION_PATH`, `SORT_INTERVAL`,
+`COMPARISON_MODE`, `OABO_MAX_PARALLELISM`), so a variable of the same name set for something else
+cannot lock the desktop app's folders. With it running,
 <http://localhost:5173> in a browser shows the web version of the interface.
 
 ### Run the tests

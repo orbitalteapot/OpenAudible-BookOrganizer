@@ -41,7 +41,9 @@ export default function StartSort({ settings, run, isElectron, error, onError, o
       // A refusal means the folders are not what the page last heard (a drive was unplugged or
       // plugged in since), so their statuses are asked for again rather than left saying "Found".
       onRefused();
-      if (err.code === 'destinationMissing') setConfirmCreate(true);
+      // A destination the server sets is a container mount, which the backend never creates: a
+      // missing one is a mapping to fix, not a folder to make.
+      if (err.code === 'destinationMissing' && !settings.locks?.paths) setConfirmCreate(true);
       else onError(err);
     }
   };

@@ -89,7 +89,7 @@ public sealed class SortPlanner
             .Select((book, index) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                return PlanBook(book, namingPlans[index], sourceRoot, fullDestinationRoot);
+                return PlanBook(book, namingPlans[index], index, sourceRoot, fullDestinationRoot);
             })
             .ToList();
 
@@ -98,7 +98,13 @@ public sealed class SortPlanner
         return ClaimLegacyFiles(planned, namingPlans, fullDestinationRoot, cancellationToken);
     }
 
-    private PlannedCopy PlanBook(OpenAudible book, BookSortPlan plan, string sourceRoot, string destinationRoot)
+    /// <summary>A destination path one book holds in this run, and the file (or stand-in) that owns it.</summary>
+    private sealed record HeldFile(string Owner, string Destination);
+
+    /// <summary>One book's plan, with every destination it holds, written to or not.</summary>
+    private sealed record PlannedBook(PlannedCopy Copy, IReadOnlyList<HeldFile> Held);
+
+    private PlannedBook PlanBook(OpenAudible book, BookSortPlan plan, int index, string sourceRoot, string destinationRoot)
     {
         var title = BuildTitle(book, plan);
 
@@ -107,9 +113,61 @@ public sealed class SortPlanner
 
         if (audioSource is null && pdfSource is null)
         {
-            return new PlannedCopy { Book = book, Title = title, IsMissingFromSource = true };
+            return new PlannedBook(
+                new PlannedCopy { Book = book, Title = title, IsMissingFromSource = true },
+                HoldMissingBookNames(plan, index, destinationRoot));
         }
 
+        var copy = PlanCopy(book, plan, title, audioSource, pdfSource, destinationRoot);
+        return new PlannedBook(copy, HeldFiles(copy));
+    }
+
+    /// <summary>
+    /// Reserves the names a book missing from the source would be given, without writing anything.
+    /// A book's names must not depend on whether its file is in the source today: otherwise the
+    /// next book with the same title takes over its folder or its old loose file, and overwrites
+    /// what may now be the missing book's only copy with its own audio. Which format the missing
+    /// file was is unknown, so every one is held; at worst a same-named book is left with a
+    /// duplicate, never an overwrite.
+    /// </summary>
+    private List<HeldFile> HoldMissingBookNames(BookSortPlan plan, int index, string destinationRoot)
+    {
+        // Stands in for the source path as the owner of the names; it can never be a real path.
+        var owner = $"\u0000missing\u0000{index}";
+        var targetDirectory = ResolveTargetDirectory(destinationRoot, plan, owner);
+
+        return SourceFileLocator.AudioExtensions
+            .Append(".pdf")
+            .Select(extension => ClaimDestination(targetDirectory, plan.FileStem, extension, owner, destinationRoot, []))
+            .OfType<string>()
+            .Select(destination => new HeldFile(owner, destination))
+            .ToList();
+    }
+
+    private static List<HeldFile> HeldFiles(PlannedCopy copy)
+    {
+        var held = new List<HeldFile>(2);
+        if (copy.AudioSource is not null && copy.AudioDestination is not null)
+        {
+            held.Add(new HeldFile(copy.AudioSource, copy.AudioDestination));
+        }
+
+        if (copy.PdfSource is not null && copy.PdfDestination is not null)
+        {
+            held.Add(new HeldFile(copy.PdfSource, copy.PdfDestination));
+        }
+
+        return held;
+    }
+
+    private PlannedCopy PlanCopy(
+        OpenAudible book,
+        BookSortPlan plan,
+        string title,
+        string? audioSource,
+        string? pdfSource,
+        string destinationRoot)
+    {
         // Folders are only named here, never created: a book whose files turn out to be
         // unreadable should not leave an empty folder tree behind.
         var targetDirectory = ResolveTargetDirectory(destinationRoot, plan, audioSource ?? pdfSource!);
@@ -157,13 +215,13 @@ public sealed class SortPlanner
     /// book, and an audio file lying loose in an author or series folder makes them read that whole
     /// folder as a single book, hiding every series underneath it.
     /// </summary>
-    private string ResolveTargetDirectory(string destinationRoot, BookSortPlan plan, string sourcePath)
+    private string ResolveTargetDirectory(string destinationRoot, BookSortPlan plan, string owner)
     {
         var parentDirectory = ResolveParentDirectory(destinationRoot, plan);
 
         // "Book 3" already is a folder per book, and always has been.
         return plan.SeriesSequence is null
-            ? ClaimBookDirectory(parentDirectory, plan.FileStem, sourcePath)
+            ? ClaimBookDirectory(parentDirectory, plan.FileStem, owner)
             : Path.Combine(parentDirectory, $"Book {plan.SeriesSequence}");
     }
 
@@ -187,11 +245,11 @@ public sealed class SortPlanner
     /// not share one, or a library tool would merge them into a single book, so the second becomes
     /// "Title (2)", in list order.
     /// </summary>
-    private string ClaimBookDirectory(string parentDirectory, string title, string sourcePath)
+    private string ClaimBookDirectory(string parentDirectory, string title, string owner)
     {
         var baseName = ResolveDirectoryName(parentDirectory, title, FolderKind.Name);
         var claim = ClaimFirstFree(
-            _claimedBookDirectories, sourcePath, suffix => Path.Combine(parentDirectory, baseName + suffix));
+            _claimedBookDirectories, owner, suffix => Path.Combine(parentDirectory, baseName + suffix));
 
         // Out of names: share the folder; ClaimDestination still keeps the files apart.
         return claim?.Path ?? Path.Combine(parentDirectory, baseName);
@@ -200,59 +258,74 @@ public sealed class SortPlanner
     /// <summary>
     /// Finds the copy of each book that an older version filed somewhere else, so the sort can move
     /// it into the book's folder instead of copying the book a second time and leaving the old file
-    /// behind to keep confusing library tools.
+    /// behind to keep confusing library tools. Books missing from the source take part too: they
+    /// claim their old files like any other book, so no other book can take them, but nothing of
+    /// theirs is moved.
     /// </summary>
     private List<PlannedCopy> ClaimLegacyFiles(
-        List<PlannedCopy> planned,
+        List<PlannedBook> planned,
         List<BookSortPlan> namingPlans,
         string destinationRoot,
         CancellationToken cancellationToken)
     {
+        var held = planned
+            .SelectMany((book, i) => book.Held.Select(file => (File: file, Plan: namingPlans[i])))
+            .ToList();
+
         // Worked out for every book, in list order, before anything is claimed: the old names are
         // a replay of the old list-order naming, which has to see every book to come out right.
-        var audioCandidates = new List<List<(LegacyLayout Layout, string Path)>>(planned.Count);
-        var pdfCandidates = new List<List<(LegacyLayout Layout, string Path)>>(planned.Count);
-        for (var i = 0; i < planned.Count; i++)
+        var candidates = new List<List<(LegacyLayout Layout, string Path)>>(held.Count);
+        foreach (var (file, plan) in held)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var copy = planned[i];
-            audioCandidates.Add(LegacyCandidates(namingPlans[i], copy.AudioSource, copy.AudioDestination, destinationRoot));
-            pdfCandidates.Add(LegacyCandidates(namingPlans[i], copy.PdfSource, copy.PdfDestination, destinationRoot));
+            candidates.Add(LegacyCandidates(plan, file.Owner, file.Destination, destinationRoot));
         }
 
-        var audioLegacy = new string?[planned.Count];
-        var pdfLegacy = new string?[planned.Count];
+        var legacy = new string?[held.Count];
         foreach (var layout in Enum.GetValues<LegacyLayout>())
         {
-            for (var i = 0; i < planned.Count; i++)
+            for (var i = 0; i < held.Count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                audioLegacy[i] ??= ClaimLegacyFile(audioCandidates[i], layout, destinationRoot);
-                pdfLegacy[i] ??= ClaimLegacyFile(pdfCandidates[i], layout, destinationRoot);
+                legacy[i] ??= ClaimLegacyFile(candidates[i], layout, destinationRoot);
             }
         }
 
+        var legacyByDestination = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < held.Count; i++)
+        {
+            if (legacy[i] is { } path)
+            {
+                legacyByDestination[held[i].File.Destination] = path;
+            }
+        }
+
+        // A missing book has no destinations of its own to move a file to, so its claims stay put.
         return planned
-            .Select((copy, i) => copy with { AudioLegacyPath = audioLegacy[i], PdfLegacyPath = pdfLegacy[i] })
+            .Select(book => book.Copy with
+            {
+                AudioLegacyPath = LegacyFileFor(book.Copy.AudioDestination),
+                PdfLegacyPath = LegacyFileFor(book.Copy.PdfDestination)
+            })
             .ToList();
+
+        string? LegacyFileFor(string? destination)
+        {
+            return destination is null ? null : legacyByDestination.GetValueOrDefault(destination);
+        }
     }
 
     /// <summary>
-    /// Where older versions may have left one of a book's files, most likely first. Empty when the
-    /// book has nothing to write or its file is already where it belongs.
+    /// Where older versions may have left the file that belongs at <paramref name="destination"/>,
+    /// most likely first. Empty when it is already where it belongs.
     /// </summary>
     private List<(LegacyLayout Layout, string Path)> LegacyCandidates(
         BookSortPlan plan,
-        string? sourcePath,
-        string? destination,
+        string owner,
+        string destination,
         string destinationRoot)
     {
         var candidates = new List<(LegacyLayout Layout, string Path)>();
-        if (sourcePath is null || destination is null)
-        {
-            return candidates;
-        }
-
         var stem = plan.FileStem;
         var extension = Path.GetExtension(destination);
         var fileName = stem + extension;
@@ -261,7 +334,7 @@ public sealed class SortPlanner
 
         // Replayed even when the file is already in place: later books' old names depend on it.
         var looseFile = plan.SeriesSequence is null
-            ? ReplayLooseFileName(parentDirectory, stem, extension, sourcePath)
+            ? ReplayLooseFileName(parentDirectory, stem, extension, owner)
             : null;
 
         if (File.Exists(destination))
@@ -297,7 +370,7 @@ public sealed class SortPlanner
     /// for series folders), so it is replayed on its own. Null when this file was a repeat of
     /// another book's and so never got a name of its own.
     /// </summary>
-    private string? ReplayLooseFileName(string directory, string stem, string extension, string sourcePath)
+    private string? ReplayLooseFileName(string directory, string stem, string extension, string owner)
     {
         var fileIndex = GetDirectoryFileIndex(directory);
         var plainName = fileIndex.TryGetValue(BuildFileIndexKey(stem, extension), out var existingName)
@@ -306,7 +379,7 @@ public sealed class SortPlanner
 
         var claim = ClaimFirstFree(
             _claimedLooseNames,
-            sourcePath,
+            owner,
             suffix => Path.Combine(directory, suffix.Length == 0 ? plainName : $"{stem}{suffix}{extension}"));
 
         if (claim is null || claim.AlreadyOwned)
@@ -418,7 +491,7 @@ public sealed class SortPlanner
         string directory,
         string stem,
         string extension,
-        string sourcePath,
+        string owner,
         string destinationRoot,
         List<string> warnings)
     {
@@ -433,7 +506,7 @@ public sealed class SortPlanner
 
         var claim = ClaimFirstFree(
             _claimedDestinations,
-            sourcePath,
+            owner,
             suffix => Path.Combine(directory, suffix.Length == 0 ? fileName : $"{stem}{suffix}{extension}"));
 
         if (claim is null)

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getSettings, updateSettings } from '../api';
-import { PATH_FIELDS } from '../paths';
+import { isFoundAgain } from '../paths';
 
 // The desktop backend is started alongside the window and takes a few seconds to answer; a Docker
 // container may be restarting. Keep asking, and only call it an error once it has taken a while.
@@ -20,17 +20,16 @@ function withoutResolved(fieldErrors, patch) {
 }
 
 /**
- * Drops the errors about a path the backend now finds, unless the error was about changing that
- * path: turning automatic sorting on with an unplugged drive is refused with an error about the
- * destination, which is moot once the drive is back, but a refused pick of a new folder says
- * nothing about the saved one being found.
+ * Drops the errors about a path the backend now finds (see isFoundAgain), unless the error was about
+ * changing that path: turning automatic sorting on with an unplugged drive is refused with an error
+ * about the destination, which is moot once the drive is back, but a refused pick of a new folder
+ * says nothing about the saved one being found.
  */
 function withoutFound(fieldErrors, pathStatus) {
   return Object.fromEntries(
-    Object.entries(fieldErrors).filter(([field, { causes }]) => {
-      const path = PATH_FIELDS.find((candidate) => candidate.field === field);
-      return !path || pathStatus?.[path.status] !== 'ok' || causes.includes(field);
-    })
+    Object.entries(fieldErrors).filter(
+      ([field, { code, causes }]) => causes.includes(field) || !isFoundAgain({ field, code }, pathStatus)
+    )
   );
 }
 
@@ -111,7 +110,7 @@ export default function useSettings() {
           if (err.field) {
             setFieldErrorState((current) => ({
               ...current,
-              [err.field]: { message: err.message, causes: Object.keys(patch) },
+              [err.field]: { message: err.message, code: err.code, causes: Object.keys(patch) },
             }));
           } else {
             setErrorState(err);

@@ -20,4 +20,19 @@ describe('ProgressCard', () => {
     rerender(<ProgressCard status={runningStatus({ startedUtc: '2026-09-29T11:00:00Z' })} cancel={cancel} />);
     expect(screen.queryByText(/Couldn't cancel/)).toBeNull();
   });
+
+  it('keeps keyboard focus in the card when Cancel goes with the end of the run', async () => {
+    const cancel = vi.fn().mockResolvedValue({});
+    const status = runningStatus();
+    const { rerender } = render(<ProgressCard status={status} cancel={cancel} />);
+
+    const button = screen.getByRole('button', { name: 'Cancel' });
+    button.focus();
+    fireEvent.click(button);
+
+    rerender(<ProgressCard status={{ ...status, state: 'finished', isCanceled: true, finishedUtc: new Date().toISOString() }} cancel={cancel} />);
+
+    expect(screen.queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Progress' }));
+  });
 });
