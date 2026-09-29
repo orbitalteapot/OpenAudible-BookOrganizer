@@ -8,7 +8,8 @@ const EMPTY = { books: [], skippedRows: 0, warnings: [] };
  * on launch once the settings arrive, and after a different export is chosen on either page — so
  * the Library and the Sort page always work from the same file.
  *
- * `loaded` is set once an export has been read, to tell "nothing read yet" from "read, but empty".
+ * `loaded` is set once the current export has been read, to tell "nothing read yet" from "read,
+ * but empty".
  */
 export default function useLibrary(csvPath) {
   const [library, setLibrary] = useState(EMPTY);
@@ -40,6 +41,10 @@ export default function useLibrary(csvPath) {
   }, []);
 
   useEffect(() => {
+    // Another export's books must never be shown under this path, even if reading it fails.
+    // Reload of the same path keeps the current list, so a failed re-read leaves it on screen.
+    setLibrary(EMPTY);
+    setLoaded(false);
     if (csvPath) reload();
   }, [csvPath, reload]);
 
