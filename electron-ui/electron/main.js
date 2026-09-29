@@ -322,6 +322,8 @@ function reportBackendDidNotStart() {
 
 // One copy owns the tray, the schedule and the settings file; a second launch just brings it forward.
 if (!app.requestSingleInstanceLock()) {
+  // Nothing is running in this copy, so there is nothing to ask about.
+  quitting = true;
   app.quit();
 } else {
   app.on('second-instance', (_event, argv) => {
@@ -369,7 +371,13 @@ app.on('window-all-closed', () => {
   app.quit();
 });
 
-app.on('before-quit', () => {
-  quitting = true;
+app.on('before-quit', (event) => {
+  // Cmd+Q, Dock Quit and the default menu's Quit call app.quit() directly; send them through the
+  // same "A sort is still running" question as every other quit.
+  if (!quitting) {
+    event.preventDefault();
+    quitWhenSafe();
+    return;
+  }
   backend.stop();
 });
