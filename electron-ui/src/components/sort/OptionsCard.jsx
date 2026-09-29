@@ -32,7 +32,7 @@ const COPY_SPEEDS = [
 // Changing an option while a sort runs is fine: the run keeps the options it started with.
 const RUNNING_NOTE = 'Changes apply from the next sort.';
 
-function OptionField({ label, field, options, settings, update, error, runActive }) {
+function OptionField({ label, field, options, settings, update, saving, error, runActive }) {
   const selected = options.find((option) => option.value === settings[field]) ?? options[0];
   const hint = (
     <>
@@ -50,6 +50,9 @@ function OptionField({ label, field, options, settings, update, error, runActive
           value={selected.value}
           options={options}
           describedBy={hintId}
+          // The value only moves when the backend replies, so an arrow pressed before then would
+          // count from the old value and could choose the option just left.
+          disabled={saving}
           onChange={(value) => update({ [field]: value })}
         />
       )}
@@ -58,7 +61,7 @@ function OptionField({ label, field, options, settings, update, error, runActive
 }
 
 /** How a sort checks and copies books, and how it lays them out. */
-export default function OptionsCard({ settings, update, fieldErrors, runActive }) {
+export default function OptionsCard({ settings, update, saving, fieldErrors, runActive }) {
   return (
     <Card title="Options">
       <div className="space-y-4">
@@ -68,6 +71,7 @@ export default function OptionsCard({ settings, update, fieldErrors, runActive }
           options={COMPARISON_MODES}
           settings={settings}
           update={update}
+          saving={saving}
           error={fieldErrors.comparisonMode}
           runActive={runActive}
         />
@@ -77,6 +81,7 @@ export default function OptionsCard({ settings, update, fieldErrors, runActive }
           options={COPY_SPEEDS}
           settings={settings}
           update={update}
+          saving={saving}
           error={fieldErrors.copySpeed}
           runActive={runActive}
         />

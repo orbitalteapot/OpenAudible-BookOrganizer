@@ -1,6 +1,6 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, cancelSort, getRunStatus, getSettings, startSort } from '../../api';
+import { ApiError, cancelSort, getRunStatus, getSettings, startSort, updateSettings } from '../../api';
 import { idleStatus, runningStatus, settingsResponse } from '../../test/fixtures';
 import { renderApp } from '../../test/renderApp';
 
@@ -160,5 +160,26 @@ describe('SortPage', () => {
     fireEvent.click(within(card).getByRole('button', { name: 'Problems (1)' }));
     expect(within(card).getByText('No file in the source folder')).toBeTruthy();
     expect(within(card).getByText('Heaven’s River — Dennis E. Taylor')).toBeTruthy();
+  });
+
+  it('holds the arrows on an option until the backend has answered the last choice', async () => {
+    await openSortPage();
+    let reply;
+    vi.mocked(updateSettings)
+      .mockReturnValueOnce(new Promise((resolve) => (reply = resolve)))
+      .mockResolvedValue(settingsResponse({ comparisonMode: 'full' }));
+
+    const group = screen.getByRole('radiogroup', { name: 'Update check' });
+    const quick = within(group).getByRole('radio', { name: 'Quick' });
+    quick.focus();
+    fireEvent.keyDown(quick, { key: 'ArrowRight' });
+    // Back again before the reply: counting from the old value, this would choose Verify again.
+    fireEvent.keyDown(document.activeElement, { key: 'ArrowLeft' });
+
+    reply(settingsResponse({ comparisonMode: 'full' }));
+    const verify = within(group).getByRole('radio', { name: 'Verify contents' });
+    await waitFor(() => expect(verify.getAttribute('aria-checked')).toBe('true'));
+    expect(document.activeElement).toBe(verify);
+    expect(updateSettings).toHaveBeenCalledTimes(1);
   });
 });
