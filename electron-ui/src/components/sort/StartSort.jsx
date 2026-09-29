@@ -19,6 +19,7 @@ export default function StartSort({ settings, run, isElectron, error, onError, o
   const startRef = useRef(null);
   const wasConfirming = useRef(false);
   const reasonId = useId();
+  const questionId = useId();
 
   const active = isRunning(run.status);
   const reason = active ? 'A sort is already running.' : pathsBlockedReason(settings, isElectron);
@@ -51,10 +52,24 @@ export default function StartSort({ settings, run, isElectron, error, onError, o
   return (
     <div className="space-y-3">
       {confirmCreate ? (
-        <div className="space-y-3 rounded border border-caution/40 bg-caution/10 p-3">
-          <p className="text-sm text-fg">The destination folder doesn&apos;t exist. Is the drive connected?</p>
+        // Escape answers like Cancel, the key keyboard users expect to back out of a question.
+        <div
+          className="space-y-3 rounded border border-caution/40 bg-caution/10 p-3"
+          onKeyDown={(e) => e.key === 'Escape' && setConfirmCreate(false)}
+        >
+          <p id={questionId} className="text-sm text-fg">
+            The destination folder doesn&apos;t exist. Is the drive connected?
+          </p>
           <div className="flex flex-wrap gap-2">
-            <Button ref={createRef} variant="primary" icon={FolderPlus} onClick={() => begin(true)}>
+            {/* Focus lands here, so the button carries the question: otherwise a screen reader
+                says only "Create folder and sort" and never why it is being asked. */}
+            <Button
+              ref={createRef}
+              variant="primary"
+              icon={FolderPlus}
+              aria-describedby={questionId}
+              onClick={() => begin(true)}
+            >
               Create folder and sort
             </Button>
             <Button onClick={() => setConfirmCreate(false)}>Cancel</Button>
