@@ -47,7 +47,9 @@ function withoutFound(fieldErrors, pathStatus) {
  */
 export default function useSettings() {
   const [settings, setSettings] = useState(null);
-  const [error, setError] = useState(null);
+  // Kept with its code so a refresh can tell "the backend did not answer" (moot once it answers
+  // again) from a save the backend refused (still true until a save succeeds).
+  const [errorState, setErrorState] = useState(null);
   const [fieldErrorState, setFieldErrorState] = useState({});
   const [pending, setPending] = useState(0);
 
@@ -74,11 +76,11 @@ export default function useSettings() {
           const loaded = await getSettings();
           if (!active) return;
           setSettings(loaded);
-          setError(null);
+          setErrorState(null);
         } catch (err) {
           if (!active) return;
           attempts += 1;
-          if (attempts >= LOAD_ATTEMPTS_BEFORE_ERROR) setError(err.message);
+          if (attempts >= LOAD_ATTEMPTS_BEFORE_ERROR) setErrorState(err);
           timer = setTimeout(load, LOAD_RETRY_MS);
         }
       });
@@ -102,7 +104,7 @@ export default function useSettings() {
         try {
           const saved = await updateSettings(patch);
           setSettings(saved);
-          setError(null);
+          setErrorState(null);
           setFieldErrorState((current) => withoutResolved(current, patch));
           return null;
         } catch (err) {
@@ -112,7 +114,7 @@ export default function useSettings() {
               [err.field]: { message: err.message, causes: Object.keys(patch) },
             }));
           } else {
-            setError(err.message);
+            setErrorState(err);
           }
           return err;
         } finally {
@@ -134,12 +136,15 @@ export default function useSettings() {
           const current = await getSettings();
           setSettings(current);
           setFieldErrorState((errors) => withoutFound(errors, current.pathStatus));
+          setErrorState((shown) => (shown?.code === 'unreachable' ? null : shown));
         } catch {
           // The settings on screen are still the last ones the backend confirmed.
         }
       }),
     [enqueue]
   );
+
+  const error = errorState?.message ?? null;
 
   const fieldErrors = useMemo(
     () => Object.fromEntries(Object.entries(fieldErrorState).map(([field, { message }]) => [field, message])),

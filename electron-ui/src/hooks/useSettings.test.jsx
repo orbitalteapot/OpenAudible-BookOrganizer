@@ -158,4 +158,19 @@ describe('useSettings', () => {
     expect(result.current.error).toBe('Could not reach the backend.');
     expect(result.current.fieldErrors).toEqual({});
   });
+
+  it('drops a lost-contact error once a refresh gets an answer, but not a refused save', async () => {
+    const { result } = await renderLoaded();
+    vi.mocked(updateSettings).mockRejectedValueOnce(new ApiError('Could not reach the backend.', { code: 'unreachable' }));
+    await act(() => result.current.update({ copySpeed: 'gentle' }));
+
+    await act(() => result.current.refresh());
+    expect(result.current.error).toBeNull();
+
+    vi.mocked(updateSettings).mockRejectedValueOnce(new ApiError('Could not save the settings.'));
+    await act(() => result.current.update({ copySpeed: 'gentle' }));
+
+    await act(() => result.current.refresh());
+    expect(result.current.error).toBe('Could not save the settings.');
+  });
 });
