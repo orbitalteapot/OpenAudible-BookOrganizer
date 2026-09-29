@@ -25,6 +25,11 @@ services:
       # Books copied at once at the "Normal" copy speed (the default depends on the CPU). The Sort
       # page's "Gentle" copy speed always copies one book at a time.
       # OABO_MAX_PARALLELISM: 2
+    # The container runs as root unless told otherwise, so the sorted books would belong to root on
+    # the host and could not be renamed or deleted over SMB or by another app running as you. Set
+    # this to your own user and group ids (run `id` on the host) to have them owned by you instead.
+    # That user must be able to read the source, write the destination and write ./data.
+    # user: "1000:1000"
     ports:
       - "5123:5123"
     volumes:

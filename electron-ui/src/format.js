@@ -168,8 +168,10 @@ function outcomeNotes(counts) {
   const failed = countOf(counts, 'failed');
 
   return [
+    // Two causes land here (see SortPlanner's legacy layouts), so the note names both rather than
+    // blaming an older version the user may never have had.
     moved > 0 &&
-      `${pluralBooks(moved)} that an older version left in the destination folder ${moved === 1 ? 'was' : 'were'} moved into ${moved === 1 ? 'its own folder' : 'their own folders'} there.`,
+      `${pluralBooks(moved)} already in the destination folder ${moved === 1 ? 'was' : 'were'} moved to where ${moved === 1 ? 'it now belongs' : 'they now belong'}: left loose by an older version, or filed before ${moved === 1 ? 'its' : 'their'} series details changed.`,
     notFound > 0 &&
       (noneFound(counts)
         ? `None of the books in the export were found in the source folder. ${sourceFolderAdvice()}`

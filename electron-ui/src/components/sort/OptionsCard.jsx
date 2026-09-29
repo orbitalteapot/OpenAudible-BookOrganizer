@@ -100,8 +100,9 @@ export default function OptionsCard({ settings, update, saving, fieldErrors, run
               ].join('\n')}
             </pre>
             <p>
-              Books in a numbered series go in Author / Series / Book N; other books in Author / Title. Books left loose by
-              older versions of this app are moved into their own folders.
+              Books in a numbered series go in Author / Series / Book N; other books in Author / Title. Books already in the
+              destination folder are moved to where they now belong: those left loose by older versions of this app,
+              and those filed before their series details changed.
             </p>
           </div>
         </Disclosure>

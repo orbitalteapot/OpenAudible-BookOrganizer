@@ -391,6 +391,15 @@ if (!app.requestSingleInstanceLock()) {
   // macOS: clicking the Dock icon brings back a window that was closed to the menu bar.
   app.on('activate', () => showWindow());
 
+  // Ctrl+C in the launching terminal or a service manager stopping the app: never hold that up with
+  // a prompt. The signal usually reaches the backend too, and it is already cancelling its run.
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {
+      quitting = true;
+      app.quit();
+    });
+  }
+
   app.whenReady().then(async () => {
     registerIpcHandlers();
     nativeTheme.on('updated', syncWindowBackground);

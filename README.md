@@ -145,7 +145,7 @@ Every book lands in exactly one of six counters, so they add up to the books pro
 | --- | --- |
 | **New** | Not in your library yet; copied in. |
 | **Updated** | Replaced an out-of-date copy at the destination. |
-| **Moved** | Left loose by an older version of this app, and moved into its own folder (see [below](#how-your-books-get-organised)). |
+| **Moved** | Already in the destination but not where it now belongs — left loose by an older version of this app, or filed before its series details changed — and moved there (see [below](#how-your-books-get-organised)). |
 | **Up to date** | Already at the destination and unchanged, so nothing was written. |
 | **Not found** | Listed in the export, but no audio file for it in the source folder — usually books you have not downloaded. A PDF on its own is not copied; it comes along once the audio is there. |
 | **Failed** | Could not be copied. The problems list says why. |
@@ -363,6 +363,12 @@ docker compose up -d
 The [docker-compose.yml](docker-compose.yml) in this repository is the same service, built from
 source rather than pulled, with every setting explained in its comments.
 
+The container runs as root unless told otherwise, so every folder and file it sorts belongs to root
+on the host, and cannot be renamed or deleted over SMB or by another app running as you. To have
+them owned by you, run it as your own user and group ids (`id` on the host prints them): add
+`--user 1000:1000` to `docker run`, or `user: "1000:1000"` to the service in Compose. That user
+must be able to read the source folder and write the destination and data folders.
+
 Then open <http://localhost:5123>. The library loads by itself, and the Sort page works as it does
 on the desktop, minus the file pickers and the tray. The update check, copy speed and automatic
 sorting chosen there are saved in the mounted data folder (`/data/settings.json`), so they survive
@@ -419,6 +425,7 @@ problems list for every run, and any ignored setting as a warning on the Automat
 | *"The destination folder … was not found inside the container"* | The volume behind `DESTINATION_PATH` is not mounted, or the host folder is missing. The container never creates it, so a forgotten mount cannot fill the container with a copy of your library. Automatic sorts retry every 15 minutes until it is back. |
 | *"The folder … does not exist inside /destination"* | The mount works, but the subfolder `DESTINATION_PATH` names (such as `/destination/Audiobooks`) has not been made yet. Create it on the host, in the folder mapped to `/destination`. |
 | *"Cannot write to the destination folder"* | The container's user cannot write to the mounted folder. Check the host folder's permissions. |
+| Sorted books cannot be renamed or deleted over SMB or by another app | The container ran as root, so it owns what it sorted. Run it as your own user (see above) and, once, `chown -R` the destination folder on the host back to you. |
 | A warning on the Automatic sorting card, such as ``SORT_INTERVAL="6x" was ignored`` | The value could not be read. Use something like `6h`, `12h` or `1d`, or `off`. |
 | A warning on the Automatic sorting card: *"The settings could not be saved…"* | The `./data` folder is mounted read-only, or its disk is full. The Sort page's choices and when automatic sorting last ran are forgotten on every restart until `settings.json` can be written. |
 | A warning on the Automatic sorting card: *"The saved settings could not be read…"* | `settings.json` was not valid JSON (a hand edit, say). The container started with the default settings and kept the old file beside it as `settings.json.unreadable-<date>`, so nothing in it is lost. |
