@@ -253,11 +253,12 @@ public class FileSorterTests
             .Select(i => TempWorkspace.Book(title: $"Book {i}", filename: $"book-{i}"))
             .ToList();
 
+        // Cancel as soon as the first book is done. A timer raced the copies, and on a fast disk
+        // the whole library could finish first.
         using var cancellation = new CancellationTokenSource();
         var sortTask = new FileSorter().SortAudioFiles(
-            workspace.Source, workspace.Destination, books, cancellationToken: cancellation.Token);
-
-        cancellation.CancelAfter(TimeSpan.FromMilliseconds(30));
+            workspace.Source, workspace.Destination, books,
+            progress: new CancelOnFirstReport(cancellation), cancellationToken: cancellation.Token);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await sortTask);
 
@@ -394,6 +395,11 @@ public class FileSorterTests
         Assert.Equal(0, summary.FailedBooks);
         Assert.Equal(3, Directory.GetDirectories(workspace.Destination).Length);
         Assert.Equal(120, workspace.DestinationFiles().Length);
+    }
+
+    private sealed class CancelOnFirstReport(CancellationTokenSource cancellation) : IProgress<SortProgressInfo>
+    {
+        public void Report(SortProgressInfo value) => cancellation.Cancel();
     }
 
     private static Task<SortSummary> Sort(TempWorkspace workspace, params OpenAudible[] books)

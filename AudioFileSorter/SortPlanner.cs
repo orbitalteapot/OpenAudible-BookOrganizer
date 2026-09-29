@@ -31,31 +31,23 @@ public sealed class SortPlanner
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationRoot);
 
         var fullDestinationRoot = Path.GetFullPath(destinationRoot);
-        var planned = new List<PlannedCopy>(books.Count);
+        var namingPlans = books.Select(BookNaming.BuildPlan).ToList();
 
         // Reserve every series folder first, so a standalone book titled like a series ("Bobiverse")
         // gets a "Bobiverse (2)" folder of its own instead of being dropped loose into the series,
         // wherever it happens to sit in the list.
-        foreach (var book in books)
+        foreach (var plan in namingPlans.Where(plan => plan.SeriesName is not null))
         {
-            var plan = BookNaming.BuildPlan(book);
-            if (plan.SeriesName is not null)
-            {
-                _claimedBookDirectories.TryAdd(ResolveParentDirectory(fullDestinationRoot, plan), SeriesFolderClaim);
-            }
+            _claimedBookDirectories.TryAdd(ResolveParentDirectory(fullDestinationRoot, plan), SeriesFolderClaim);
         }
 
-        foreach (var book in books)
-        {
-            planned.Add(PlanBook(book, sourceRoot, fullDestinationRoot));
-        }
-
-        return planned;
+        return books
+            .Select((book, index) => PlanBook(book, namingPlans[index], sourceRoot, fullDestinationRoot))
+            .ToList();
     }
 
-    private PlannedCopy PlanBook(OpenAudible book, string sourceRoot, string destinationRoot)
+    private PlannedCopy PlanBook(OpenAudible book, BookSortPlan plan, string sourceRoot, string destinationRoot)
     {
-        var plan = BookNaming.BuildPlan(book);
         var label = BuildLabel(book, plan);
 
         var audioSource = SourceFileLocator.FindAudioFile(book, sourceRoot);
@@ -168,26 +160,13 @@ public sealed class SortPlanner
     private TargetDirectory ClaimBookDirectory(string parentDirectory, string title, string sourcePath)
     {
         var baseName = ResolveDirectoryName(parentDirectory, title, PathSanitizer.NormalizeComparisonKey);
+        var claim = ClaimFirstFree(
+            _claimedBookDirectories, sourcePath, suffix => Path.Combine(parentDirectory, baseName + suffix));
 
-        for (var attempt = 1; attempt <= MaxDisambiguationAttempts; attempt++)
-        {
-            var suffix = attempt == 1 ? string.Empty : $" ({attempt})";
-            var candidate = Path.Combine(parentDirectory, baseName + suffix);
-
-            if (!_claimedBookDirectories.TryGetValue(candidate, out var claimedBy))
-            {
-                _claimedBookDirectories[candidate] = sourcePath;
-                return new TargetDirectory(candidate, parentDirectory, title + suffix);
-            }
-
-            if (string.Equals(claimedBy, sourcePath, StringComparison.OrdinalIgnoreCase))
-            {
-                return new TargetDirectory(candidate, parentDirectory, title + suffix);
-            }
-        }
-
-        // Give up on separating them; ClaimDestination still keeps the files apart.
-        return new TargetDirectory(Path.Combine(parentDirectory, baseName), null, null);
+        // Out of names: share the folder; ClaimDestination still keeps the files apart.
+        return claim is null
+            ? new TargetDirectory(Path.Combine(parentDirectory, baseName), null, null)
+            : new TargetDirectory(claim.Path, parentDirectory, title + claim.Suffix);
     }
 
     /// <summary>
@@ -271,32 +250,60 @@ public sealed class SortPlanner
             ? existingName
             : $"{stem}{extension}";
 
+        var claim = ClaimFirstFree(
+            _claimedDestinations,
+            sourcePath,
+            suffix => Path.Combine(directory, suffix.Length == 0 ? fileName : $"{stem}{suffix}{extension}"));
+
+        if (claim is null)
+        {
+            warnings.Add($"Could not find a free file name for \"{stem}{extension}\"");
+            return null;
+        }
+
+        if (!PathSanitizer.IsWithin(destinationRoot, claim.Path))
+        {
+            warnings.Add($"Refusing to write \"{Path.GetFileName(claim.Path)}\" outside the destination folder");
+            return null;
+        }
+
+        // The same physical file listed twice in the export: copy it once.
+        if (claim.AlreadyOwned)
+        {
+            return null;
+        }
+
+        fileIndex.TryAdd(BuildFileIndexKey(Path.GetFileNameWithoutExtension(claim.Path), extension), Path.GetFileName(claim.Path));
+        return claim.Path;
+    }
+
+    /// <summary>A path reserved by <see cref="ClaimFirstFree"/>.</summary>
+    /// <param name="Suffix">"" for the plain name, otherwise " (2)", " (3)", ...</param>
+    /// <param name="AlreadyOwned">The owner had claimed this path earlier in the run.</param>
+    private sealed record Claim(string Path, string Suffix, bool AlreadyOwned);
+
+    /// <summary>
+    /// Reserves the first of "Name", "Name (2)", "Name (3)"... that nobody else has claimed in this
+    /// run. An owner asking again gets its own earlier claim back. Null when every name is taken.
+    /// </summary>
+    private static Claim? ClaimFirstFree(Dictionary<string, string> claims, string owner, Func<string, string> pathForSuffix)
+    {
         for (var attempt = 1; attempt <= MaxDisambiguationAttempts; attempt++)
         {
-            var candidateName = attempt == 1 ? fileName : $"{stem} ({attempt}){extension}";
-            var candidatePath = Path.Combine(directory, candidateName);
+            var suffix = attempt == 1 ? string.Empty : $" ({attempt})";
+            var candidate = pathForSuffix(suffix);
 
-            if (!PathSanitizer.IsWithin(destinationRoot, candidatePath))
+            if (claims.TryAdd(candidate, owner))
             {
-                warnings.Add($"Refusing to write \"{candidateName}\" outside the destination folder");
-                return null;
+                return new Claim(candidate, suffix, AlreadyOwned: false);
             }
 
-            if (!_claimedDestinations.TryGetValue(candidatePath, out var claimedBy))
+            if (string.Equals(claims[candidate], owner, StringComparison.OrdinalIgnoreCase))
             {
-                _claimedDestinations[candidatePath] = sourcePath;
-                fileIndex.TryAdd(BuildFileIndexKey(Path.GetFileNameWithoutExtension(candidateName), extension), candidateName);
-                return candidatePath;
-            }
-
-            if (string.Equals(claimedBy, sourcePath, StringComparison.OrdinalIgnoreCase))
-            {
-                // The same physical file listed twice in the export: copy it once.
-                return null;
+                return new Claim(candidate, suffix, AlreadyOwned: true);
             }
         }
 
-        warnings.Add($"Could not find a free file name for \"{stem}{extension}\"");
         return null;
     }
 

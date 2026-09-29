@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 export { default as useVirtualRows } from './useVirtualRows';
 export { default as useSortRun } from './useSortRun';
+export { default as useSchedule } from './useSchedule';
 
 /**
  * Whether the app is running inside Electron rather than a browser tab. Electron-only affordances

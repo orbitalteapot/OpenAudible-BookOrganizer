@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import TitleBar from './components/TitleBar';
 import Sidebar from './components/Sidebar';
 import Library from './components/Library';
 import SortPanel from './components/SortPanel';
 import { getAppConfig } from './api';
-import { useIsElectron } from './hooks';
+import { useIsElectron, useSchedule } from './hooks';
 
 const INITIAL_CONFIG = {
   csvPath: '',
@@ -30,6 +30,7 @@ export default function App() {
   // re-renders the progress card and nothing else.
   const [config, setConfig] = useState(INITIAL_CONFIG);
   const [run, setRun] = useState(INITIAL_RUN);
+  const scheduleState = useSchedule();
 
   useEffect(() => {
     if (isElectron) return undefined;
@@ -58,6 +59,24 @@ export default function App() {
     };
   }, [isElectron]);
 
+  // The desktop app has no server config to start from, so it reopens on the paths last scheduled.
+  const restoredFromSchedule = useRef(false);
+  const { schedule } = scheduleState;
+  useEffect(() => {
+    if (!isElectron || !schedule || restoredFromSchedule.current) return;
+    restoredFromSchedule.current = true;
+
+    if (schedule.csvPath) {
+      setConfig((prev) => ({
+        ...prev,
+        csvPath: schedule.csvPath,
+        sourcePath: schedule.sourcePath,
+        destPath: schedule.destinationPath,
+        comparisonMode: schedule.comparisonMode,
+      }));
+    }
+  }, [isElectron, schedule]);
+
   const handlePageChange = useCallback((page) => setCurrentPage(page), []);
 
   if (!configLoaded) {
@@ -75,7 +94,13 @@ export default function App() {
           {currentPage === 'library' ? (
             <Library books={books} setBooks={setBooks} csvPath={config.csvPath} />
           ) : (
-            <SortPanel config={config} setConfig={setConfig} run={run} setRun={setRun} />
+            <SortPanel
+              config={config}
+              setConfig={setConfig}
+              run={run}
+              setRun={setRun}
+              scheduleState={scheduleState}
+            />
           )}
         </main>
       </div>

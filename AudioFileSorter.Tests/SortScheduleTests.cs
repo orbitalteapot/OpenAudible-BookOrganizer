@@ -61,21 +61,46 @@ public class SortScheduleTests
     {
         using var workspace = new TempWorkspace();
         var settingsPath = Path.Combine(workspace.Root, "settings.json");
+        var schedule = Runnable(workspace);
 
-        new SortScheduler(new SortService(), settingsPath, null, NullLogger<SortScheduler>.Instance).Update(Complete(null));
-        var restarted = new SortScheduler(new SortService(), settingsPath, null, NullLogger<SortScheduler>.Instance);
+        Assert.True(CreateScheduler(settingsPath).TryUpdate(schedule, out var error), error);
+        var restarted = CreateScheduler(settingsPath);
 
-        Assert.Equal(360, restarted.Current.IntervalMinutes);
-        Assert.Equal("books.csv", restarted.Current.CsvPath);
+        Assert.Equal(schedule.IntervalMinutes, restarted.Current.IntervalMinutes);
+        Assert.Equal(schedule.CsvPath, restarted.Current.CsvPath);
     }
 
     [Fact]
     public void Scheduler_refuses_changes_to_a_schedule_the_server_sets()
     {
-        var scheduler = new SortScheduler(new SortService(), null, Complete(null), NullLogger<SortScheduler>.Instance);
+        var scheduler = CreateScheduler(null, serverSchedule: Complete(null));
 
         Assert.True(scheduler.IsManagedByServer);
-        Assert.Throws<InvalidOperationException>(() => scheduler.Update(new SortSchedule()));
+        Assert.False(scheduler.TryUpdate(new SortSchedule(), out var error));
+        Assert.Contains("SORT_INTERVAL", error);
+    }
+
+    [Fact]
+    public void Scheduler_refuses_to_turn_on_with_paths_that_cannot_work()
+    {
+        using var workspace = new TempWorkspace();
+
+        Assert.False(CreateScheduler(null).TryUpdate(Runnable(workspace) with { CsvPath = "missing.csv" }, out var error));
+        Assert.Contains("CSV file not found", error);
+    }
+
+    [Fact]
+    public void Scheduler_refuses_an_interval_below_the_minimum()
+    {
+        using var workspace = new TempWorkspace();
+
+        Assert.False(CreateScheduler(null).TryUpdate(Runnable(workspace) with { IntervalMinutes = 5 }, out _));
+    }
+
+    [Fact]
+    public void Scheduler_can_always_be_turned_off()
+    {
+        Assert.True(CreateScheduler(null).TryUpdate(new SortSchedule(), out var error), error);
     }
 
     [Fact]
@@ -83,16 +108,7 @@ public class SortScheduleTests
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("the-hobbit.m4b");
-        var csvPath = Path.Combine(workspace.Root, "books.csv");
-        File.WriteAllText(csvPath, "Title,Author,File name\nThe Hobbit,Tolkien,the-hobbit\n");
-
-        using var scheduler = new SortScheduler(
-            new SortService(), null,
-            new SortSchedule
-            {
-                IntervalMinutes = 60, CsvPath = csvPath, SourcePath = workspace.Source, DestinationPath = workspace.Destination
-            },
-            NullLogger<SortScheduler>.Instance);
+        using var scheduler = CreateScheduler(null, serverSchedule: Runnable(workspace));
 
         await scheduler.StartAsync(CancellationToken.None);
         var deadline = DateTime.UtcNow.AddSeconds(10);
@@ -104,6 +120,27 @@ public class SortScheduleTests
 
         Assert.Equal(["Tolkien/The Hobbit/The Hobbit.m4b"], workspace.DestinationFiles());
         Assert.StartsWith("Done: 1 copied", scheduler.Current.LastResult);
+    }
+
+    private static SortScheduler CreateScheduler(string? settingsPath, SortSchedule? serverSchedule = null)
+    {
+        var logger = NullLogger<SortScheduler>.Instance;
+        return new SortScheduler(new SortService(), new SortScheduleStore(settingsPath, logger), serverSchedule, logger);
+    }
+
+    /// <summary>A schedule whose paths exist, with one book in the export.</summary>
+    private static SortSchedule Runnable(TempWorkspace workspace)
+    {
+        var csvPath = Path.Combine(workspace.Root, "books.csv");
+        File.WriteAllText(csvPath, "Title,Author,File name\nThe Hobbit,Tolkien,the-hobbit\n");
+
+        return new SortSchedule
+        {
+            IntervalMinutes = 60,
+            CsvPath = csvPath,
+            SourcePath = workspace.Source,
+            DestinationPath = workspace.Destination
+        };
     }
 
     private static SortSchedule Complete(DateTime? lastRunUtc) => new()

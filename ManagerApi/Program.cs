@@ -62,11 +62,12 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddSingleton<SortService>();
-builder.Services.AddSingleton(services => new SortScheduler(
-    services.GetRequiredService<SortService>(),
-    Environment.GetEnvironmentVariable("OABO_SETTINGS_PATH"),
-    serverSchedule,
-    services.GetRequiredService<ILogger<SortScheduler>>()));
+builder.Services.AddSingleton(services =>
+{
+    var logger = services.GetRequiredService<ILogger<SortScheduler>>();
+    var store = new SortScheduleStore(Environment.GetEnvironmentVariable("OABO_SETTINGS_PATH"), logger);
+    return new SortScheduler(services.GetRequiredService<SortService>(), store, serverSchedule, logger);
+});
 builder.Services.AddHostedService(services => services.GetRequiredService<SortScheduler>());
 
 builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://0.0.0.0:5123");
@@ -213,47 +214,24 @@ app.MapPut("/api/schedule", (ScheduleRequest? request, SortScheduler scheduler) 
         return Results.BadRequest(new { error = "A schedule is required" });
     }
 
-    if (scheduler.IsManagedByServer)
-    {
-        return Results.Conflict(new { error = "Automatic sorting is set by the server's SORT_INTERVAL setting." });
-    }
-
-    if (request.IntervalMinutes is < SortSchedule.MinimumIntervalMinutes)
-    {
-        return Results.BadRequest(new { error = $"Sort at most every {SortSchedule.MinimumIntervalMinutes} minutes." });
-    }
-
     if (!SortOptions.TryParseComparisonMode(request.ComparisonMode, out var comparisonMode))
     {
         return Results.BadRequest(new { error = $"Unknown comparison mode \"{request.ComparisonMode}\". Use \"quick\" or \"full\"." });
     }
 
-    // Turning automatic sorting on with paths that cannot work should fail now, while the user is
-    // looking, not silently at three in the morning.
-    if (request.IntervalMinutes is not null)
-    {
-        if (string.IsNullOrWhiteSpace(request.CsvPath) ||
-            string.IsNullOrWhiteSpace(request.SourcePath) ||
-            string.IsNullOrWhiteSpace(request.DestinationPath))
-        {
-            return Results.BadRequest(new { error = "Choose all three paths before turning on automatic sorting" });
-        }
-
-        var pathError = SortService.ValidatePaths(request.CsvPath, request.SourcePath, request.DestinationPath);
-        if (pathError is not null)
-        {
-            return Results.BadRequest(new { error = pathError });
-        }
-    }
-
-    scheduler.Update(new SortSchedule
+    var schedule = new SortSchedule
     {
         IntervalMinutes = request.IntervalMinutes,
         CsvPath = request.CsvPath,
         SourcePath = request.SourcePath,
         DestinationPath = request.DestinationPath,
         ComparisonMode = comparisonMode
-    });
+    };
+
+    if (!scheduler.TryUpdate(schedule, out var error))
+    {
+        return Results.BadRequest(new { error });
+    }
 
     return Results.Ok(ToScheduleResponse(scheduler));
 });

@@ -1,5 +1,3 @@
-import { useCallback, useEffect, useState } from 'react';
-import { getSchedule, saveSchedule } from '../api';
 import { formatInterval } from '../format';
 import { Field } from './ui/Field';
 import SegmentedControl from './ui/SegmentedControl';
@@ -14,120 +12,42 @@ const INTERVALS = [
   { value: '10080', label: 'Weekly' },
 ];
 
-// Picks up the result of a scheduled run that finished while the page was open.
-const REFRESH_INTERVAL_MS = 60_000;
-
 function formatTime(utc) {
-  return utc ? new Date(utc).toLocaleString() : null;
+  return new Date(utc).toLocaleString();
+}
+
+function describe(schedule, ready, isElectron) {
+  if (schedule.managedByServer) {
+    return `${formatInterval(schedule.intervalMinutes)}, set by the server's SORT_INTERVAL setting.`;
+  }
+  if (!ready) return 'Choose the three paths above to turn this on.';
+  return isElectron
+    ? 'Runs while the app is open. A run missed while it was closed happens when you next open it.'
+    : 'Uses the paths and update check above.';
 }
 
 /**
- * Turns automatic sorting on or off. The backend runs the schedule, using the paths and update
- * check chosen above; in the desktop app it runs while the app is open and catches up on the next
- * start if a run was missed.
+ * Turns automatic sorting on or off. The backend runs the schedule with the paths and update
+ * check chosen on this page.
  */
-export default function ScheduleCard({ config, setConfig, isElectron }) {
-  const [schedule, setSchedule] = useState(null);
-  const [error, setError] = useState(null);
-  const [saving, setSaving] = useState(false);
-
-  const refresh = useCallback(async () => {
-    try {
-      setSchedule(await getSchedule());
-    } catch {
-      // An older backend without scheduling: the card stays hidden.
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    const timer = setInterval(refresh, REFRESH_INTERVAL_MS);
-    return () => clearInterval(timer);
-  }, [refresh]);
-
-  // The desktop app does not otherwise remember its paths, so reopen it on the ones last scheduled.
-  useEffect(() => {
-    if (!isElectron || !schedule?.csvPath) return;
-    setConfig((prev) =>
-      prev.csvPath || prev.sourcePath || prev.destPath
-        ? prev
-        : {
-            ...prev,
-            csvPath: schedule.csvPath,
-            sourcePath: schedule.sourcePath,
-            destPath: schedule.destinationPath,
-            comparisonMode: schedule.comparisonMode,
-          }
-    );
-  }, [isElectron, schedule?.csvPath, schedule?.sourcePath, schedule?.destinationPath, schedule?.comparisonMode, setConfig]);
-
-  const save = useCallback(
-    async (intervalMinutes) => {
-      setSaving(true);
-      setError(null);
-      try {
-        setSchedule(
-          await saveSchedule({
-            intervalMinutes,
-            csvPath: config.csvPath,
-            sourcePath: config.sourcePath,
-            destinationPath: config.destPath,
-            comparisonMode: config.comparisonMode,
-          })
-        );
-      } catch (err) {
-        setError(err.message);
-      } finally {
-        setSaving(false);
-      }
-    },
-    [config.csvPath, config.sourcePath, config.destPath, config.comparisonMode]
-  );
-
-  // Keep a running schedule on the settings shown above, so what you see is what will run.
-  const intervalMinutes = schedule?.intervalMinutes ?? null;
-  const outOfDate =
-    schedule &&
-    !schedule.managedByServer &&
-    intervalMinutes &&
-    config.csvPath &&
-    config.sourcePath &&
-    config.destPath &&
-    (schedule.csvPath !== config.csvPath ||
-      schedule.sourcePath !== config.sourcePath ||
-      schedule.destinationPath !== config.destPath ||
-      schedule.comparisonMode !== config.comparisonMode);
-
-  // Stops on an error rather than retrying the same failing save on every render.
-  useEffect(() => {
-    if (outOfDate && !saving && !error) save(intervalMinutes);
-  }, [outOfDate, saving, error, save, intervalMinutes]);
-
+export default function ScheduleCard({ scheduleState, config, isElectron }) {
+  const { schedule, error, saving, save } = scheduleState;
   if (!schedule) return null;
 
-  const ready = config.csvPath && config.sourcePath && config.destPath;
-  const selected = intervalMinutes ? String(intervalMinutes) : OFF;
-  const isPreset = INTERVALS.some((option) => option.value === selected);
-
-  const hint = schedule.managedByServer
-    ? `${formatInterval(intervalMinutes)}, set by the server's SORT_INTERVAL setting.`
-    : !ready
-      ? 'Choose the three paths above to turn this on.'
-      : isElectron
-        ? 'Runs while the app is open. A run missed while it was closed happens when you next open it.'
-        : 'Uses the paths and update check above.';
+  const ready = Boolean(config.csvPath && config.sourcePath && config.destPath);
+  const selected = schedule.intervalMinutes ? String(schedule.intervalMinutes) : OFF;
 
   return (
     <Card title="Automatic sorting">
       <div className="space-y-4">
-        <Field label="Sort every" hint={hint} group>
+        <Field label="Sort every" hint={describe(schedule, ready, isElectron)} group>
           {() => (
             <SegmentedControl
               label="Sort every"
-              value={isPreset ? selected : null}
+              value={selected}
               options={INTERVALS}
               disabled={saving || schedule.managedByServer || !ready}
-              onChange={(value) => save(value === OFF ? null : Number(value))}
+              onChange={(value) => save(value === OFF ? null : Number(value), config)}
             />
           )}
         </Field>

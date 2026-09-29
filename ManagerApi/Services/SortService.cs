@@ -201,41 +201,11 @@ public class SortService
         }
         catch (OperationCanceledException)
         {
-            var snapshot = GetProgress();
-            SetProgress(new SortProgressInfo
-            {
-                CurrentBook = snapshot.CurrentBook,
-                TotalBooks = snapshot.TotalBooks,
-                CopiedBooks = snapshot.CopiedBooks,
-                UpdatedBooks = snapshot.UpdatedBooks,
-                SkippedBooks = snapshot.SkippedBooks,
-                MissingBooks = snapshot.MissingBooks,
-                FailedBooks = snapshot.FailedBooks,
-                WarningCount = snapshot.WarningCount,
-                CurrentTitle = snapshot.CurrentTitle,
-                Percentage = snapshot.Percentage,
-                IsComplete = true,
-                IsCanceled = true
-            });
+            SetProgress(Finished(GetProgress(), isCanceled: true));
         }
         catch (Exception ex)
         {
-            var snapshot = GetProgress();
-            SetProgress(new SortProgressInfo
-            {
-                CurrentBook = snapshot.CurrentBook,
-                TotalBooks = snapshot.TotalBooks,
-                CopiedBooks = snapshot.CopiedBooks,
-                UpdatedBooks = snapshot.UpdatedBooks,
-                SkippedBooks = snapshot.SkippedBooks,
-                MissingBooks = snapshot.MissingBooks,
-                FailedBooks = snapshot.FailedBooks,
-                WarningCount = snapshot.WarningCount,
-                CurrentTitle = snapshot.CurrentTitle,
-                Percentage = snapshot.Percentage,
-                Error = ex.Message,
-                IsComplete = true
-            });
+            SetProgress(Finished(GetProgress(), error: ex.Message));
 
             Console.Error.WriteLine($"Sort failed: {ex}");
         }
@@ -248,6 +218,27 @@ public class SortService
                 _isSorting = false;
             }
         }
+    }
+
+    /// <summary>The last progress of a run that stopped early, marked as finished.</summary>
+    private static SortProgressInfo Finished(SortProgressInfo snapshot, bool isCanceled = false, string? error = null)
+    {
+        return new SortProgressInfo
+        {
+            CurrentBook = snapshot.CurrentBook,
+            TotalBooks = snapshot.TotalBooks,
+            CopiedBooks = snapshot.CopiedBooks,
+            UpdatedBooks = snapshot.UpdatedBooks,
+            SkippedBooks = snapshot.SkippedBooks,
+            MissingBooks = snapshot.MissingBooks,
+            FailedBooks = snapshot.FailedBooks,
+            WarningCount = snapshot.WarningCount,
+            CurrentTitle = snapshot.CurrentTitle,
+            Percentage = snapshot.Percentage,
+            IsComplete = true,
+            IsCanceled = isCanceled,
+            Error = error
+        };
     }
 
     /// <summary>

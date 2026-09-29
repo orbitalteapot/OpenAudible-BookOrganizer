@@ -73,7 +73,7 @@ public sealed partial record SortSchedule
             _ => amount * 60L
         };
 
-        if (total < MinimumIntervalMinutes || total > int.MaxValue)
+        if (total > int.MaxValue || !IsValidInterval((int)total))
         {
             return false;
         }
@@ -81,6 +81,8 @@ public sealed partial record SortSchedule
         minutes = (int)total;
         return true;
     }
+
+    public static bool IsValidInterval(int minutes) => minutes >= MinimumIntervalMinutes;
 
     [GeneratedRegex(@"^(?<amount>\d+)\s*(?<unit>[mhd]?)$")]
     private static partial Regex IntervalPattern();

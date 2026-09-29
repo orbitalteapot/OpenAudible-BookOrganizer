@@ -36,7 +36,7 @@ const PATHS = [
   { key: 'destPath', label: 'Destination folder', icon: FolderOutput, picker: 'folder' },
 ];
 
-function SortPanel({ config, setConfig, run, setRun }) {
+function SortPanel({ config, setConfig, run, setRun, scheduleState }) {
   const isElectron = useIsElectron();
   const { start, cancel } = useSortRun({ run, setRun, config });
 
@@ -44,13 +44,24 @@ function SortPanel({ config, setConfig, run, setRun }) {
   const comparisonMode = config.comparisonMode === 'full' ? 'full' : 'quick';
   const selectedMode = COMPARISON_MODES.find((mode) => mode.value === comparisonMode);
 
+  // A running schedule follows the settings on this page, so what you see is what will run.
+  const updateConfig = (patch) => {
+    const next = { ...config, ...patch };
+    setConfig(next);
+
+    const { schedule, save } = scheduleState;
+    if (schedule?.intervalMinutes && !schedule.managedByServer) {
+      save(schedule.intervalMinutes, next);
+    }
+  };
+
   const browse = async (key, picker) => {
     const path =
       picker === 'file'
         ? await window.electronAPI?.openFile([{ name: 'CSV Files', extensions: ['csv'] }])
         : await window.electronAPI?.openFolder();
 
-    if (path) setConfig((prev) => ({ ...prev, [key]: path }));
+    if (path) updateConfig({ [key]: path });
   };
 
   const ready = config.csvPath && config.sourcePath && config.destPath;
@@ -59,7 +70,7 @@ function SortPanel({ config, setConfig, run, setRun }) {
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div>
         <h1 className="text-lg font-semibold text-fg">Sort</h1>
-        <p className="text-xs text-fg-muted">Organize your files into Author / Series / Book folders</p>
+        <p className="text-xs text-fg-muted">Organize your files into Author / Series / Book folders, one folder per book</p>
       </div>
 
       <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-1 items-start gap-4 overflow-y-auto xl:grid-cols-2">
@@ -92,7 +103,7 @@ function SortPanel({ config, setConfig, run, setRun }) {
                   value={comparisonMode}
                   options={COMPARISON_MODES}
                   disabled={sorting}
-                  onChange={(value) => setConfig((prev) => ({ ...prev, comparisonMode: value }))}
+                  onChange={(value) => updateConfig({ comparisonMode: value })}
                 />
               )}
             </Field>
@@ -112,9 +123,10 @@ function SortPanel({ config, setConfig, run, setRun }) {
           </div>
         </Card>
 
-        <ProgressCard sorting={sorting} progress={progress} />
-
-        <ScheduleCard config={config} setConfig={setConfig} isElectron={isElectron} />
+        <div className="flex flex-col gap-4">
+          <ProgressCard sorting={sorting} progress={progress} />
+          <ScheduleCard scheduleState={scheduleState} config={config} isElectron={isElectron} />
+        </div>
       </div>
 
       {/*

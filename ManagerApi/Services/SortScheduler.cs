@@ -1,4 +1,3 @@
-using System.Text.Json;
 using AudioFileSorter.Model;
 
 namespace ManagerApi.Services;
@@ -15,28 +14,25 @@ namespace ManagerApi.Services;
 /// </summary>
 public sealed class SortScheduler : BackgroundService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
     /// <summary>Task.Delay rejects anything beyond ~24 days; longer waits are taken in steps.</summary>
     private static readonly TimeSpan MaxSingleDelay = TimeSpan.FromDays(1);
 
     private readonly SortService _sortService;
-    private readonly string? _settingsPath;
+    private readonly SortScheduleStore _store;
     private readonly ILogger<SortScheduler> _logger;
     private readonly object _lock = new();
 
     private SortSchedule _schedule;
     private CancellationTokenSource _wake = new();
 
-    /// <param name="settingsPath">Where to save the schedule. Null keeps it in memory only.</param>
     /// <param name="serverSchedule">A schedule fixed by the environment, or null to let the page set it.</param>
-    public SortScheduler(SortService sortService, string? settingsPath, SortSchedule? serverSchedule, ILogger<SortScheduler> logger)
+    public SortScheduler(SortService sortService, SortScheduleStore store, SortSchedule? serverSchedule, ILogger<SortScheduler> logger)
     {
         _sortService = sortService;
-        _settingsPath = string.IsNullOrWhiteSpace(settingsPath) ? null : settingsPath;
+        _store = store;
         _logger = logger;
 
-        var saved = Load();
+        var saved = store.Load();
         IsManagedByServer = serverSchedule is not null;
 
         // A container restart should not trigger a fresh sort of a library it sorted an hour ago,
@@ -60,20 +56,25 @@ public sealed class SortScheduler : BackgroundService
         }
     }
 
-    /// <summary>Replaces the schedule, keeping the record of the last run.</summary>
-    /// <exception cref="InvalidOperationException">The environment sets the schedule.</exception>
-    public SortSchedule Update(SortSchedule schedule)
+    /// <summary>
+    /// Replaces the schedule, keeping the record of the last run. Turning automatic sorting on with
+    /// paths that cannot work is refused now, while the user is looking, rather than failing
+    /// silently at three in the morning.
+    /// </summary>
+    /// <param name="error">Why the schedule was refused, for the user.</param>
+    public bool TryUpdate(SortSchedule schedule, out string? error)
     {
-        if (IsManagedByServer)
+        error = Validate(schedule);
+        if (error is not null)
         {
-            throw new InvalidOperationException("Automatic sorting is set by the server's SORT_INTERVAL setting.");
+            return false;
         }
 
         CancellationTokenSource wake;
         lock (_lock)
         {
             _schedule = schedule with { LastRunUtc = _schedule.LastRunUtc, LastResult = _schedule.LastResult };
-            Save(_schedule);
+            _store.Save(_schedule);
 
             wake = _wake;
             _wake = new CancellationTokenSource();
@@ -81,7 +82,29 @@ public sealed class SortScheduler : BackgroundService
 
         // Interrupts the current wait so the new interval applies now, not after the old one ends.
         wake.Cancel();
-        return Current;
+        return true;
+    }
+
+    private string? Validate(SortSchedule schedule)
+    {
+        if (IsManagedByServer)
+        {
+            return "Automatic sorting is set by the server's SORT_INTERVAL setting.";
+        }
+
+        if (schedule.IntervalMinutes is null)
+        {
+            return null;
+        }
+
+        if (!SortSchedule.IsValidInterval(schedule.IntervalMinutes.Value))
+        {
+            return $"Sort at most every {SortSchedule.MinimumIntervalMinutes} minutes.";
+        }
+
+        return schedule.IsEnabled
+            ? SortService.ValidatePaths(schedule.CsvPath!, schedule.SourcePath!, schedule.DestinationPath!)
+            : "Choose all three paths before turning on automatic sorting.";
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -144,10 +167,11 @@ public sealed class SortScheduler : BackgroundService
         lock (_lock)
         {
             _schedule = _schedule with { LastRunUtc = startedUtc, LastResult = result };
-            Save(_schedule);
+            _store.Save(_schedule);
         }
     }
 
+    /// <summary>"Done: 3 copied, 120 up to date." Only the numbers that are not zero.</summary>
     private static string Describe(SortProgressInfo progress)
     {
         if (progress.Error is not null)
@@ -155,47 +179,17 @@ public sealed class SortScheduler : BackgroundService
             return $"Failed: {progress.Error}";
         }
 
+        var counts = new (int Count, string Label)[]
+        {
+            (progress.CopiedBooks, "copied"),
+            (progress.UpdatedBooks, "of them updated"),
+            (progress.SkippedBooks, "up to date"),
+            (progress.MissingBooks, "not found"),
+            (progress.FailedBooks, "failed")
+        };
+
+        var details = string.Join(", ", counts.Where(c => c.Count > 0).Select(c => $"{c.Count} {c.Label}"));
         var outcome = progress.IsCanceled ? "Canceled" : "Done";
-        return $"{outcome}: {progress.CopiedBooks} copied ({progress.UpdatedBooks} updated), " +
-               $"{progress.SkippedBooks} already up to date, {progress.MissingBooks} not found, {progress.FailedBooks} failed.";
-    }
-
-    private SortSchedule Load()
-    {
-        if (_settingsPath is null || !File.Exists(_settingsPath))
-        {
-            return new SortSchedule();
-        }
-
-        try
-        {
-            return JsonSerializer.Deserialize<SortSchedule>(File.ReadAllText(_settingsPath), JsonOptions) ?? new SortSchedule();
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
-        {
-            _logger.LogWarning(ex, "Could not read the saved schedule at {Path}; automatic sorting is off", _settingsPath);
-            return new SortSchedule();
-        }
-    }
-
-    /// <summary>Written beside the target and renamed over it, so a crash never leaves half a file.</summary>
-    private void Save(SortSchedule schedule)
-    {
-        if (_settingsPath is null)
-        {
-            return;
-        }
-
-        var partialPath = _settingsPath + ".tmp";
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_settingsPath))!);
-            File.WriteAllText(partialPath, JsonSerializer.Serialize(schedule, JsonOptions));
-            File.Move(partialPath, _settingsPath, overwrite: true);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogWarning(ex, "Could not save the schedule to {Path}; it will be forgotten on restart", _settingsPath);
-        }
+        return details.Length == 0 ? $"{outcome}: no books in the export." : $"{outcome}: {details}.";
     }
 }
