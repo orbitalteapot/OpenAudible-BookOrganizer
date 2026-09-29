@@ -64,4 +64,19 @@ describe('useLibrary', () => {
     await waitFor(() => expect(result.current.books).toHaveLength(1));
     expect(parseLibrary).toHaveBeenCalledTimes(1);
   });
+
+  it('asks for the path status again when it read an export the status says is missing', async () => {
+    vi.mocked(parseLibrary).mockResolvedValue({ books: [book] });
+    const refreshStatus = vi.fn();
+    const { result, rerender } = renderHook(({ found }) => useLibrary('/a.csv', found, refreshStatus), {
+      initialProps: { found: false },
+    });
+    await waitFor(() => expect(result.current.books).toHaveLength(1));
+    expect(refreshStatus).toHaveBeenCalledTimes(1);
+
+    // Once the status agrees, a reload has nothing to correct.
+    rerender({ found: true });
+    await act(() => result.current.reload());
+    expect(refreshStatus).toHaveBeenCalledTimes(1);
+  });
 });
