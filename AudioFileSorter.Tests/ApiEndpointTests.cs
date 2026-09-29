@@ -22,7 +22,8 @@ public class ApiEndpointTests
         {
             CsvPath = Path.Combine(workspace.Root, "missing.csv"),
             SourcePath = workspace.Source,
-            DestinationPath = workspace.Destination
+            // A subfolder of a working mount that nobody has made yet.
+            DestinationPath = Path.Combine(workspace.Destination, "Audiobooks")
         };
         await using var app = new ApiFactory(config);
         using var client = app.CreateClient();
@@ -34,6 +35,13 @@ public class ApiEndpointTests
         Assert.False(settings.GetProperty("locks").GetProperty("schedule").GetBoolean());
         Assert.Equal("notFound", settings.GetProperty("pathStatus").GetProperty("csv").GetString());
         Assert.Equal("ok", settings.GetProperty("pathStatus").GetProperty("source").GetString());
+        Assert.Equal("notFound", settings.GetProperty("pathStatus").GetProperty("destination").GetString());
+
+        // Each missing server-set path in the words a refused start and the schedule card use.
+        var messages = settings.GetProperty("pathMessages");
+        Assert.StartsWith($"The library export {config.CsvPath} was not found inside the container", messages.GetProperty("csv").GetString());
+        Assert.Equal(JsonValueKind.Null, messages.GetProperty("source").ValueKind);
+        Assert.StartsWith($"The folder Audiobooks does not exist inside {workspace.Destination}", messages.GetProperty("destination").GetString());
         Assert.Equal("quick", settings.GetProperty("comparisonMode").GetString());
         Assert.Equal("normal", settings.GetProperty("copySpeed").GetString());
     }
@@ -71,6 +79,8 @@ public class ApiEndpointTests
         Assert.Equal("gentle", body.GetProperty("copySpeed").GetString());
         Assert.Equal("notFound", body.GetProperty("pathStatus").GetProperty("destination").GetString());
         Assert.Equal("notSet", body.GetProperty("pathStatus").GetProperty("csv").GetString());
+        // Paths the page chose: "Folder not found" says it all, so there is no server wording.
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("pathMessages").GetProperty("destination").ValueKind);
 
         var reloaded = await client.GetFromJsonAsync<JsonElement>("/api/settings");
         Assert.Equal("gentle", reloaded.GetProperty("copySpeed").GetString());

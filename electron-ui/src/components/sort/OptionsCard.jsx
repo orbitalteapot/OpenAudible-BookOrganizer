@@ -102,7 +102,8 @@ export default function OptionsCard({ settings, update, saving, fieldErrors, run
             <p>
               Books in a numbered series go in Author / Series / Book N; other books in Author / Title. Books already in the
               destination folder are moved to where they now belong: those left loose by older versions of this app,
-              and those filed before their series details changed.
+              and those filed before their series details changed. Only a file with the same audio as the book in the
+              source folder is moved; one that differs is left where it is and listed under Problems.
             </p>
           </div>
         </Disclosure>

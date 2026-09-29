@@ -48,13 +48,6 @@ describe('ScheduleCard', () => {
     expect(screen.getByText("Automatic sorting can't run: CSV_PATH is not set.")).toBeTruthy();
   });
 
-  it("shows the server's configuration warnings", () => {
-    const warning = 'SORT_INTERVAL="6x" was ignored — use a value like 6h, 12h or 1d.';
-    render(<Harness initial={scheduleResponse()} settings={settingsResponse({ serverWarnings: [warning] })} />);
-
-    expect(screen.getByText(warning)).toBeTruthy();
-  });
-
   it('cannot be turned on until the paths are set, and says what is missing', () => {
     render(<Harness initial={scheduleResponse()} settings={settingsResponse({ csvPath: null })} isElectron />);
 

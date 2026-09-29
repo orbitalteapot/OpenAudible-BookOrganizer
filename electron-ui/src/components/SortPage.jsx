@@ -16,15 +16,34 @@ import { Banner, Card } from './ui/Surface';
  */
 export default function SortPage({ settingsState, run, scheduleState, isElectron, focusProgress, onProgressFocused }) {
   const { settings, update, refresh, saving, fieldErrors, error: settingsError } = settingsState;
-  const [startError, setStartError] = useState(null);
+  // The last refused start (`error`), and whether the backend has looked at the folders since
+  // (`checked`). Until it has, the statuses on screen are from before the refusal, up to 30 seconds
+  // old, and can still say "Found" about the drive that was just unplugged.
+  const [refusal, setRefusal] = useState(null);
+  const startError = refusal?.error ?? null;
   const runActive = isRunning(run.status);
 
   // A start refused because the drive was unplugged goes once the backend finds the folder again,
   // by the same rule as a refused save's error about it.
   const pathStatus = settings?.pathStatus;
   useEffect(() => {
-    if (startError && isFoundAgain(startError, pathStatus)) setStartError(null);
-  }, [startError, pathStatus]);
+    if (refusal?.checked && isFoundAgain(refusal.error, pathStatus)) setRefusal(null);
+  }, [refusal, pathStatus]);
+
+  // A refusal means the folders are not what the page last heard, so they are asked about again,
+  // and the refusal can be answered by what comes back. `error` is null when the refusal is shown
+  // some other way (the question whether to create the destination).
+  const handleRefused = useCallback(
+    (error) => {
+      const refused = error && { error, checked: false };
+      setRefusal(refused);
+      refresh().then((answered) => {
+        if (answered && refused) setRefusal((shown) => (shown === refused ? { ...refused, checked: true } : shown));
+      });
+    },
+    [refresh]
+  );
+  const handleStart = useCallback(() => setRefusal(null), []);
 
   // A start refused because of one path is shown under that path too, until a newer save speaks
   // for it, a different path is picked there, or the folder turns up.
@@ -34,7 +53,7 @@ export default function SortPage({ settingsState, run, scheduleState, isElectron
   );
 
   const handlePicked = useCallback(
-    (field) => setStartError((current) => (current?.field === field ? null : current)),
+    (field) => setRefusal((current) => (current?.error.field === field ? null : current)),
     []
   );
 
@@ -72,7 +91,6 @@ export default function SortPage({ settingsState, run, scheduleState, isElectron
           <ProgressCard
             status={run.status}
             cancel={run.cancel}
-            lostContact={run.error}
             focusRequested={focusProgress}
             onFocused={onProgressFocused}
           />
@@ -93,8 +111,8 @@ export default function SortPage({ settingsState, run, scheduleState, isElectron
           run={run}
           isElectron={isElectron}
           error={startError}
-          onError={setStartError}
-          onRefused={refresh}
+          onStart={handleStart}
+          onRefused={handleRefused}
         />
       </Card>
     </div>

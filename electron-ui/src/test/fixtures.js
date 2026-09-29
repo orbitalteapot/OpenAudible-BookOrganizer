@@ -11,6 +11,7 @@ export const settingsResponse = (overrides = {}) => ({
   openAtLogin: false,
   locks: { paths: false, schedule: false },
   pathStatus: { csv: 'ok', source: 'ok', destination: 'ok' },
+  pathMessages: { csv: null, source: null, destination: null },
   serverWarnings: [],
   ...overrides,
 });
@@ -38,6 +39,7 @@ export const idleStatus = () => ({
   problems: [],
   problemCount: 0,
   isCanceled: false,
+  preparing: false,
   error: null,
   errorCode: null,
   errorField: null,

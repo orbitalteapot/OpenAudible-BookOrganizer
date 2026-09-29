@@ -46,6 +46,16 @@ public sealed record RunStatus
     public int ProblemCount { get; init; }
     public bool IsCanceled { get; init; }
 
+    /// <summary>
+    /// The run is reading the export and looking through the folders, before its first book. On a
+    /// large library on a network drive that takes minutes, and a bare 0% for that long looks hung.
+    /// </summary>
+    public bool Preparing => State == RunState.Running && !Planned;
+
+    /// <summary>The sorter has reported its plan: every progress report comes after it (see <see cref="With"/>).</summary>
+    [JsonIgnore]
+    public bool Planned { get; init; }
+
     /// <summary>Why the run stopped early, for the user. Null when it ran to the end or was canceled by a person.</summary>
     public string? Error { get; init; }
 
@@ -72,6 +82,7 @@ public sealed record RunStatus
     {
         return this with
         {
+            Planned = true,
             TotalBooks = progress.TotalBooks,
             CurrentBook = progress.CurrentBook,
             Percentage = progress.Percentage,

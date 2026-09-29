@@ -154,11 +154,6 @@ export default function ScheduleCard({ scheduleState, settingsState, runStatus, 
         {schedule.blockedReason && (
           <Banner tone="caution">Automatic sorting can&apos;t run: {schedule.blockedReason}</Banner>
         )}
-        {settings.serverWarnings?.map((warning) => (
-          <Banner key={warning} tone="caution">
-            {warning}
-          </Banner>
-        ))}
         {error && <Banner tone="critical">{error}</Banner>}
 
         {isElectron && isOn && <BackgroundOptions settings={settings} update={update} saving={savingSettings} />}

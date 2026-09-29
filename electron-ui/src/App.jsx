@@ -5,6 +5,7 @@ import Sidebar from './components/Sidebar';
 import Library from './components/Library';
 import SortPage from './components/SortPage';
 import RunAnnouncer from './components/RunAnnouncer';
+import AppNotices from './components/AppNotices';
 import { Banner, EmptyState } from './components/ui/Surface';
 import { useIsElectron, useLibrary, useRunStatus, useSchedule, useSettings, useTheme } from './hooks';
 
@@ -111,6 +112,7 @@ export default function App() {
         />
 
         <main className="flex min-w-0 flex-1 flex-col p-5">
+          {settings && <AppNotices lostContact={run.error} serverWarnings={settings.serverWarnings} />}
           {!settings ? (
             <Starting error={settingsState.error} isElectron={isElectron} />
           ) : currentPage === 'library' ? (

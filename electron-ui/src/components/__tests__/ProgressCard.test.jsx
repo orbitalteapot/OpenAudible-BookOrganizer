@@ -5,6 +5,20 @@ import { summariseRun } from '../../format';
 import ProgressCard from '../sort/ProgressCard';
 
 describe('ProgressCard', () => {
+  it('says what a run is doing before its first book, instead of a frozen 0%', () => {
+    const preparing = runningStatus({ preparing: true, totalBooks: 0, currentBook: 0, percentage: 0, currentTitle: null, counts: counts() });
+    const { rerender } = render(<ProgressCard status={preparing} cancel={vi.fn()} />);
+
+    expect(screen.getByText('Getting ready')).toBeTruthy();
+    expect(screen.getByText(/Reading your library and checking the folders/)).toBeTruthy();
+    expect(screen.queryByText('0%')).toBeNull();
+
+    rerender(<ProgressCard status={runningStatus()} cancel={vi.fn()} />);
+    expect(screen.getByText('Sorting')).toBeTruthy();
+    expect(screen.getByText('42%')).toBeTruthy();
+    expect(screen.queryByText(/Reading your library/)).toBeNull();
+  });
+
   it('keeps a failed Cancel to the run it was for', async () => {
     const cancel = vi.fn().mockRejectedValue(new Error('Could not reach the backend.'));
     const first = runningStatus({ startedUtc: '2026-09-29T10:00:00Z' });

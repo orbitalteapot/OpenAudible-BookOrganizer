@@ -36,34 +36,24 @@ export const PATH_FIELDS = [
 
 export const CSV_FIELD = PATH_FIELDS[0];
 
-/** "/data/books.csv" → "/data"; "/books.csv" → "/". */
-function folderOf(path) {
-  return path.replace(/[\\/][^\\/]*$/, '') || path.charAt(0);
-}
-
 /**
  * One path's status, as `{ tone, text }`: the last error the backend gave for it, otherwise what the
- * backend sees there now. In the browser the paths come from the container, so a path that is not
- * found is explained in terms of the container's volumes and variables, which is where it is fixed.
- * The one wording for this, used by the Folders card and by the Library, where the app opens.
+ * backend sees there now. The one wording for this, used by the Folders card and by the Library, where
+ * the app opens. A path the container's environment sets is fixed in its volumes and variables, so the
+ * backend words what is wrong with it (`pathMessages`), as it does for a refused start and the
+ * Automatic sorting card; it can tell a missing subfolder from a missing mount, which this cannot.
  */
-export function describePath({ field, status, kind, variable }, settings, error, isElectron) {
+export function describePath({ status, kind, variable }, settings, error, isElectron) {
   if (error) return { tone: 'critical', text: error };
 
   switch (settings?.pathStatus?.[status]) {
     case 'ok':
       return { tone: 'positive', text: 'Found' };
-    case 'notFound': {
-      const what = kind === 'file' ? 'File' : 'Folder';
-      if (isElectron) return { tone: 'critical', text: `${what} not found` };
+    case 'notFound':
       return {
         tone: 'critical',
-        text:
-          kind === 'file'
-            ? `${what} not found inside the container — check that the folder holding it is mapped to ${folderOf(settings[field])} and that ${variable} names the file`
-            : `${what} not found inside the container — check the volume mapping for ${variable}, or create the folder on the host if the mapping is right`,
+        text: settings.pathMessages?.[status] ?? `${kind === 'file' ? 'File' : 'Folder'} not found`,
       };
-    }
     case 'notWritable':
       return { tone: 'critical', text: "Can't write to this folder" };
     default:

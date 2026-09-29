@@ -17,12 +17,14 @@ public sealed record SettingsResponse(
     bool OpenAtLogin,
     SettingsLocks Locks,
     PathStatus PathStatus,
+    PathMessages PathMessages,
     IReadOnlyList<string> ServerWarnings)
 {
     public static SettingsResponse From(SettingsService service)
     {
         var settings = service.Effective;
         var config = service.Config;
+        var pathProblems = PathProblems.For(settings);
 
         return new SettingsResponse(
             settings.CsvPath,
@@ -34,7 +36,8 @@ public sealed record SettingsResponse(
             settings.KeepRunningInBackground,
             settings.OpenAtLogin,
             new SettingsLocks(config.PathsLocked, config.ScheduleLocked),
-            PathStatus.For(settings),
+            PathStatus.From(pathProblems),
+            PathMessages.From(pathProblems, config),
             service.Warnings);
     }
 }

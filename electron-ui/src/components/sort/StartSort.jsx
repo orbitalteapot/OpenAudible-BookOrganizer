@@ -10,10 +10,11 @@ import { Banner } from '../ui/Surface';
  * the user says so, because the likeliest reason it is missing is an unplugged drive, and sorting
  * onto the internal disk instead would quietly fill it.
  *
- * `error` / `onError` hold why the last start was refused, which the page also shows under the
- * path it was about. `onRefused` is told whenever the backend refuses a start.
+ * `error` is why the last start was refused, which the page also shows under the path it was
+ * about. `onStart` is told when a start is asked for, and `onRefused` whenever the backend refuses
+ * one: with the error to show, or null when this asks whether to create the destination instead.
  */
-export default function StartSort({ settings, run, isElectron, error, onError, onRefused }) {
+export default function StartSort({ settings, run, isElectron, error, onStart, onRefused }) {
   const [confirmCreate, setConfirmCreate] = useState(false);
   const createRef = useRef(null);
   const startRef = useRef(null);
@@ -35,17 +36,15 @@ export default function StartSort({ settings, run, isElectron, error, onError, o
 
   const begin = async (createDestination) => {
     setConfirmCreate(false);
-    onError(null);
+    onStart();
     try {
       await run.start({ createDestination });
     } catch (err) {
-      // A refusal means the folders are not what the page last heard (a drive was unplugged or
-      // plugged in since), so their statuses are asked for again rather than left saying "Found".
-      onRefused();
       // A destination the server sets is a container mount, which the backend never creates: a
       // missing one is a mapping to fix, not a folder to make.
-      if (err.code === 'destinationMissing' && !settings.locks?.paths) setConfirmCreate(true);
-      else onError(err);
+      const askToCreate = err.code === 'destinationMissing' && !settings.locks?.paths;
+      setConfirmCreate(askToCreate);
+      onRefused(askToCreate ? null : err);
     }
   };
 

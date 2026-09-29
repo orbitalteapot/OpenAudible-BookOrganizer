@@ -9,7 +9,7 @@ import { summariseRun } from '../format';
  * opened is not news, so only one that ends while it is open is announced.
  */
 export default function RunAnnouncer({ status }) {
-  const [message, setMessage] = useState('');
+  const [message, setMessage] = useState(null);
   const announced = useRef(undefined);
 
   useEffect(() => {
@@ -20,13 +20,15 @@ export default function RunAnnouncer({ status }) {
       announced.current = finished;
     } else if (finished && finished !== announced.current) {
       announced.current = finished;
-      setMessage(summariseRun(status).headline);
+      setMessage({ run: finished, text: summariseRun(status).headline });
     }
   }, [status]);
 
   return (
     <p aria-live="polite" className="sr-only">
-      {message}
+      {/* A new element for every run: sorting an unchanged library ends with the same words each
+          time, and the same text set again changes nothing on the page, so was never read out. */}
+      {message && <span key={message.run}>{message.text}</span>}
     </p>
   );
 }

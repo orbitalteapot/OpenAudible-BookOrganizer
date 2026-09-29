@@ -207,6 +207,28 @@ describe('SortPage', () => {
     expect(screen.queryByText(/Couldn't start the sort/)).toBeNull();
   });
 
+  it('keeps a refused start while the folder statuses on screen are older than the refusal', async () => {
+    // The drive was unplugged after the last refresh, so the page still says "Found".
+    await openSortPage();
+    vi.mocked(startSort).mockRejectedValueOnce(
+      new ApiError('The source folder was not found: /books/source', { status: 400, code: 'notFound', field: 'sourcePath' })
+    );
+    let answer;
+    vi.mocked(getSettings).mockImplementationOnce(() => new Promise((resolve) => (answer = resolve)));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start sorting' }));
+    expect(await screen.findByText(/Couldn't start the sort/)).toBeTruthy();
+    await waitFor(() => expect(answer).toBeTypeOf('function'));
+    // Still there while the page asks again, with the old "Found" on screen.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(screen.getByText(/Couldn't start the sort/)).toBeTruthy();
+
+    answer(settingsResponse({ pathStatus: { csv: 'ok', source: 'notFound', destination: 'ok' } }));
+    const source = screen.getByLabelText('Source folder');
+    await waitFor(() => expect(statusLine(source).textContent).toBe('The source folder was not found: /books/source'));
+    expect(screen.getByText(/Couldn't start the sort/)).toBeTruthy();
+  });
+
   it('never offers to create a destination the server sets', async () => {
     await openSortPage({ settings: settingsResponse({ locks: { paths: true, schedule: false } }) });
     vi.mocked(startSort).mockRejectedValueOnce(

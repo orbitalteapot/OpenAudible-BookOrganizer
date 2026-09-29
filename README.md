@@ -132,9 +132,10 @@ network share that is not plugged in, and sorting onto your internal disk instea
 fill it. Connect the drive and start again, or click **Create folder and sort** if a new folder is
 what you want.
 
-Progress appears in the **Progress** card as it works, with the book that finished last, and you
-can cancel at any point — books already copied are complete files, and re-running picks up where
-you left off. A small **Sorting…** badge in the sidebar shows the progress from any page; click it
+Progress appears in the **Progress** card as it works, with the book that finished last. It first
+says *Getting ready* while it reads the export and looks through the folders, which on a large
+library on a network drive can take a few minutes. You can cancel at any point — books already
+copied are complete files, and re-running picks up where you left off. A small **Sorting…** badge in the sidebar shows the progress from any page; click it
 to go straight to the Progress card.
 
 ![A finished sort](images/app-sort-complete.png)
@@ -201,7 +202,8 @@ Andy Weir/
 ```
 
 Every book gets a folder of its own: a numbered series book goes in `Book N`, and any other book in
-a folder named after its title. That is the layout Audiobookshelf, Plex and similar servers expect —
+a folder named after its title. Two books with the same number (two narrations of one book, say)
+get `Book 1` and `Book 1 (2)`, in the order of the export. That is the layout Audiobookshelf, Plex and similar servers expect —
 a loose audio file in an author folder makes them treat that whole folder as one book and miss every
 series inside it. A companion PDF is copied next to its audiobook when the export mentions one and
 the file is present.
@@ -211,8 +213,11 @@ tidied up on the next sort: each loose file is moved into its new book folder ra
 second time, and counted as **Moved**. The same happens to a book whose metadata has changed shape
 since it was filed — one that has since been given a series, or a number within its series — so it
 is not left behind as a second copy. This always happens: a loose file next to a book folder is
-exactly what breaks Audiobookshelf. Only files the sort can match to a book in the export are
-moved, and only within the destination folder.
+exactly what breaks Audiobookshelf. Only a file that holds the same audio as the book in the source
+folder is moved, and only within the destination folder. A file with the book's old name but
+different audio may be the only copy of another book with the same title (one you have returned, or
+not downloaded again), so it is left where it is and the problems list names it: delete it yourself
+if it is an old copy of that book.
 
 Names come from your metadata, cleaned up so the result is portable:
 
@@ -411,8 +416,8 @@ the schedule comes from `SORT_INTERVAL` or the Sort page, and any variable that 
 the quickest way to spot a mount that is not where you thought it was. After that, every sort logs
 one line with its outcome, such as `Scheduled sort finished: 3 new, 120 up to date.`
 
-The same information is on the Sort page, so you rarely need the log: each path's status, the
-problems list for every run, and any ignored setting as a warning on the Automatic sorting card.
+The same information is in the app, so you rarely need the log: each path's status on the Sort
+page, the problems list for every run, and any ignored setting as a warning at the top of every page.
 
 ## Docker troubleshooting
 
@@ -426,9 +431,9 @@ problems list for every run, and any ignored setting as a warning on the Automat
 | *"The folder … does not exist inside /destination"* | The mount works, but the subfolder `DESTINATION_PATH` names (such as `/destination/Audiobooks`) has not been made yet. Create it on the host, in the folder mapped to `/destination`. |
 | *"Cannot write to the destination folder"* | The container's user cannot write to the mounted folder. Check the host folder's permissions. |
 | Sorted books cannot be renamed or deleted over SMB or by another app | The container ran as root, so it owns what it sorted. Run it as your own user (see above) and, once, `chown -R` the destination folder on the host back to you. |
-| A warning on the Automatic sorting card, such as ``SORT_INTERVAL="6x" was ignored`` | The value could not be read. Use something like `6h`, `12h` or `1d`, or `off`. |
-| A warning on the Automatic sorting card: *"The settings could not be saved…"* | The `./data` folder is mounted read-only, or its disk is full. The Sort page's choices and when automatic sorting last ran are forgotten on every restart until `settings.json` can be written. |
-| A warning on the Automatic sorting card: *"The saved settings could not be read…"* | `settings.json` was not valid JSON (a hand edit, say). The container started with the default settings and kept the old file beside it as `settings.json.unreadable-<date>`, so nothing in it is lost. |
+| A warning at the top of the page, such as ``SORT_INTERVAL="6x" was ignored`` | The value could not be read. Use something like `6h`, `12h` or `1d`, or `off`. |
+| A warning at the top of the page: *"The settings could not be saved…"* | The `./data` folder is mounted read-only, or its disk is full. The Sort page's choices and when automatic sorting last ran are forgotten on every restart until `settings.json` can be written. |
+| A warning at the top of the page: *"The saved settings could not be read…"* | `settings.json` was not valid JSON (a hand edit, say). The container started with the default settings and kept the old file beside it as `settings.json.unreadable-<date>`, so nothing in it is lost. |
 | `docker pull` fails | Check the image name has no hyphen between "book" and "organizer", and that you are logged in to GHCR if the package is private. |
 
 The image is published to GitHub Packages, not attached to release assets:

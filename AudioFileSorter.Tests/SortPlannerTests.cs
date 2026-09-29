@@ -556,6 +556,118 @@ public class SortPlannerTests
     }
 
     [Fact]
+    public void Upgrade_never_moves_a_missing_standalone_books_loose_file_into_a_series_book_of_the_same_title()
+    {
+        // As above, but where main left the standalone edition: loose in the author folder.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("dune-series.m4b", "series-edition");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Dune.m4b"), "standalone-edition");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Dune", filename: "dune-standalone"),
+            TempWorkspace.Book(title: "Dune", filename: "dune-series", seriesName: "Dune Chronicles", seriesSequence: "1"));
+
+        Assert.True(planned[0].IsMissingFromSource);
+        Assert.Null(planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_moves_a_books_own_copy_when_its_old_name_belongs_to_a_book_that_has_left_the_export()
+    {
+        // main sorted two books called "Collected Works"; the first is no longer in the export, so
+        // the replay gives the second the plain name, which holds the first book's audio.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("second.m4b", "second-book");
+        var firstLoose = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "first-book");
+        var secondLoose = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works (2).m4b"), "second-book");
+
+        var planned = Plan(workspace, TempWorkspace.Book(title: "Collected Works", filename: "second"));
+
+        Assert.Equal(secondLoose, planned[0].AudioLegacyPath);
+        Assert.Contains(Path.GetRelativePath(workspace.Destination, firstLoose), planned[0].Warning);
+    }
+
+    [Fact]
+    public void Plan_gives_two_books_with_the_same_series_number_folders_of_their_own()
+    {
+        // Two narrations of one book: sharing "Book 1" would make a library tool read them as one
+        // book with two tracks.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("hp1-fry.m4b", "fry-edition");
+        workspace.WriteSourceFile("hp1-dale.m4b", "dale-edition");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(filename: "hp1-fry", seriesName: "Harry Potter", seriesSequence: "1"),
+            TempWorkspace.Book(filename: "hp1-dale", seriesName: "Harry Potter", seriesSequence: "1"));
+
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "Harry Potter", "Book 1", "A Book.m4b"),
+            planned[0].AudioDestination);
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "Harry Potter", "Book 1 (2)", "A Book.m4b"),
+            planned[1].AudioDestination);
+    }
+
+    [Fact]
+    public void Upgrade_moves_the_second_book_with_a_series_number_out_of_the_book_folder_main_shared()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("hp1-fry.m4b", "fry-edition");
+        workspace.WriteSourceFile("hp1-dale.m4b", "dale-edition");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Harry Potter", "Book 1", "A Book.m4b"), "fry-edition");
+        var second = workspace.WriteDestinationFile(
+            Path.Combine("An Author", "Harry Potter", "Book 1", "A Book (2).m4b"), "dale-edition");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(filename: "hp1-fry", seriesName: "Harry Potter", seriesSequence: "1"),
+            TempWorkspace.Book(filename: "hp1-dale", seriesName: "Harry Potter", seriesSequence: "1"));
+
+        Assert.Null(planned[0].AudioLegacyPath);
+        Assert.Equal(second, planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_moves_a_downloaded_edition_out_of_a_book_folder_an_undownloaded_one_now_holds()
+    {
+        // main gave "Book 1" to the only edition it had a file for; list order now gives it to the
+        // first edition, which is not downloaded. The file holds the second one's audio, so it is its.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("hp1-dale.m4b", "dale-edition");
+        var old = workspace.WriteDestinationFile(Path.Combine("An Author", "Harry Potter", "Book 1", "A Book.m4b"), "dale-edition");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(filename: "hp1-fry", seriesName: "Harry Potter", seriesSequence: "1"),
+            TempWorkspace.Book(filename: "hp1-dale", seriesName: "Harry Potter", seriesSequence: "1"));
+
+        Assert.True(planned[0].IsMissingFromSource);
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "Harry Potter", "Book 1 (2)", "A Book.m4b"),
+            planned[1].AudioDestination);
+        Assert.Equal(old, planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void A_later_run_never_moves_a_missing_editions_file_into_another_edition_with_the_same_number()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("hp1-dale.m4b", "dale-edition");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Harry Potter", "Book 1", "A Book.m4b"), "fry-edition");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(filename: "hp1-fry", seriesName: "Harry Potter", seriesSequence: "1"),
+            TempWorkspace.Book(filename: "hp1-dale", seriesName: "Harry Potter", seriesSequence: "1"));
+
+        Assert.Null(planned[1].AudioLegacyPath);
+        // It is the missing edition's file, in its own folder: nothing to report.
+        Assert.Null(planned[1].Warning);
+    }
+
+    [Fact]
     public void Upgrade_moves_a_loose_file_whose_name_the_disk_stores_decomposed()
     {
         // HFS+, and files a Mac wrote to a NAS, store "é" as "e" + a combining accent; the export

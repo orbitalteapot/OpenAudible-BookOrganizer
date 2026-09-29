@@ -180,6 +180,22 @@ describe('useSettings', () => {
     expect(result.current.fieldErrors).toEqual({});
   });
 
+  it('lets the next request go after a save that timed out, and asks what was saved after all', async () => {
+    const { result } = await renderLoaded();
+    vi.mocked(getSettings).mockClear().mockResolvedValue(settingsResponse({ copySpeed: 'gentle' }));
+    vi.mocked(updateSettings).mockRejectedValueOnce(
+      new ApiError('The organizer did not answer in time.', { code: 'timeout' })
+    );
+
+    await act(() => result.current.update({ copySpeed: 'gentle' }));
+
+    expect(result.current.saving).toBe(false);
+    expect(result.current.error).toBe('The organizer did not answer in time.');
+    // The save went through in the end: the page shows what the backend holds.
+    await waitFor(() => expect(result.current.settings.copySpeed).toBe('gentle'));
+    expect(getSettings).toHaveBeenCalledTimes(1);
+  });
+
   it('drops a lost-contact error once a refresh gets an answer, but not a refused save', async () => {
     const { result } = await renderLoaded();
     vi.mocked(updateSettings).mockRejectedValueOnce(new ApiError('Could not reach the backend.', { code: 'unreachable' }));

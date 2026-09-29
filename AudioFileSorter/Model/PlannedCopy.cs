@@ -22,8 +22,9 @@ public sealed record PlannedCopy
 
     /// <summary>
     /// A copy of the audio an older version left somewhere else in the destination (loose in the
-    /// author or series folder, or filed under the book's old series layout), to be moved to
-    /// <see cref="AudioDestination"/> before the update check. Null when there is none.
+    /// author or series folder, in a "Book N" folder shared with another book, or filed under the
+    /// book's old series layout), to be moved to <see cref="AudioDestination"/> before the update
+    /// check. It passed the quick check against the source, so it is this book's. Null when there is none.
     /// </summary>
     public string? AudioLegacyPath { get; init; }
 

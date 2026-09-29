@@ -79,8 +79,8 @@ public sealed record ServerConfig
     /// <paramref name="problem"/>, worded for where it has to be fixed. A path the environment sets is
     /// a container mount, so "Is the drive connected?" would send its admin looking for a USB drive
     /// when the fix is the variable or the volume mapping. The one wording for a server-set path that
-    /// is missing, wherever the problem is shown: a refused start or save, a failed automatic run, or
-    /// why automatic sorting cannot run.
+    /// is missing, wherever the problem is shown: a refused start or save, a failed automatic run, why
+    /// automatic sorting cannot run, or the path's own status on the page (<see cref="PathMessages"/>).
     /// </summary>
     public SortPathProblem Explain(SortPathProblem problem)
     {
@@ -166,14 +166,14 @@ public sealed record ServerConfig
 
         return new ServerConfig
         {
-            CsvPath = NullIfBlank(read(CsvPathVariable)),
-            SourcePath = NullIfBlank(read(SourcePathVariable)),
-            DestinationPath = NullIfBlank(read(DestinationPathVariable)),
+            CsvPath = SettingText.Normalize(read(CsvPathVariable)),
+            SourcePath = SettingText.Normalize(read(SourcePathVariable)),
+            DestinationPath = SettingText.Normalize(read(DestinationPathVariable)),
             DefaultComparisonMode = comparisonMode,
             NormalParallelism = parallelism,
             ScheduleIntervalMinutes = intervalMinutes,
-            SettingsPath = NullIfBlank(read("OABO_SETTINGS_PATH")),
-            BindUrl = NullIfBlank(read("ASPNETCORE_URLS")) ?? DefaultBindUrl,
+            SettingsPath = SettingText.Normalize(read("OABO_SETTINGS_PATH")),
+            BindUrl = SettingText.Normalize(read("ASPNETCORE_URLS")) ?? DefaultBindUrl,
             ParentProcessId = int.TryParse(read("OABO_PARENT_PID"), out var parentId) && parentId > 0 ? parentId : null,
             Warnings = warnings
         };
@@ -215,6 +215,4 @@ public sealed record ServerConfig
 
         logger.LogInformation("{Variable}: {Path} ({State})", variable, path, exists(path) ? "found" : "missing");
     }
-
-    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }

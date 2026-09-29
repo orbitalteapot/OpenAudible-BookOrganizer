@@ -150,9 +150,9 @@
    * One focus treatment everywhere, and only for keyboard users: :focus alone would ring every
    * button on click, which is the usual reason apps end up removing focus styles altogether.
    *
-   * A real outline rather than a Tailwind ring: rings are drawn as box-shadows, which ancestors
-   * with hidden overflow clip. The sticky table header sits inside two such containers, and its
-   * focus indicator was losing its top and outer edges.
+   * An ancestor with overflow other than visible clips this outline as it clips a box-shadow, so a
+   * control flush with the edge of a scrolling area (the book table's column headers) draws its
+   * outline inside itself instead: see LibraryTable.
    */
   :focus-visible {
     outline: 2px solid rgb(var(--color-accent));

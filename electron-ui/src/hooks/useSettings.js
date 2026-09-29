@@ -94,6 +94,37 @@ export default function useSettings() {
   }, [enqueue]);
 
   /**
+   * Asks again, for what only the backend can see: whether a folder has appeared since (a run
+   * created it, a drive was plugged in). Queued behind any save, so it cannot undo one.
+   *
+   * A refresh asked for while another is still waiting for its turn is that one: it will fetch
+   * the same thing. Otherwise every timer tick, focus and tab switch would queue one more while
+   * the backend takes its time over an offline network share, and a save would wait behind all of them.
+   *
+   * Resolves to whether the backend answered: only then is what the page shows newer than the moment
+   * of asking.
+   */
+  const refresh = useCallback(() => {
+    if (queuedRefresh.current) return queuedRefresh.current;
+
+    const refreshing = enqueue(async () => {
+      queuedRefresh.current = null;
+      try {
+        const current = await getSettings();
+        setSettings(current);
+        setFieldErrorState((errors) => withoutFound(errors, current.pathStatus));
+        setErrorState((shown) => (shown?.code === 'unreachable' ? null : shown));
+        return true;
+      } catch {
+        // The settings on screen are still the last ones the backend confirmed.
+        return false;
+      }
+    });
+    queuedRefresh.current = refreshing;
+    return refreshing;
+  }, [enqueue]);
+
+  /**
    * Saves `patch` (wire names: `{ destinationPath }`). Resolves to null once saved, or to the
    * ApiError it was refused with, which is also recorded under its field.
    */
@@ -117,40 +148,17 @@ export default function useSettings() {
           } else {
             setErrorState(err);
           }
+          // Given up on, not refused: the backend may have saved it all the same, so it is asked
+          // what it holds now. Queued behind this save, as every refresh is.
+          if (err.code === 'timeout') refresh();
           return err;
         } finally {
           setPending((count) => count - 1);
         }
       });
     },
-    [enqueue]
+    [enqueue, refresh]
   );
-
-  /**
-   * Asks again, for what only the backend can see: whether a folder has appeared since (a run
-   * created it, a drive was plugged in). Queued behind any save, so it cannot undo one.
-   *
-   * A refresh asked for while another is still waiting for its turn is that one: it will fetch
-   * the same thing. Otherwise every timer tick, focus and tab switch would queue one more while
-   * the backend takes its time over an offline network share, and a save would wait behind all of them.
-   */
-  const refresh = useCallback(() => {
-    if (queuedRefresh.current) return queuedRefresh.current;
-
-    const refreshing = enqueue(async () => {
-      queuedRefresh.current = null;
-      try {
-        const current = await getSettings();
-        setSettings(current);
-        setFieldErrorState((errors) => withoutFound(errors, current.pathStatus));
-        setErrorState((shown) => (shown?.code === 'unreachable' ? null : shown));
-      } catch {
-        // The settings on screen are still the last ones the backend confirmed.
-      }
-    });
-    queuedRefresh.current = refreshing;
-    return refreshing;
-  }, [enqueue]);
 
   const error = errorState?.message ?? null;
 

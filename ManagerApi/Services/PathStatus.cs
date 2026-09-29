@@ -10,14 +10,9 @@ namespace ManagerApi.Services;
 /// </summary>
 public sealed record PathStatus(string Csv, string Source, string Destination)
 {
-    public static PathStatus For(AppSettings settings)
+    public static PathStatus From(PathProblems problems)
     {
-        return new PathStatus(
-            Describe(SortPathValidator.ValidateCsv(settings.CsvPath)),
-            Describe(SortPathValidator.ValidateSource(settings.SourcePath)),
-            // No overlap check here: that is a problem with the pair, not with this folder, and saving
-            // or starting refuses it with its own message.
-            Describe(SortPathValidator.InspectDestination(null, settings.DestinationPath)));
+        return new PathStatus(Describe(problems.Csv), Describe(problems.Source), Describe(problems.Destination));
     }
 
     /// <summary>
@@ -41,4 +36,39 @@ public sealed record PathStatus(string Csv, string Source, string Destination)
         SortPathProblemCode.NotSet => "notSet",
         _ => "notFound"
     };
+}
+
+/// <summary>
+/// What is wrong with each path right now, looking only (see <see cref="PathStatus"/>). Looked at
+/// once per answer and shared by everything in it: on a sleeping network share each look can take
+/// a while.
+/// </summary>
+public sealed record PathProblems(SortPathProblem? Csv, SortPathProblem? Source, SortPathProblem? Destination)
+{
+    public static PathProblems For(AppSettings settings)
+    {
+        return new PathProblems(
+            SortPathValidator.ValidateCsv(settings.CsvPath),
+            SortPathValidator.ValidateSource(settings.SourcePath),
+            // No overlap check here: that is a problem with the pair, not with this folder, and saving
+            // or starting refuses it with its own message.
+            SortPathValidator.InspectDestination(null, settings.DestinationPath));
+    }
+}
+
+/// <summary>
+/// Why each path the server's environment sets cannot be used, in the words of
+/// <see cref="ServerConfig.Explain"/>, so the page shows a missing mount or subfolder the way a
+/// refused start and the Automatic sorting card do. Null for a path that is fine, and for every path
+/// when the environment sets none: the desktop's short "Folder not found" needs no more.
+/// </summary>
+public sealed record PathMessages(string? Csv, string? Source, string? Destination)
+{
+    public static PathMessages From(PathProblems problems, ServerConfig config)
+    {
+        return new PathMessages(Message(problems.Csv), Message(problems.Source), Message(problems.Destination));
+
+        string? Message(SortPathProblem? problem) =>
+            problem is null || !config.PathsLocked ? null : config.Explain(problem).Message;
+    }
 }

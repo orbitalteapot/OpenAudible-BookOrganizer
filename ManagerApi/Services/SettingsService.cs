@@ -232,14 +232,14 @@ public sealed class SettingsService
         if (SortPathValidator.InspectDestination(next.SourcePath, next.DestinationPath) is
             { Code: SortPathProblemCode.DestinationInsideSource } overlap)
         {
-            return OverlapError(overlap, sourceChanged: !SamePath(current.SourcePath, next.SourcePath),
-                destinationChanged: !SamePath(current.DestinationPath, next.DestinationPath), next);
+            return OverlapError(overlap, sourceChanged: !SettingText.Same(current.SourcePath, next.SourcePath),
+                destinationChanged: !SettingText.Same(current.DestinationPath, next.DestinationPath), next);
         }
 
         var pathsOrIntervalChanged =
-            !SamePath(current.CsvPath, next.CsvPath) ||
-            !SamePath(current.SourcePath, next.SourcePath) ||
-            !SamePath(current.DestinationPath, next.DestinationPath) ||
+            !SettingText.Same(current.CsvPath, next.CsvPath) ||
+            !SettingText.Same(current.SourcePath, next.SourcePath) ||
+            !SettingText.Same(current.DestinationPath, next.DestinationPath) ||
             current.ScheduleIntervalMinutes != next.ScheduleIntervalMinutes;
 
         if (next.ScheduleIntervalMinutes is null || !pathsOrIntervalChanged)
@@ -280,7 +280,7 @@ public sealed class SettingsService
 
     private SettingsError? LockedPathChange(SortPathField field, string? requested, string? current)
     {
-        if (!_config.PathsLocked || requested is null || SamePath(requested, current))
+        if (!_config.PathsLocked || requested is null || SettingText.Same(requested, current))
         {
             return null;
         }
@@ -320,20 +320,7 @@ public sealed class SettingsService
     /// <summary>A path from a patch: null leaves it as it was, blank clears it.</summary>
     private static string? Cleared(string? requested, string? saved)
     {
-        if (requested is null)
-        {
-            return saved;
-        }
-
-        return string.IsNullOrWhiteSpace(requested) ? null : requested.Trim();
-    }
-
-    private static bool SamePath(string? a, string? b)
-    {
-        return string.Equals(
-            string.IsNullOrWhiteSpace(a) ? null : a.Trim(),
-            string.IsNullOrWhiteSpace(b) ? null : b.Trim(),
-            StringComparison.Ordinal);
+        return requested is null ? saved : SettingText.Normalize(requested);
     }
 
     private static SettingsError ToError(SortPathProblem problem) =>

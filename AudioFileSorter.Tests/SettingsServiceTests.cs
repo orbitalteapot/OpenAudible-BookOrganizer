@@ -337,6 +337,18 @@ public class SettingsServiceTests
     }
 
     [Fact]
+    public void A_locked_path_is_read_the_same_way_from_the_environment_and_from_the_page()
+    {
+        // One rule (SettingText) for both: a padded variable must not refuse the page sending it back.
+        var config = ServerConfig.FromEnvironment(Env(("SOURCE_PATH", "  /source "), ("CSV_PATH", "   ")));
+        using var backend = new TestBackend(config);
+
+        Assert.Equal("/source", config.SourcePath);
+        Assert.Null(config.CsvPath);
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { SourcePath = " /source" }, out var error), error?.Message);
+    }
+
+    [Fact]
     public void Turning_automatic_sorting_on_records_when_and_raises_a_change()
     {
         using var workspace = new TempWorkspace();

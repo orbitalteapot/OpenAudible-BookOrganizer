@@ -1,7 +1,8 @@
-import { fireEvent, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, parseLibrary, updateSettings } from '../../api';
-import { settingsResponse } from '../../test/fixtures';
+import { ApiError, getRunStatus, parseLibrary, updateSettings } from '../../api';
+import { RUNNING_POLL_MS } from '../../hooks/useRunStatus';
+import { runningStatus, settingsResponse } from '../../test/fixtures';
 import { renderApp } from '../../test/renderApp';
 
 vi.mock('../../api', async (original) => (await import('../../test/mockApi')).mockApi(original));
@@ -10,6 +11,30 @@ const book = (title) => ({ title, author: 'Dennis E. Taylor', seriesName: '', na
 
 describe('Library', () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("shows the server's warnings about its settings on the page the app opens on", async () => {
+    const warning = 'The saved settings could not be read, so the defaults are in use. The old file was kept as settings.json.unreadable-2026-09-30.';
+    renderApp({ settings: settingsResponse({ serverWarnings: [warning] }) });
+
+    expect(await screen.findByText(warning)).toBeTruthy();
+  });
+
+  it('says the organizer stopped answering, instead of a running sort just vanishing', async () => {
+    vi.useFakeTimers();
+    try {
+      renderApp({ status: runningStatus() });
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(screen.getByRole('button', { name: /Sorting… 42%/ })).toBeTruthy();
+
+      vi.mocked(getRunStatus).mockRejectedValue(new ApiError('unreachable', { code: 'unreachable' }));
+      await act(() => vi.advanceTimersByTimeAsync(RUNNING_POLL_MS * 30));
+
+      expect(screen.queryByRole('button', { name: /Sorting…/ })).toBeNull();
+      expect(screen.getByRole('alert').textContent).toMatch(/Can't reach the organizer server/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('reads the export named in the settings on launch', async () => {
     renderApp({ library: { books: [book('We Are Legion'), book('For We Are Many')], skippedRows: 0, warnings: [] } });
@@ -28,16 +53,21 @@ describe('Library', () => {
     expect(parseLibrary).not.toHaveBeenCalled();
   });
 
-  it('says where to look in the container when the export is not there', async () => {
-    renderApp({ settings: settingsResponse({ csvPath: '/data/books.csv', pathStatus: { csv: 'notFound', source: 'ok', destination: 'ok' } }) });
+  it("says where to look in the container when the export is not there, in the server's words", async () => {
+    const message =
+      'The library export /data/books.csv was not found inside the container. Check that the folder holding it is mapped, and that CSV_PATH names the file.';
+    renderApp({
+      settings: settingsResponse({
+        csvPath: '/data/books.csv',
+        locks: { paths: true, schedule: false },
+        pathStatus: { csv: 'notFound', source: 'ok', destination: 'ok' },
+        pathMessages: { csv: message, source: null, destination: null },
+      }),
+    });
     vi.mocked(parseLibrary).mockRejectedValue(new Error('The library export was not found: /data/books.csv'));
 
     expect(await screen.findByText("Couldn't read the library export")).toBeTruthy();
-    expect(
-      screen.getByText(
-        'File not found inside the container — check that the folder holding it is mapped to /data and that CSV_PATH names the file'
-      )
-    ).toBeTruthy();
+    expect(screen.getByText(message)).toBeTruthy();
   });
 
   it('shows rows the export could not read, folded away', async () => {

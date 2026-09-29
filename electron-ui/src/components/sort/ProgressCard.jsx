@@ -47,12 +47,13 @@ function RunResult({ summary: { headline, details, tone } }) {
 
 /**
  * The current or last sort, however it was started. Follows the backend's run status, so a sort the
- * schedule started shows here with its progress and a Cancel button like any other.
+ * schedule started shows here with its progress and a Cancel button like any other. (Losing contact
+ * with the backend is shown above every page; see AppNotices.)
  *
- * `lostContact` is set when the backend stopped answering. `focusRequested` moves focus to the
- * card's heading, which scrolls it into view, and `onFocused` is then told.
+ * `focusRequested` moves focus to the card's heading, which scrolls it into view, and `onFocused` is
+ * then told.
  */
-export default function ProgressCard({ status, cancel, lostContact, focusRequested = false, onFocused }) {
+export default function ProgressCard({ status, cancel, focusRequested = false, onFocused }) {
   // Remembered with the run it belongs to: the card stays mounted between runs, and a failed Cancel
   // on one run says nothing about the next.
   const [cancelFailure, setCancelFailure] = useState(null);
@@ -74,7 +75,6 @@ export default function ProgressCard({ status, cancel, lostContact, focusRequest
     return (
       <Card title="Progress" titleRef={headingRef}>
         <p className="py-8 text-center text-sm text-fg-subtle">Press Start sorting to begin. Progress will appear here.</p>
-        {lostContact && <Banner tone="critical">{lostContact}</Banner>}
       </Card>
     );
   }
@@ -82,7 +82,18 @@ export default function ProgressCard({ status, cancel, lostContact, focusRequest
   const counts = status.counts ?? {};
   const percentage = status.percentage || 0;
   const summary = running ? null : summariseRun(status);
-  const phase = running ? 'Sorting' : status.isCanceled ? 'Canceled' : status.error ? 'Failed' : 'Finished';
+  // Before its first book a run reads the export and looks through both folders, which on a large
+  // library on a network drive takes minutes. A bare 0% all that time looked hung.
+  const preparing = running && status.preparing;
+  const phase = running
+    ? preparing
+      ? 'Getting ready'
+      : 'Sorting'
+    : status.isCanceled
+      ? 'Canceled'
+      : status.error
+        ? 'Failed'
+        : 'Finished';
 
   const handleCancel = async () => {
     setCanceling(true);
@@ -113,17 +124,23 @@ export default function ProgressCard({ status, cancel, lostContact, focusRequest
         <div>
           <div className="mb-2 flex items-baseline justify-between">
             <span className="text-sm text-fg-muted">{phase}</span>
-            <span className="tabular text-sm font-medium text-fg">{percentage.toFixed(0)}%</span>
+            {!preparing && <span className="tabular text-sm font-medium text-fg">{percentage.toFixed(0)}%</span>}
           </div>
           <ProgressBar
             value={percentage}
             tone={summary?.tone ?? 'accent'}
             label={`Sort progress: ${phase}`}
           />
-          {status.totalBooks > 0 && (
-            <p className="tabular mt-2 text-2xs text-fg-subtle">
-              {(status.currentBook || 0).toLocaleString()} of {status.totalBooks.toLocaleString()} books
+          {preparing ? (
+            <p className="mt-2 text-2xs text-fg-subtle">
+              Reading your library and checking the folders… On a network drive this can take a few minutes.
             </p>
+          ) : (
+            status.totalBooks > 0 && (
+              <p className="tabular mt-2 text-2xs text-fg-subtle">
+                {(status.currentBook || 0).toLocaleString()} of {status.totalBooks.toLocaleString()} books
+              </p>
+            )
           )}
         </div>
 
@@ -148,7 +165,6 @@ export default function ProgressCard({ status, cancel, lostContact, focusRequest
         <ProblemsList problems={status.problems} problemCount={status.problemCount} running={running} />
 
         {cancelError && <Banner tone="critical">Couldn&apos;t cancel: {cancelError}</Banner>}
-        {lostContact && <Banner tone="critical">{lostContact}</Banner>}
       </div>
     </Card>
   );

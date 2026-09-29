@@ -71,15 +71,16 @@ async function readError(res) {
 }
 
 /**
- * How long a read may take before it is given up on. Reading the settings looks at every folder,
- * and on an offline network share (a hard NFS mount) that can hang for good; the settings hook
- * sends its requests one at a time, so one read that never ends would hold up every save behind it.
+ * How long any request may take before it is given up on. Reading the settings looks at every
+ * folder, and on an offline network share (a hard NFS mount) that can hang for good; so can saving
+ * them, starting a sort and reading the export, which look at the same folders. The settings hook
+ * sends its requests one at a time, so one that never ends would hold up every save and refresh
+ * behind it, with the controls waiting on it and nothing said.
  */
-const READ_TIMEOUT_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 60_000;
 
 async function request(path, { method = 'GET', body } = {}) {
-  const options = { method };
-  if (method === 'GET') options.signal = AbortSignal.timeout(READ_TIMEOUT_MS);
+  const options = { method, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
   // Every change is sent as JSON, with or without a body: the desktop backend refuses anything else,
   // because a web site can only send JSON to it after a preflight the backend turns down.
   if (method !== 'GET') options.headers = { 'Content-Type': 'application/json' };
@@ -88,7 +89,15 @@ async function request(path, { method = 'GET', body } = {}) {
   let res;
   try {
     res = await fetch(`${apiBase()}${path}`, options);
-  } catch {
+  } catch (err) {
+    // Not the same as not answering at all: the organizer is there, but stuck on a folder. A change
+    // may have been made all the same, which is for the caller to find out.
+    if (err?.name === 'TimeoutError') {
+      throw new ApiError(
+        'The organizer did not answer in time. A network drive or disk that has stopped responding can cause this: check that it is connected.',
+        { code: 'timeout' }
+      );
+    }
     throw new ApiError(unreachableMessage(), { code: 'unreachable' });
   }
 

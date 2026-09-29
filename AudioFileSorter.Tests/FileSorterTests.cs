@@ -280,18 +280,98 @@ public class FileSorterTests
     }
 
     [Fact]
-    public async Task Sort_updates_a_moved_loose_book_whose_source_has_changed()
+    public async Task Sort_leaves_a_loose_file_that_differs_from_the_source_where_it_is_and_says_so()
     {
+        // A stale copy of this book, or the only copy of a same-titled book that has left the
+        // export: the export cannot tell which, so the file is kept and the book copied afresh.
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "new-audio");
         workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "old-audio!");
 
         var summary = await Sort(workspace, TempWorkspace.Book());
 
+        Assert.Equal(["An Author/A Book.m4b", "An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
+        Assert.Equal("old-audio!", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book.m4b")));
+        Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
+        var problem = Assert.Single(summary.Problems);
+        Assert.Equal(SortProblemKind.Warning, problem.Kind);
+        Assert.StartsWith($"Left \"{Path.Combine("An Author", "A Book.m4b")}\" where it is", problem.Message);
+    }
+
+    [Fact]
+    public async Task Sort_updates_a_moved_loose_book_that_only_the_full_check_finds_changed()
+    {
+        using var workspace = new TempWorkspace();
+        var (original, edited) = TempWorkspace.SameSizeEditedPair();
+        workspace.WriteSourceFile("a-book.m4b", edited);
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
+
+        var summary = await new FileSorter().SortAudioFiles(
+            workspace.Source,
+            workspace.Destination,
+            [TempWorkspace.Book()],
+            SortOptions.Default with { ComparisonMode = FileComparisonMode.Full });
+
         Assert.Equal(["An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
-        Assert.Equal("new-audio", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
+        Assert.Equal(edited, File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
         // Moved and then replaced: counted once, as the stronger of the two.
         Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
+    }
+
+    [Fact]
+    public async Task Sort_never_overwrites_the_loose_file_of_a_same_titled_book_that_has_left_the_export()
+    {
+        // As main left two books called "Collected Works"; the first is no longer in the export.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("second.m4b", "second-book");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "first-book");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works (2).m4b"), "second-book");
+
+        var summary = await Sort(workspace, TempWorkspace.Book(title: "Collected Works", filename: "second"));
+
+        Assert.Equal(
+            ["An Author/Collected Works.m4b", "An Author/Collected Works/Collected Works.m4b"],
+            workspace.DestinationFiles());
+        Assert.Equal("first-book", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "Collected Works.m4b")));
+        // Its own "(2)" was moved; the plain name the export now gives it is still loose, and said so.
+        Assert.Equal(SortCounts.Empty with { Moved = 1 }, summary.Counts);
+        Assert.Equal(SortProblemKind.Warning, Assert.Single(summary.Problems).Kind);
+    }
+
+    [Fact]
+    public async Task Sort_never_overwrites_a_missing_standalone_books_loose_file_with_a_series_book_of_the_same_title()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("dune-series.m4b", "series-edition");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Dune.m4b"), "standalone-edition");
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Dune", filename: "dune-standalone"),
+            TempWorkspace.Book(title: "Dune", filename: "dune-series", seriesName: "Dune Chronicles", seriesSequence: "1"));
+
+        Assert.Equal(
+            ["An Author/Dune Chronicles/Book 1/Dune.m4b", "An Author/Dune.m4b"],
+            workspace.DestinationFiles());
+        Assert.Equal("standalone-edition", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "Dune.m4b")));
+        Assert.Equal(SortCounts.Empty with { New = 1, NotFound = 1 }, summary.Counts);
+    }
+
+    [Fact]
+    public async Task Sort_keeps_the_downloaded_edition_when_an_undownloaded_one_has_the_same_series_number()
+    {
+        // main put the only downloaded edition in "Book 1"; the other edition is listed first.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("hp1-dale.m4b", "dale-edition");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Harry Potter", "Book 1", "A Book.m4b"), "dale-edition");
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(filename: "hp1-fry", seriesName: "Harry Potter", seriesSequence: "1"),
+            TempWorkspace.Book(filename: "hp1-dale", seriesName: "Harry Potter", seriesSequence: "1"));
+
+        Assert.Equal(["An Author/Harry Potter/Book 1 (2)/A Book.m4b"], workspace.DestinationFiles());
+        Assert.Equal(SortCounts.Empty with { Moved = 1, NotFound = 1 }, summary.Counts);
     }
 
     [Fact]
