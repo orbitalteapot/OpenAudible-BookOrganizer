@@ -12,7 +12,7 @@ import { Banner, Card } from './ui/Surface';
  * settings, the run in progress (whoever started it) and the schedule.
  */
 export default function SortPage({ settingsState, run, scheduleState, isElectron }) {
-  const { settings, update, fieldErrors, error: settingsError } = settingsState;
+  const { settings, update, refresh, fieldErrors, error: settingsError } = settingsState;
   const [startError, setStartError] = useState(null);
   const runActive = isRunning(run.status);
 
@@ -55,6 +55,7 @@ export default function SortPage({ settingsState, run, scheduleState, isElectron
               isElectron={isElectron}
               error={startError}
               onError={setStartError}
+              onRefused={refresh}
             />
           </Card>
         </div>

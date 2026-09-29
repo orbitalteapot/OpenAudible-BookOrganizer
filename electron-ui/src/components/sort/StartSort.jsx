@@ -11,9 +11,9 @@ import { Banner } from '../ui/Surface';
  * onto the internal disk instead would quietly fill it.
  *
  * `error` / `onError` hold why the last start was refused, which the page also shows under the
- * path it was about.
+ * path it was about. `onRefused` is told whenever the backend refuses a start.
  */
-export default function StartSort({ settings, run, isElectron, error, onError }) {
+export default function StartSort({ settings, run, isElectron, error, onError, onRefused }) {
   const [confirmCreate, setConfirmCreate] = useState(false);
   const createRef = useRef(null);
   const reasonId = useId();
@@ -33,6 +33,9 @@ export default function StartSort({ settings, run, isElectron, error, onError })
     try {
       await run.start({ createDestination });
     } catch (err) {
+      // A refusal means the folders are not what the page last heard (a drive was unplugged or
+      // plugged in since), so their statuses are asked for again rather than left saying "Found".
+      onRefused();
       if (err.code === 'destinationMissing') setConfirmCreate(true);
       else onError(err);
     }

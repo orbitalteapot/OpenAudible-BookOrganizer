@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, cancelSort, getRunStatus, startSort } from '../../api';
-import { idleStatus, runningStatus } from '../../test/fixtures';
+import { ApiError, cancelSort, getRunStatus, getSettings, startSort } from '../../api';
+import { idleStatus, runningStatus, settingsResponse } from '../../test/fixtures';
 import { renderApp } from '../../test/renderApp';
 
 vi.mock('../../api', async (original) => (await import('../../test/mockApi')).mockApi(original));
@@ -61,11 +61,20 @@ describe('SortPage', () => {
         })
       )
       .mockResolvedValueOnce(runningStatus());
+    // The drive was unplugged after the page last heard about the folders.
+    vi.mocked(getSettings).mockResolvedValue(
+      settingsResponse({ pathStatus: { csv: 'ok', source: 'ok', destination: 'notFound' } })
+    );
 
     fireEvent.click(screen.getByRole('button', { name: 'Start sorting' }));
     const create = await screen.findByRole('button', { name: 'Create folder and sort' });
     expect(screen.getByText("The destination folder doesn't exist. Is the drive connected?")).toBeTruthy();
     expect(document.activeElement).toBe(create);
+
+    // The row agrees with the question instead of still saying "Found".
+    const destination = screen.getByLabelText('Destination folder');
+    const hint = document.getElementById(destination.getAttribute('aria-describedby'));
+    await waitFor(() => expect(hint.textContent).toMatch(/^Folder not found/));
 
     fireEvent.click(create);
     await waitFor(() => expect(startSort).toHaveBeenLastCalledWith({ createDestination: true }));
