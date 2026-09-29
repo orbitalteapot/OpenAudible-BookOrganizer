@@ -174,8 +174,10 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
               ? `${books.length.toLocaleString()} audiobooks`
               : `${rows.length.toLocaleString()} of ${books.length.toLocaleString()} audiobooks`}
           </p>
-          <p className="max-w-md truncate text-2xs text-fg-subtle" title={csvPath}>
-            {csvPath}
+          {/* Cut from the start, not the end: the file name is the part that says which export this is.
+              The isolate keeps the path itself left to right inside the right-to-left box. */}
+          <p className="max-w-md truncate text-left text-2xs text-fg-subtle" dir="rtl" title={csvPath}>
+            <bdi dir="ltr">{csvPath}</bdi>
           </p>
         </div>
 

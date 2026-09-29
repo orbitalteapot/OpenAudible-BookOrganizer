@@ -53,6 +53,14 @@ export default function App() {
   });
   const library = useLibrary(settings?.csvPath, settings?.pathStatus?.csv === 'ok', refreshSettings);
 
+  // An automatic sort is due as soon as a schedule is turned on (and at launch, when one was
+  // missed), and it starts on the backend's own timer. Watch closely for it so it shows at once.
+  const scheduleOn = Boolean(settings?.scheduleIntervalMinutes);
+  const { expectRun } = run;
+  useEffect(() => {
+    if (scheduleOn) expectRun();
+  }, [scheduleOn, expectRun]);
+
   // A run can create the destination, and whatever it found out about the folders is worth
   // showing, so the path statuses are asked for again once it ends.
   useEffect(() => {

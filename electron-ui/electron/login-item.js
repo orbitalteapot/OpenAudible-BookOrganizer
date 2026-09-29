@@ -5,6 +5,7 @@ const { app } = require('electron');
 const fs = require('fs');
 const path = require('path');
 const { desktopName } = require('../package.json');
+const { APP_NAME } = require('./app-info');
 
 /** Passed by the sign-in entry, so the app starts quietly in the tray rather than opening a window. */
 const HIDDEN_ARG = '--hidden';
@@ -37,7 +38,8 @@ function setLinuxAutostart(enabled) {
     [
       '[Desktop Entry]',
       'Type=Application',
-      `Name=${app.getName()}`,
+      `Name=${APP_NAME}`,
+      'Comment=Starts hidden in the tray, ready for the next automatic sort',
       `Exec=${quoteDesktopExecArg(executable)} ${HIDDEN_ARG}`,
       'X-GNOME-Autostart-enabled=true',
       '',

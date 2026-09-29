@@ -228,6 +228,35 @@ public class FileSorterTests
     }
 
     [Fact]
+    public async Task Sort_removes_the_folder_a_book_left_when_it_joined_a_series()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        // Sorted while it was still a standalone book.
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "audio");
+
+        var summary = await Sort(workspace, TempWorkspace.Book(seriesName: "The Series", seriesSequence: "1"));
+
+        Assert.Equal(1, summary.Counts.Moved);
+        Assert.Equal(["An Author/The Series/Book 1/A Book.m4b"], workspace.DestinationFiles());
+        Assert.False(Directory.Exists(Path.Combine(workspace.Destination, "An Author", "A Book")));
+    }
+
+    [Fact]
+    public async Task Sort_keeps_a_vacated_folder_that_still_holds_something()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "cover.jpg"), "image");
+
+        await Sort(workspace, TempWorkspace.Book(seriesName: "The Series", seriesSequence: "1"));
+
+        Assert.Contains("An Author/A Book/cover.jpg", workspace.DestinationFiles());
+        Assert.Contains("An Author/The Series/Book 1/A Book.m4b", workspace.DestinationFiles());
+    }
+
+    [Fact]
     public async Task Sort_moves_a_loose_book_from_an_older_version_into_its_own_folder()
     {
         using var workspace = new TempWorkspace();

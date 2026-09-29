@@ -446,7 +446,7 @@ The image is published to GitHub Packages, not attached to release assets:
 ### Prerequisites
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
-- [Node.js](https://nodejs.org/) 20 or newer
+- [Node.js](https://nodejs.org/) 24 or newer
 
 ### Run in development
 

@@ -6,6 +6,8 @@ import { unreachableMessage } from '../mode';
 // watching for a run the schedule starts costs next to nothing.
 export const RUNNING_POLL_MS = 400;
 export const IDLE_POLL_MS = 3_000;
+// How long to keep the fast cadence after being told a run is about to start on its own.
+export const EXPECT_RUN_MS = 5_000;
 
 // A single failed poll is normal while the backend is busy copying; this many in a row
 // (about ten seconds while sorting) means it has gone.
@@ -28,6 +30,8 @@ export default function useRunStatus() {
 
   // Set by the polling effect: asks for the status now rather than at the next tick.
   const pollNow = useRef(() => {});
+  // Until this time the idle cadence is the running one, see expectRun.
+  const fastUntil = useRef(0);
 
   useEffect(() => {
     let active = true;
@@ -53,7 +57,8 @@ export default function useRunStatus() {
         failures += 1;
         if (failures >= FAILURES_BEFORE_ERROR) setError(unreachableMessage());
       }
-      timer = setTimeout(poll, running ? RUNNING_POLL_MS : IDLE_POLL_MS);
+      const fast = running || Date.now() < fastUntil.current;
+      timer = setTimeout(poll, fast ? RUNNING_POLL_MS : IDLE_POLL_MS);
     };
 
     pollNow.current = poll;
@@ -79,6 +84,16 @@ export default function useRunStatus() {
     }
   }, []);
 
+  /**
+   * Says a sort may be about to start without this page starting it: the first run of a schedule
+   * just turned on, or the catch-up run at launch. It is then picked up within a moment rather than
+   * at the next idle poll, which left "Press Start sorting to begin" showing beside a running sort.
+   */
+  const expectRun = useCallback(() => {
+    fastUntil.current = Date.now() + EXPECT_RUN_MS;
+    pollNow.current();
+  }, []);
+
   const cancel = useCallback(async () => {
     try {
       await cancelSort();
@@ -96,7 +111,7 @@ export default function useRunStatus() {
   const shown = error && isRunning(status) ? null : status;
 
   return useMemo(
-    () => ({ status: shown, start, cancel, starting, error }),
-    [shown, start, cancel, starting, error]
+    () => ({ status: shown, start, cancel, expectRun, starting, error }),
+    [shown, start, cancel, expectRun, starting, error]
   );
 }

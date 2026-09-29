@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.IO;
 using System.Threading;
@@ -66,13 +67,59 @@ public class FileSorter
             CancellationToken = cancellationToken
         };
 
-        await Parallel.ForEachAsync(planned, parallelOptions, async (item, ct) =>
+        var vacatedFolders = new ConcurrentBag<string>();
+        try
         {
-            var (outcome, problem) = await SortBookAsync(item, options.ComparisonMode, ct);
-            tally.Finish(item.Title, outcome, problem);
-        });
+            await Parallel.ForEachAsync(planned, parallelOptions, async (item, ct) =>
+            {
+                var (outcome, problem) = await SortBookAsync(item, options.ComparisonMode, vacatedFolders, ct);
+                tally.Finish(item.Title, outcome, problem);
+            });
+        }
+        finally
+        {
+            // Only once every copy has finished: a folder one book moved out of can be the folder
+            // another book is about to be copied into.
+            RemoveEmptiedFolders(vacatedFolders, Path.GetFullPath(destination));
+        }
 
         return tally.ToSummary();
+    }
+
+    /// <summary>
+    /// Deletes the folders that moving books left empty, such as an old "Book 1" folder or a
+    /// standalone book's folder after the book joined a series, and any parent left empty as a
+    /// result. A folder holding anything at all, a hidden file included, is left alone, and the
+    /// destination folder itself is never removed.
+    /// </summary>
+    private static void RemoveEmptiedFolders(IEnumerable<string> folders, string destinationRoot)
+    {
+        var root = Path.TrimEndingDirectorySeparator(destinationRoot);
+
+        // Deepest first, so a parent is only looked at after the folders inside it are gone.
+        foreach (var start in folders.Distinct(StringComparer.Ordinal).OrderByDescending(folder => folder.Length))
+        {
+            for (var folder = start;
+                 folder is not null && PathSanitizer.IsWithin(root, folder) &&
+                 !string.Equals(Path.TrimEndingDirectorySeparator(folder), root, StringComparison.Ordinal);
+                 folder = Path.GetDirectoryName(folder))
+            {
+                try
+                {
+                    if (!Directory.Exists(folder) || Directory.EnumerateFileSystemEntries(folder).Any())
+                    {
+                        break;
+                    }
+
+                    Directory.Delete(folder, recursive: false);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Tidying up is a courtesy; a folder that cannot go stays, empty and harmless.
+                    break;
+                }
+            }
+        }
     }
 
     /// <summary>Where one book ended up. Each maps to one bucket of <see cref="SortCounts"/>.</summary>
@@ -103,6 +150,7 @@ public class FileSorter
     private static async Task<(BookOutcome Outcome, SortProblem? Problem)> SortBookAsync(
         PlannedCopy item,
         FileComparisonMode comparisonMode,
+        ConcurrentBag<string> vacatedFolders,
         CancellationToken cancellationToken)
     {
         // Nothing to copy is not the same as nothing to do. A book listed in the export whose file
@@ -124,7 +172,7 @@ public class FileSorter
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return (await ProcessPlannedCopy(item, comparisonMode, cancellationToken), null);
+            return (await ProcessPlannedCopy(item, comparisonMode, vacatedFolders, cancellationToken), null);
         }
         catch (OperationCanceledException)
         {
@@ -139,13 +187,14 @@ public class FileSorter
     private static async Task<BookOutcome> ProcessPlannedCopy(
         PlannedCopy item,
         FileComparisonMode comparisonMode,
+        ConcurrentBag<string> vacatedFolders,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(item.TargetDirectory!);
 
         // Both files, whatever happens to the first: '|' does not short-circuit.
-        var moved = AdoptLegacyFile(item.AudioLegacyPath, item.AudioDestination) |
-                    AdoptLegacyFile(item.PdfLegacyPath, item.PdfDestination);
+        var moved = AdoptLegacyFile(item.AudioLegacyPath, item.AudioDestination, vacatedFolders) |
+                    AdoptLegacyFile(item.PdfLegacyPath, item.PdfDestination, vacatedFolders);
 
         var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, cancellationToken);
         var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, cancellationToken);
@@ -169,9 +218,9 @@ public class FileSorter
     /// Moves a book that an older version filed elsewhere (see <see cref="PlannedCopy.AudioLegacyPath"/>)
     /// into the book's own folder. It is a rename within the destination, so nothing is copied or
     /// lost, and the update check that follows still replaces it if the source has changed since.
-    /// Returns whether a file was moved.
+    /// Returns whether a file was moved, and adds the folder it came from to <paramref name="vacatedFolders"/>.
     /// </summary>
-    private static bool AdoptLegacyFile(string? legacyPath, string? destinationFile)
+    private static bool AdoptLegacyFile(string? legacyPath, string? destinationFile, ConcurrentBag<string> vacatedFolders)
     {
         if (legacyPath is null || destinationFile is null || File.Exists(destinationFile) || !File.Exists(legacyPath))
         {
@@ -179,6 +228,7 @@ public class FileSorter
         }
 
         File.Move(legacyPath, destinationFile, overwrite: false);
+        vacatedFolders.Add(Path.GetDirectoryName(Path.GetFullPath(legacyPath))!);
         return true;
     }
 

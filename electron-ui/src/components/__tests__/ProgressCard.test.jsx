@@ -19,6 +19,20 @@ describe('ProgressCard', () => {
     expect(screen.queryByText(/Reading your library/)).toBeNull();
   });
 
+  it('colours the bar by how the run went, not by books missing from the source', () => {
+    const finished = (overrides) => ({ ...runningStatus(), state: 'finished', percentage: 100, ...overrides });
+    const barFill = () => screen.getByRole('progressbar').firstChild.className;
+
+    const { rerender } = render(<ProgressCard status={finished({ counts: counts({ new: 18, notFound: 1 }) })} cancel={vi.fn()} />);
+    expect(barFill()).toContain('bg-positive');
+
+    rerender(<ProgressCard status={finished({ counts: counts({ new: 17, failed: 1 }) })} cancel={vi.fn()} />);
+    expect(barFill()).toContain('bg-critical');
+
+    rerender(<ProgressCard status={finished({ isCanceled: true, counts: counts({ new: 3 }) })} cancel={vi.fn()} />);
+    expect(barFill()).toContain('bg-caution');
+  });
+
   it('keeps a failed Cancel to the run it was for', async () => {
     const cancel = vi.fn().mockRejectedValue(new Error('Could not reach the backend.'));
     const first = runningStatus({ startedUtc: '2026-09-29T10:00:00Z' });

@@ -29,6 +29,16 @@ function describeRun(status) {
   return status.startedUtc ? `${what} · started ${formatDateTime(status.startedUtc)}` : what;
 }
 
+/**
+ * The bar says how the run itself went: it finished, was stopped, or failed. Books that were not
+ * found are the export's business, and the result banner below already calls them out.
+ */
+function barTone(status, running) {
+  if (running) return 'accent';
+  if (status.error || status.counts?.failed > 0) return 'critical';
+  return status.isCanceled ? 'caution' : 'positive';
+}
+
 /** The outcome of a finished run, in the words every other place uses for it. */
 function RunResult({ summary: { headline, details, tone } }) {
   return (
@@ -128,7 +138,7 @@ export default function ProgressCard({ status, cancel, focusRequested = false, o
           </div>
           <ProgressBar
             value={percentage}
-            tone={summary?.tone ?? 'accent'}
+            tone={barTone(status, running)}
             label={`Sort progress: ${phase}`}
           />
           {preparing ? (

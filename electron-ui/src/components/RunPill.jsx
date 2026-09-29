@@ -8,8 +8,11 @@ import { isRunning } from '../hooks';
 export default function RunPill({ status, onOpen }) {
   if (!isRunning(status)) return null;
 
-  const percent = `${Math.round(status.percentage || 0)}%`;
-  const text = status.trigger === 'scheduled' ? `Automatic sort running · ${percent}` : `Sorting… ${percent}`;
+  // Before its first book a run reads the export and checks the folders; 0% there looked stuck.
+  const percent = status.preparing ? '…' : `${Math.round(status.percentage || 0)}%`;
+  const progress = status.preparing ? 'getting ready' : percent;
+  const text =
+    status.trigger === 'scheduled' ? `Automatic sort running · ${progress}` : `Sorting… ${progress}`;
 
   return (
     <button

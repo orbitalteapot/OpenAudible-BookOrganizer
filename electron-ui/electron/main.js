@@ -14,10 +14,10 @@ const {
 const path = require('path');
 const { pathToFileURL } = require('url');
 const fs = require('fs');
+const { APP_NAME } = require('./app-info');
 const backend = require('./backend');
 const { HIDDEN_ARG, launchedAtLogin, setOpenAtLogin } = require('./login-item');
 
-const APP_NAME = 'OpenAudible Book Organizer';
 const DEV_SERVER_URL = 'http://localhost:5173';
 const THEMES = new Set(['system', 'light', 'dark']);
 // The page's canvas colour in each theme, so the window never flashes the wrong one before it paints.

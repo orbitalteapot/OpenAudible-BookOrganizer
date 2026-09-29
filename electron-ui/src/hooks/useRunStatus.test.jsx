@@ -2,7 +2,7 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, getRunStatus, startSort } from '../api';
 import { idleStatus, runningStatus } from '../test/fixtures';
-import useRunStatus, { IDLE_POLL_MS, RUNNING_POLL_MS } from './useRunStatus';
+import useRunStatus, { EXPECT_RUN_MS, IDLE_POLL_MS, RUNNING_POLL_MS } from './useRunStatus';
 
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -51,6 +51,25 @@ describe('useRunStatus', () => {
     expect(getRunStatus).toHaveBeenCalledTimes(4);
     await advance(RUNNING_POLL_MS);
     expect(getRunStatus).toHaveBeenCalledTimes(4);
+  });
+
+  it('watches closely for a while when a run is expected to start on its own', async () => {
+    const { result } = renderHook(() => useRunStatus());
+    await advance(0);
+    expect(getRunStatus).toHaveBeenCalledTimes(1);
+
+    // A schedule was just turned on: asked at once, then at the running cadence while idle...
+    act(() => result.current.expectRun());
+    await advance(0);
+    expect(getRunStatus).toHaveBeenCalledTimes(2);
+    await advance(RUNNING_POLL_MS);
+    expect(getRunStatus).toHaveBeenCalledTimes(3);
+
+    // ...but only for a while: no run turned up, so it goes back to the idle cadence.
+    await advance(EXPECT_RUN_MS);
+    const calls = vi.mocked(getRunStatus).mock.calls.length;
+    await advance(RUNNING_POLL_MS * 2);
+    expect(getRunStatus).toHaveBeenCalledTimes(calls);
   });
 
   it('follows the sort already running when the start is refused with 409', async () => {
