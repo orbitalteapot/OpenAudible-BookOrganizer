@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo } from 'react';
 import { ArrowDown, ArrowUp, Search } from 'lucide-react';
 import { useElementWidth, useVirtualRows } from '../hooks';
 import { formatDuration } from '../format';
+import { PANEL } from './ui/Surface';
 
 const ROW_HEIGHT = 40;
 
@@ -138,7 +139,7 @@ export default function LibraryTable({
   return (
     <div
       ref={containerRef}
-      className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-surface"
+      className={`flex min-h-0 flex-1 flex-col overflow-hidden ${PANEL}`}
     >
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
         <table
@@ -173,7 +174,7 @@ export default function LibraryTable({
                       // pressing it does, since the direction arrow is decorative.
                       aria-label={`${column.label}, sort ${nextDirection}`}
                       className={[
-                        'flex h-10 w-full items-center gap-1.5 px-4 text-xs transition-colors',
+                        'flex h-10 w-full items-center gap-1 px-4 text-xs transition-colors',
                         column.align === 'right' ? 'justify-end' : '',
                         active ? 'text-fg' : 'text-fg-muted hover:text-fg',
                       ].join(' ')}

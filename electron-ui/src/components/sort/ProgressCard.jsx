@@ -118,7 +118,7 @@ export default function ProgressCard({ status, cancel, lostContact }) {
         </div>
 
         {running && status.currentTitle && (
-          <div className="rounded border border-line bg-raised px-3.5 py-3">
+          <div className="rounded border border-line bg-raised p-3">
             <p className="mb-1 text-2xs text-fg-subtle">Current book</p>
             <p className="break-words text-sm text-fg-muted">{status.currentTitle}</p>
           </div>

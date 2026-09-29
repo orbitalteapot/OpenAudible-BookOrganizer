@@ -19,15 +19,15 @@ export function Field({ label, hint, group = false, children, className = '' }) 
   return (
     <div className={className}>
       {group ? (
-        <span className="mb-1.5 block text-xs font-medium text-fg-muted">{label}</span>
+        <span className="mb-2 block text-xs font-medium text-fg-muted">{label}</span>
       ) : (
-        <label htmlFor={id} className="mb-1.5 block text-xs font-medium text-fg-muted">
+        <label htmlFor={id} className="mb-2 block text-xs font-medium text-fg-muted">
           {label}
         </label>
       )}
       {children(id, hintId)}
       {hint && (
-        <div id={hintId} className="mt-1.5 text-2xs text-fg-subtle">
+        <div id={hintId} className="mt-2 text-2xs text-fg-subtle">
           {hint}
         </div>
       )}
@@ -74,7 +74,7 @@ export function PathInput({ id, value, placeholder, icon: Icon, invalid = false,
           'h-control w-full rounded border bg-surface pr-3 text-sm text-fg-muted',
           'placeholder:text-fg-subtle',
           Icon ? 'pl-9' : 'pl-3',
-          invalid ? 'border-critical/50' : 'border-line',
+          invalid ? 'border-critical' : 'border-line-strong',
         ].join(' ')}
       />
     </div>
@@ -94,9 +94,8 @@ export function TextInput({ id, icon: Icon, className = '', ...props }) {
       <input
         id={id}
         className={[
-          'h-control w-full rounded border border-line bg-surface pr-3 text-sm text-fg',
+          'h-control w-full rounded border border-line-strong bg-surface pr-3 text-sm text-fg',
           'placeholder:text-fg-subtle',
-          'focus:border-accent/60',
           Icon ? 'pl-9' : 'pl-3',
         ].join(' ')}
         {...props}

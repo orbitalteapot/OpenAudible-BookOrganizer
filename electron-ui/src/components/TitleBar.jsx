@@ -10,7 +10,7 @@ function WindowButton({ label, onClick, danger = false, children }) {
       title={label}
       className={[
         'flex h-9 w-11 items-center justify-center text-fg-muted transition-colors',
-        danger ? 'hover:bg-critical hover:text-white' : 'hover:bg-raised hover:text-fg',
+        danger ? 'hover:bg-critical-solid hover:text-critical-solid-fg' : 'hover:bg-raised hover:text-fg',
       ].join(' ')}
     >
       {children}

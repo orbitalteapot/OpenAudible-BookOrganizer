@@ -21,12 +21,12 @@ const THEME_OPTIONS = [
 export default function Sidebar({ currentPage, onPageChange, bookCount, runStatus, theme, onThemeChange }) {
   return (
     <nav aria-label="Main" className="flex w-14 shrink-0 flex-col border-r border-line bg-canvas xl:w-52">
-      <div className="flex h-14 items-center gap-2.5 px-4">
-        <Headphones size={18} className="shrink-0 text-fg-muted" aria-hidden="true" />
+      <div className="flex h-14 items-center gap-3 px-4">
+        <Headphones size={20} className="shrink-0 text-accent" aria-hidden="true" />
         <span className="hidden truncate text-sm font-semibold text-fg xl:block">Organizer</span>
       </div>
 
-      <ul className="flex-1 space-y-0.5 px-2">
+      <ul className="flex-1 space-y-1 px-2">
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
           const isActive = currentPage === id;
 
@@ -41,11 +41,11 @@ export default function Sidebar({ currentPage, onPageChange, bookCount, runStatu
                 aria-label={label}
                 title={label}
                 className={[
-                  'flex h-9 w-full items-center gap-2.5 rounded px-3 text-sm transition-colors',
+                  'flex h-9 w-full items-center gap-3 rounded px-3 text-sm transition-colors',
                   isActive ? 'bg-raised font-medium text-fg' : 'text-fg-muted hover:bg-raised/60 hover:text-fg',
                 ].join(' ')}
               >
-                <Icon size={16} className="shrink-0" aria-hidden="true" />
+                <Icon size={16} className={`shrink-0 ${isActive ? 'text-accent' : ''}`} aria-hidden="true" />
                 <span className="hidden xl:block">{label}</span>
               </button>
             </li>

@@ -20,7 +20,7 @@ function ImportNotice({ skippedRows, warnings }) {
 
   return (
     <Disclosure summary={summary}>
-      <ul className="max-h-40 space-y-1 overflow-y-auto rounded border border-line bg-raised px-3.5 py-2.5 text-2xs text-fg-muted">
+      <ul className="max-h-40 space-y-1 overflow-y-auto rounded border border-line bg-raised px-3 py-2 text-2xs text-fg-muted">
         {warnings.map((warning, index) => (
           <li key={index} className="break-words">
             {warning}
@@ -134,7 +134,7 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-lg font-semibold text-fg">Library</h1>
+          <h1 className="text-xl font-semibold tracking-tight text-fg">Library</h1>
           <p className="tabular text-xs text-fg-muted">
             {rows.length === books.length
               ? `${books.length.toLocaleString()} audiobooks`

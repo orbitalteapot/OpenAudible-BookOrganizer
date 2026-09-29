@@ -8,37 +8,114 @@
  * Every colour in the app resolves to one of these. They are stored as raw RGB channels so
  * Tailwind's opacity modifiers (bg-surface/60) keep working, and they are the single place to
  * change the palette. Components must not reach for a raw slate-700 style value.
+ *
+ * Two palettes. Light is the default on :root; dark replaces the colours when the viewer picks
+ * Dark (data-theme="dark") or leaves it on System (data-theme="system", or not set yet before the
+ * app has started) on a system that prefers dark. Plain CSS cannot say "this attribute OR that
+ * media query" in one selector, so the dark palette is written out twice; theme.test.js fails if
+ * the two copies drift apart, and re-checks every contrast figure below.
+ *
+ * Contrast (WCAG 2.x, rounded down) is given against canvas / surface / raised, the three grounds
+ * anything sits on. Text needs 4.5:1 (AA); control boundaries and the focus ring need 3:1.
  */
 @layer base {
   :root {
-    /* Neutrals, darkest to lightest. */
-    --color-canvas: 12 14 17;
-    --color-surface: 22 25 30;
-    --color-raised: 30 34 40;
-    --color-line: 38 43 50;
-    --color-line-strong: 55 62 71;
+    color-scheme: light;
 
-    /* Text, in descending emphasis. All three clear WCAG AA 4.5:1 on canvas, surface AND raised. */
-    --color-fg: 232 235 239;
-    --color-fg-muted: 161 170 181;
-    --color-fg-subtle: 141 150 161;
+    /* Grounds, from the window outwards. Light mode lifts cards with a shadow, not a lighter grey. */
+    --color-canvas: 247 248 250; /* matches the Electron window background, so opening does not flash */
+    --color-surface: 255 255 255;
+    --color-raised: 237 239 243; /* a step off the surface: tiles, filled controls, the current page */
 
-    /* One accent, used sparingly: the primary action and the current selection. */
-    --color-accent: 88 143 255;
-    --color-accent-hover: 118 164 255;
-    --color-accent-fg: 8 12 20;
+    /* Hairlines between areas, 1.2 / 1.3 / 1.1: decoration, not the only edge of any control. */
+    --color-line: 222 226 231;
+    /* Edges that identify a control (an input, a switch): 3.4 / 3.6 / 3.1. */
+    --color-line-strong: 128 135 146;
 
-    /* Status. Only ever paired with a label or an icon, never colour alone. */
-    --color-positive: 63 185 80;
-    --color-caution: 214 164 60;
-    --color-critical: 248 97 91;
+    /* Text, in descending emphasis. */
+    --color-fg: 20 23 28; /* 16.9 / 17.9 / 15.6 */
+    --color-fg-muted: 70 78 90; /* 7.9 / 8.4 / 7.3 */
+    --color-fg-subtle: 88 96 108; /* 5.9 / 6.3 / 5.5 */
 
+    /* One accent, used sparingly: the primary action, the current selection and the focus ring. */
+    --color-accent: 33 94 222; /* 5.3 / 5.6 / 4.9 */
+    --color-accent-hover: 26 78 190; /* 6.8 / 7.2 / 6.3 */
+    --color-accent-fg: 255 255 255; /* 5.6 on accent, 7.2 on accent-hover */
+
+    /* Status, as text and as fills. Only ever paired with a label or an icon, never colour alone. */
+    --color-positive: 20 120 56; /* 5.2 / 5.5 / 4.8 */
+    --color-caution: 143 85 5; /* 5.6 / 6.0 / 5.2 */
+    --color-critical: 192 32 38; /* 5.6 / 6.0 / 5.2 */
+
+    /*
+     * A red that white clears in both themes (5.6), for the window's Close button. The dark
+     * palette's critical is light enough to read as text on dark grounds, which leaves white on it
+     * at 2.8.
+     */
+    --color-critical-solid: 196 43 28;
+    --color-critical-solid-fg: 255 255 255;
+
+    --shadow-card: 0 1px 2px 0 rgb(16 24 40 / 0.04), 0 1px 3px 0 rgb(16 24 40 / 0.06);
+
+    /* Controls 8px, their inner segments 6px so the two curves stay concentric, cards 12px. */
     --radius-sm: 6px;
     --radius: 8px;
     --radius-lg: 12px;
 
     /* Uniform height for every control, so rows of them line up without ad hoc padding. */
     --control-height: 36px;
+  }
+
+  :root[data-theme='dark'] {
+    color-scheme: dark;
+
+    --color-canvas: 12 14 17;
+    --color-surface: 22 25 30;
+    --color-raised: 31 35 41;
+    --color-line: 40 45 53; /* 1.3 / 1.2 / 1.1 */
+    --color-line-strong: 106 115 127; /* 4.0 / 3.6 / 3.2 */
+
+    --color-fg: 232 235 239; /* 16.1 / 14.7 / 13.1 */
+    --color-fg-muted: 166 174 185; /* 8.6 / 7.8 / 7.0 */
+    --color-fg-subtle: 143 152 163; /* 6.6 / 6.0 / 5.4 */
+
+    --color-accent: 96 150 255; /* 6.7 / 6.1 / 5.4 */
+    --color-accent-hover: 128 172 255; /* 8.5 / 7.7 / 6.9 */
+    --color-accent-fg: 8 12 20; /* 6.8 on accent, 8.6 on accent-hover */
+
+    --color-positive: 74 190 96; /* 8.1 / 7.4 / 6.6 */
+    --color-caution: 222 170 66; /* 9.1 / 8.3 / 7.4 */
+    --color-critical: 250 110 104; /* 6.8 / 6.2 / 5.6 */
+
+    /* Dark grounds already separate by lightness; a shadow on them would only muddy the edge. */
+    --shadow-card: 0 0 #0000;
+  }
+
+  /* The same palette as above, for System on a system that prefers dark. Keep the two identical. */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme='light']) {
+      color-scheme: dark;
+
+      --color-canvas: 12 14 17;
+      --color-surface: 22 25 30;
+      --color-raised: 31 35 41;
+      --color-line: 40 45 53;
+      --color-line-strong: 106 115 127;
+
+      --color-fg: 232 235 239;
+      --color-fg-muted: 166 174 185;
+      --color-fg-subtle: 143 152 163;
+
+      --color-accent: 96 150 255;
+      --color-accent-hover: 128 172 255;
+      --color-accent-fg: 8 12 20;
+
+      --color-positive: 74 190 96;
+      --color-caution: 222 170 66;
+      --color-critical: 250 110 104;
+
+      --shadow-card: 0 0 #0000;
+    }
   }
 
   * {
@@ -55,11 +132,13 @@
   }
 
   body {
-    @apply bg-canvas text-fg antialiased;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
-      sans-serif;
+    @apply bg-canvas font-sans text-fg antialiased;
     font-size: 13px;
     line-height: 1.5;
+  }
+
+  ::selection {
+    background-color: rgb(var(--color-accent) / 0.25);
   }
 
   /* Counts and durations line up in columns instead of jittering as digits change. */
@@ -76,7 +155,7 @@
    * focus indicator was losing its top and outer edges.
    */
   :focus-visible {
-    outline: 2px solid rgb(var(--color-accent) / 0.9);
+    outline: 2px solid rgb(var(--color-accent));
     outline-offset: 2px;
   }
 
@@ -89,7 +168,7 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    @apply rounded-full bg-line-strong;
+    @apply rounded-full bg-line-strong/60;
   }
 
   ::-webkit-scrollbar-thumb:hover {
@@ -103,6 +182,27 @@
       animation-duration: 0.01ms !important;
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
+    }
+  }
+
+  /*
+   * Forced colours (Windows High Contrast and the like) replace every background with the system
+   * one, which would erase the only thing marking the chosen option and the current page. Those
+   * two states are painted in the system's own highlight colours instead. The selectors outrank a
+   * single utility class, so the element's own bg-accent or bg-raised does not win back, and the
+   * contents inherit the colour rather than keeping an accent-tinted icon.
+   */
+  @media (forced-colors: active) {
+    [role='radio'][aria-checked='true'],
+    button[aria-current='page'] {
+      forced-color-adjust: none;
+      background-color: Highlight;
+      color: HighlightText;
+    }
+
+    [role='radio'][aria-checked='true'] *,
+    button[aria-current='page'] * {
+      color: inherit;
     }
   }
 }

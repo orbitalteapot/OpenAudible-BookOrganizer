@@ -16,7 +16,7 @@ export default function Disclosure({ summary, children, defaultOpen = false, cla
         aria-expanded={open}
         aria-controls={panelId}
         onClick={() => setOpen((value) => !value)}
-        className="inline-flex min-h-[32px] items-center gap-1.5 rounded text-sm text-fg-muted hover:text-fg"
+        className="inline-flex min-h-8 items-center gap-1 rounded text-sm font-medium text-fg-muted hover:text-fg"
       >
         <ChevronRight
           size={14}

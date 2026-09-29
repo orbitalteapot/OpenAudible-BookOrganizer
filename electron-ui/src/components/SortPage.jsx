@@ -31,7 +31,7 @@ export default function SortPage({ settingsState, run, scheduleState, isElectron
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
       <div>
-        <h1 className="text-lg font-semibold text-fg">Sort</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-fg">Sort</h1>
         <p className="text-xs text-fg-muted">Organize your files into Author / Series / Book folders, one folder per book</p>
       </div>
 

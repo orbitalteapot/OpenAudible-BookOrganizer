@@ -28,7 +28,7 @@ export default function ProblemsList({ problems = [], problemCount = 0, running 
           return (
             <section key={kind}>
               <h3 className="mb-1 text-xs font-medium text-fg-muted">{label}</h3>
-              <ul className="space-y-1.5">
+              <ul className="space-y-2">
                 {items.map((problem, index) => (
                   <li key={index} className="text-sm">
                     <span className="block break-words text-fg">{problem.book}</span>

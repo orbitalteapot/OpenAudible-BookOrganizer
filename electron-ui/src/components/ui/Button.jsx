@@ -1,11 +1,11 @@
 import { forwardRef, useId } from 'react';
 import { Loader2 } from 'lucide-react';
 
+// Both variants carry a border, transparent on the filled one: forced-colours mode paints every
+// border in the system text colour, which is then the only thing left outlining the button.
 const VARIANTS = {
-  primary: 'bg-accent text-accent-fg font-medium hover:bg-accent-hover',
-  secondary: 'bg-raised text-fg border border-line-strong hover:bg-line',
-  ghost: 'text-fg-muted hover:bg-raised hover:text-fg',
-  danger: 'bg-raised text-critical border border-line-strong hover:bg-critical/10',
+  primary: 'border border-transparent bg-accent font-medium text-accent-fg hover:bg-accent-hover',
+  secondary: 'border border-line-strong/40 bg-raised text-fg hover:bg-line',
 };
 
 /**
@@ -55,16 +55,16 @@ const Button = forwardRef(function Button(
           'text-sm transition-colors duration-150',
           'disabled:cursor-not-allowed disabled:opacity-45',
           'aria-disabled:cursor-not-allowed aria-disabled:opacity-45',
-          iconOnly ? 'w-control' : 'px-3.5',
+          iconOnly ? 'w-control' : 'px-3',
           VARIANTS[variant],
           className,
         ].join(' ')}
         {...props}
       >
         {loading ? (
-          <Loader2 size={15} className="animate-spin" aria-hidden="true" />
+          <Loader2 size={16} className="animate-spin" aria-hidden="true" />
         ) : (
-          Icon && <Icon size={15} aria-hidden="true" />
+          Icon && <Icon size={16} aria-hidden="true" />
         )}
         {children}
       </button>

@@ -60,7 +60,10 @@ export default function SegmentedControl({
       aria-describedby={describedBy}
       aria-disabled={disabled || undefined}
       onKeyDown={handleKeyDown}
-      className={`${className} gap-1 rounded border border-line bg-surface p-1`}
+      // A filled track rather than an outline: 2px of track around 32px options is exactly the
+      // control height, so the group lines up with buttons and inputs beside it. The options take a
+      // min-height, not a height: in a vertical group flex-1 would otherwise shrink them to nothing.
+      className={`${className} gap-0.5 rounded bg-raised p-0.5`}
     >
       {options.map((option, index) => {
         const selected = option.value === value;
@@ -81,10 +84,10 @@ export default function SegmentedControl({
             disabled={disabled}
             onClick={() => onChange(option.value)}
             className={[
-              'inline-flex flex-1 items-center justify-center gap-1.5 rounded-sm px-3 py-1.5',
+              'inline-flex min-h-8 flex-1 items-center justify-center gap-2 whitespace-nowrap rounded-sm px-3',
               'text-sm transition-colors duration-150',
               'disabled:cursor-not-allowed disabled:opacity-45',
-              selected ? 'bg-accent font-medium text-accent-fg' : 'text-fg-muted hover:bg-raised hover:text-fg',
+              selected ? 'bg-accent font-medium text-accent-fg' : 'text-fg-muted hover:bg-fg/5 hover:text-fg',
             ].join(' ')}
           >
             {Icon && <Icon size={14} aria-hidden="true" />}

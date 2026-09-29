@@ -41,7 +41,7 @@ export default function StartSort({ settings, run, isElectron, error, onError })
   return (
     <div className="space-y-3">
       {confirmCreate ? (
-        <div className="space-y-3 rounded border border-caution/30 bg-caution/10 px-3.5 py-3">
+        <div className="space-y-3 rounded border border-caution/40 bg-caution/10 p-3">
           <p className="text-sm text-fg">The destination folder doesn&apos;t exist. Is the drive connected?</p>
           <div className="flex flex-wrap gap-2">
             <Button ref={createRef} variant="primary" icon={FolderPlus} onClick={() => begin(true)}>
