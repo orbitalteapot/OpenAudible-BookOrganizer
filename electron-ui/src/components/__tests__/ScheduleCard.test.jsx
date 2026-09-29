@@ -5,13 +5,16 @@ import { counts, idleStatus, runningStatus, scheduleResponse, settingsResponse }
 import ScheduleCard from '../sort/ScheduleCard';
 
 /**
- * The card with its hooks stood in for: `changeInterval` succeeds and the backend then reports the
- * schedule as `afterChange` says.
+ * The card with its hooks stood in for: `changeInterval` succeeds, the save's reply carries the new
+ * interval, and the backend then reports the schedule as `afterChange` says (or, with `stale`, not
+ * yet). The settings start with the schedule's interval, as the backend reports them.
  */
-function Harness({ initial, settings = settingsResponse(), isElectron = false, runStatus = idleStatus(), afterChange }) {
+function Harness({ initial, settings: given = settingsResponse(), isElectron = false, runStatus = idleStatus(), afterChange, stale = false }) {
   const [schedule, setSchedule] = useState(initial);
+  const [settings, setSettings] = useState({ ...given, scheduleIntervalMinutes: initial.intervalMinutes });
   const changeInterval = async (minutes) => {
-    setSchedule(afterChange ? afterChange(minutes) : { ...schedule, intervalMinutes: minutes });
+    setSettings((current) => ({ ...current, scheduleIntervalMinutes: minutes }));
+    if (!stale) setSchedule(afterChange ? afterChange(minutes) : { ...schedule, intervalMinutes: minutes });
     return true;
   };
 
@@ -168,7 +171,7 @@ describe('ScheduleCard', () => {
     render(
       <ScheduleCard
         scheduleState={{ schedule: scheduleResponse({ intervalMinutes: 1440 }), error: null, saving: true, changeInterval: vi.fn() }}
-        settingsState={{ settings: settingsResponse(), update: vi.fn(), saving: true }}
+        settingsState={{ settings: settingsResponse({ scheduleIntervalMinutes: 1440 }), update: vi.fn(), saving: true }}
         runStatus={idleStatus()}
         isElectron
       />
@@ -190,5 +193,15 @@ describe('ScheduleCard', () => {
 
     fireEvent.click(radio('Off'));
     await waitFor(() => expect(screen.queryByRole('switch')).toBeNull());
+  });
+
+  it('follows the saved choice at once, before the schedule is asked for again', async () => {
+    render(<Harness initial={scheduleResponse({ intervalMinutes: 1440 })} isElectron stale />);
+
+    fireEvent.click(radio('Off'));
+
+    // The schedule still says daily; the save's reply said off, and so does the card.
+    await waitFor(() => expect(radio('Off').getAttribute('aria-checked')).toBe('true'));
+    expect(screen.queryByRole('switch')).toBeNull();
   });
 });

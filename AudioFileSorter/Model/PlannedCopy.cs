@@ -11,7 +11,7 @@ public sealed record PlannedCopy
     /// <summary>The book as a person would name it, for progress and problem reports.</summary>
     public required string Title { get; init; }
 
-    /// <summary>Neither the audio nor the PDF is in the source folder.</summary>
+    /// <summary>The audio is not in the source folder, so nothing of the book is copied, not even its PDF.</summary>
     public bool IsMissingFromSource { get; init; }
 
     /// <summary>Folder to create before copying, or null when there is nothing to copy.</summary>

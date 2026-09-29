@@ -29,14 +29,14 @@ function describeNextRun(nextRunUtc) {
   return `${formatDateTime(nextRunUtc, now)} (${formatRelative(nextRunUtc, now)})`;
 }
 
-function ScheduleFacts({ schedule, runStatus }) {
-  const { intervalMinutes, nextRunUtc, lastRun, retrying } = schedule;
+function ScheduleFacts({ isOn, schedule, runStatus }) {
+  const { nextRunUtc, lastRun, retrying } = schedule;
   const runningNow = isRunning(runStatus) && runStatus.trigger === 'scheduled';
 
   const facts = [];
   if (runningNow) {
     facts.push(['Now', 'An automatic sort is running.']);
-  } else if (intervalMinutes && nextRunUtc) {
+  } else if (isOn && nextRunUtc) {
     facts.push(
       retrying
         ? ['Retrying', `${formatDateTime(nextRunUtc)} — last attempt failed: ${lastRun?.error ?? 'unknown error'}`]
@@ -103,12 +103,16 @@ export default function ScheduleCard({ scheduleState, settingsState, runStatus, 
 
   if (!schedule || !settings) return null;
 
-  const isOn = schedule.intervalMinutes != null;
+  // On or off, and how often, as the settings say: they change with the save's own reply, while the
+  // schedule is asked for again after it and lags behind. Read from the schedule, the card showed
+  // the old choice, with switches the new one hides, until that answer came.
+  const intervalMinutes = settings.scheduleIntervalMinutes;
+  const isOn = intervalMinutes != null;
   const lastRunKey = schedule.lastRun?.finishedUtc ?? null;
   const blocked = isOn ? null : pathsBlockedReason(settings, isElectron);
 
   const hint = schedule.locked
-    ? `${formatInterval(schedule.intervalMinutes)}. Set by the server's SORT_INTERVAL setting.`
+    ? `${formatInterval(intervalMinutes)}. Set by the server's SORT_INTERVAL setting.`
     : blocked ?? (isOn ? 'Uses the same folders and options as Start sorting.' : 'The first sort starts as soon as you turn this on.');
 
   const select = async (value) => {
@@ -128,8 +132,8 @@ export default function ScheduleCard({ scheduleState, settingsState, runStatus, 
           {(_, hintId) => (
             <SegmentedControl
               label="Sort every"
-              value={isOn ? String(schedule.intervalMinutes) : OFF}
-              options={intervalOptions(schedule.intervalMinutes)}
+              value={isOn ? String(intervalMinutes) : OFF}
+              options={intervalOptions(intervalMinutes)}
               describedBy={hintId}
               disabled={saving || schedule.locked || Boolean(blocked)}
               // Choosing starts a sort, so looking through the options with the arrows must not.
@@ -141,11 +145,11 @@ export default function ScheduleCard({ scheduleState, settingsState, runStatus, 
 
         {showFirstRun && (
           <Banner tone="positive">
-            The first sort starts now, then {formatInterval(schedule.intervalMinutes).toLowerCase()}.
+            The first sort starts now, then {formatInterval(intervalMinutes).toLowerCase()}.
           </Banner>
         )}
 
-        <ScheduleFacts schedule={schedule} runStatus={runStatus} />
+        <ScheduleFacts isOn={isOn} schedule={schedule} runStatus={runStatus} />
 
         {schedule.blockedReason && (
           <Banner tone="caution">Automatic sorting can&apos;t run: {schedule.blockedReason}</Banner>

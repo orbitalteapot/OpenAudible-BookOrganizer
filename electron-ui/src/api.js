@@ -35,29 +35,51 @@ export class ApiError extends Error {
 }
 
 /**
+ * Answers a proxy gives for a server behind it that is not answering: nginx, Traefik and the NAS
+ * proxies in front of a container send these while it restarts.
+ */
+const GATEWAY_STATUSES = new Set([502, 503, 504]);
+
+/**
  * The error a failed response describes. The backend answers with JSON, but a crashed or
  * not-yet-started backend answers with HTML or nothing at all, and letting res.json() throw there
  * would replace a useful message with a JSON parse error.
+ *
+ * An answer that is not the backend's own (a proxy's error page, a gateway status) means the
+ * organizer is not answering, so it is the same error as a failed connection: the page then says
+ * so in plain words, and clears it once the organizer answers again, instead of showing
+ * "HTTP 502" until some later save happens to work.
  */
 async function readError(res) {
-  const fallback = `Request failed (HTTP ${res.status})`;
   let body = null;
 
   try {
     body = JSON.parse(await res.text());
   } catch {
-    // Not JSON: the fallback message is the best there is.
+    // Not JSON, so not the backend's answer.
   }
 
-  return new ApiError(body?.error || fallback, {
+  if (body === null || GATEWAY_STATUSES.has(res.status)) {
+    return new ApiError(unreachableMessage(), { status: res.status, code: 'unreachable' });
+  }
+
+  return new ApiError(body.error || `Request failed (HTTP ${res.status})`, {
     status: res.status,
-    code: body?.code ?? null,
-    field: body?.field ?? null,
+    code: body.code ?? null,
+    field: body.field ?? null,
   });
 }
 
+/**
+ * How long a read may take before it is given up on. Reading the settings looks at every folder,
+ * and on an offline network share (a hard NFS mount) that can hang for good; the settings hook
+ * sends its requests one at a time, so one read that never ends would hold up every save behind it.
+ */
+const READ_TIMEOUT_MS = 60_000;
+
 async function request(path, { method = 'GET', body } = {}) {
   const options = { method };
+  if (method === 'GET') options.signal = AbortSignal.timeout(READ_TIMEOUT_MS);
   // Every change is sent as JSON, with or without a body: the desktop backend refuses anything else,
   // because a web site can only send JSON to it after a preflight the backend turns down.
   if (method !== 'GET') options.headers = { 'Content-Type': 'application/json' };

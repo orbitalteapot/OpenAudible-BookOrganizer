@@ -123,8 +123,8 @@ The **Options** card has two settings, both remembered between runs:
 **How books are organised**, folded away under the options, shows the folder layout the sort will
 produce.
 
-Then click **Start sorting**. If the button is greyed out, the line underneath says why — usually
-a path that has not been chosen yet.
+Then click **Start sorting**, at the bottom of the page. If the button is greyed out, the line
+underneath says why — usually a path that has not been chosen yet.
 
 If the destination folder does not exist, the app asks before doing anything: *"The destination
 folder doesn't exist. Is the drive connected?"* The likeliest reason is an external drive or a
@@ -132,10 +132,10 @@ network share that is not plugged in, and sorting onto your internal disk instea
 fill it. Connect the drive and start again, or click **Create folder and sort** if a new folder is
 what you want.
 
-Progress appears in the **Progress** card as it works, with the book being copied, and you can
-cancel at any point — books already copied are complete files, and re-running picks up where you
-left off. A small **Sorting…** badge in the sidebar shows the progress from any page; click it to
-come back.
+Progress appears in the **Progress** card as it works, with the book that finished last, and you
+can cancel at any point — books already copied are complete files, and re-running picks up where
+you left off. A small **Sorting…** badge in the sidebar shows the progress from any page; click it
+to go straight to the Progress card.
 
 ![A finished sort](images/app-sort-complete.png)
 
@@ -147,7 +147,7 @@ Every book lands in exactly one of six counters, so they add up to the books pro
 | **Updated** | Replaced an out-of-date copy at the destination. |
 | **Moved** | Left loose by an older version of this app, and moved into its own folder (see [below](#how-your-books-get-organised)). |
 | **Up to date** | Already at the destination and unchanged, so nothing was written. |
-| **Not found** | Listed in the export, but no matching file in the source folder — usually books you have not downloaded. |
+| **Not found** | Listed in the export, but no audio file for it in the source folder — usually books you have not downloaded. A PDF on its own is not copied; it comes along once the audio is there. |
 | **Failed** | Could not be copied. The problems list says why. |
 
 When anything needs your attention, a **Problems** list appears under the counters. Open it to see
@@ -417,6 +417,7 @@ problems list for every run, and any ignored setting as a warning on the Automat
 | Everything is **Not found** | `SOURCE_PATH` is mounted somewhere other than where the books are. |
 | *"The destination folder cannot be the source folder or a folder inside it."* | Copying a folder into itself never terminates cleanly, so it is refused. Mount them separately. |
 | *"The destination folder … was not found inside the container"* | The volume behind `DESTINATION_PATH` is not mounted, or the host folder is missing. The container never creates it, so a forgotten mount cannot fill the container with a copy of your library. Automatic sorts retry every 15 minutes until it is back. |
+| *"The folder … does not exist inside /destination"* | The mount works, but the subfolder `DESTINATION_PATH` names (such as `/destination/Audiobooks`) has not been made yet. Create it on the host, in the folder mapped to `/destination`. |
 | *"Cannot write to the destination folder"* | The container's user cannot write to the mounted folder. Check the host folder's permissions. |
 | A warning on the Automatic sorting card, such as ``SORT_INTERVAL="6x" was ignored`` | The value could not be read. Use something like `6h`, `12h` or `1d`, or `off`. |
 | A warning on the Automatic sorting card: *"The settings could not be saved…"* | The `./data` folder is mounted read-only, or its disk is full. The Sort page's choices and when automatic sorting last ran are forgotten on every restart until `settings.json` can be written. |

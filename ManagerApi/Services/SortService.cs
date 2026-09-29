@@ -100,9 +100,9 @@ public sealed class SortService
         // Outside the lock: on a sleeping network share this can take a while, and polling for
         // progress must not wait on it.
         var settings = _settings.Effective;
-        if (SortPathValidator.Validate(settings.CsvPath ?? "", settings.SourcePath, settings.DestinationPath, options.CreateDestination) is { } problem)
+        if (_settings.CheckForSort(settings, options.CreateDestination) is { } problem)
         {
-            throw new SortPathException(_settings.Config.Explain(problem));
+            throw new SortPathException(problem);
         }
 
         lock (_lock)

@@ -86,6 +86,15 @@ export default function App() {
 
   const handlePageChange = useCallback((page) => setCurrentPage(page), []);
 
+  // The run pill promises progress, which on a narrow window sits far below the top of the Sort
+  // page; the Progress card takes focus (and so scrolls into view) once, then clears this.
+  const [focusProgress, setFocusProgress] = useState(false);
+  const handleShowProgress = useCallback(() => {
+    setCurrentPage('sort');
+    setFocusProgress(true);
+  }, []);
+  const handleProgressFocused = useCallback(() => setFocusProgress(false), []);
+
   return (
     <div className="flex h-full flex-col bg-canvas">
       {isElectron && <TitleBar />}
@@ -94,6 +103,7 @@ export default function App() {
         <Sidebar
           currentPage={currentPage}
           onPageChange={handlePageChange}
+          onShowProgress={handleShowProgress}
           bookCount={library.books.length}
           runStatus={run.status}
           theme={theme}
@@ -112,7 +122,14 @@ export default function App() {
               isElectron={isElectron}
             />
           ) : (
-            <SortPage settingsState={settingsState} run={run} scheduleState={scheduleState} isElectron={isElectron} />
+            <SortPage
+              settingsState={settingsState}
+              run={run}
+              scheduleState={scheduleState}
+              isElectron={isElectron}
+              focusProgress={focusProgress}
+              onProgressFocused={handleProgressFocused}
+            />
           )}
         </main>
       </div>

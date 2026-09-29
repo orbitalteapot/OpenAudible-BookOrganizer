@@ -53,6 +53,8 @@ export default function useSettings() {
   const [pending, setPending] = useState(0);
 
   const queue = useRef(Promise.resolve());
+  // A refresh waiting for its turn, until it starts.
+  const queuedRefresh = useRef(null);
 
   /** Runs `task` after every request queued before it. */
   const enqueue = useCallback((task) => {
@@ -127,21 +129,28 @@ export default function useSettings() {
   /**
    * Asks again, for what only the backend can see: whether a folder has appeared since (a run
    * created it, a drive was plugged in). Queued behind any save, so it cannot undo one.
+   *
+   * A refresh asked for while another is still waiting for its turn is that one: it will fetch
+   * the same thing. Otherwise every timer tick, focus and tab switch would queue one more while
+   * the backend takes its time over an offline network share, and a save would wait behind all of them.
    */
-  const refresh = useCallback(
-    () =>
-      enqueue(async () => {
-        try {
-          const current = await getSettings();
-          setSettings(current);
-          setFieldErrorState((errors) => withoutFound(errors, current.pathStatus));
-          setErrorState((shown) => (shown?.code === 'unreachable' ? null : shown));
-        } catch {
-          // The settings on screen are still the last ones the backend confirmed.
-        }
-      }),
-    [enqueue]
-  );
+  const refresh = useCallback(() => {
+    if (queuedRefresh.current) return queuedRefresh.current;
+
+    const refreshing = enqueue(async () => {
+      queuedRefresh.current = null;
+      try {
+        const current = await getSettings();
+        setSettings(current);
+        setFieldErrorState((errors) => withoutFound(errors, current.pathStatus));
+        setErrorState((shown) => (shown?.code === 'unreachable' ? null : shown));
+      } catch {
+        // The settings on screen are still the last ones the backend confirmed.
+      }
+    });
+    queuedRefresh.current = refreshing;
+    return refreshing;
+  }, [enqueue]);
 
   const error = errorState?.message ?? null;
 

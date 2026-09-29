@@ -96,13 +96,29 @@ public sealed record ServerConfig
             (SortPathProblemCode.NotFound, SortPathField.Csv) =>
                 $"The library export {CsvPath} was not found inside the container. Check that the folder holding it is mapped, and that {variable} names the file.",
             (SortPathProblemCode.NotFound or SortPathProblemCode.DestinationMissing, SortPathField.Source) =>
-                $"The source folder {SourcePath} was not found inside the container. Check the volume mapping for {variable}.",
+                MissingFolder("source", SourcePath!, variable),
             (SortPathProblemCode.NotFound or SortPathProblemCode.DestinationMissing, SortPathField.Destination) =>
-                $"The destination folder {DestinationPath} was not found inside the container. Check the volume mapping for {variable}.",
+                MissingFolder("destination", DestinationPath!, variable),
             _ => problem.Message
         };
 
         return problem with { Message = message };
+    }
+
+    /// <summary>
+    /// A server-set folder that is not there. When the folder it sits in is (and is not the root,
+    /// which every container has), the mapping works and only the folder itself is missing, such as
+    /// an "Audiobooks" subfolder of the mount nobody has made yet. Sending that admin to check a
+    /// mapping that is fine leaves them stuck, with no Create folder button to press.
+    /// </summary>
+    private static string MissingFolder(string noun, string path, string variable)
+    {
+        var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(path));
+        var parentIsMounted = !string.IsNullOrEmpty(parent) && Path.GetPathRoot(parent) != parent && Directory.Exists(parent);
+
+        return parentIsMounted
+            ? $"The folder {Path.GetFileName(Path.TrimEndingDirectorySeparator(path))} does not exist inside {parent}. Create it on the host (in the folder mapped to {parent}), then try again."
+            : $"The {noun} folder {path} was not found inside the container. Check the volume mapping for {variable}.";
     }
 
     /// <summary>The variable that fixes <paramref name="field"/>, for messages that tell the user where to change it.</summary>

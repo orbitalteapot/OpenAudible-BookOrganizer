@@ -170,6 +170,63 @@ public class SettingsServiceTests
         Assert.True(state.Settings.KeepRunningInBackground);
     }
 
+    [Theory]
+    [InlineData("\"keepRunningInBackground\": \"true\"")]
+    [InlineData("\"openAtLogin\": 1")]
+    [InlineData("\"scheduleIntervalMinutes\": 1440.0")]
+    [InlineData("\"copySpeed\": 2")]
+    public void A_setting_of_the_wrong_kind_falls_back_on_its_own_and_the_rest_is_saved_again(string mistyped)
+    {
+        using var workspace = new TempWorkspace();
+        var path = Path.Combine(workspace.Root, "settings.json");
+        File.WriteAllText(path, $$"""
+            { "version": 1, "settings": { "sourcePath": "/books", "csvPath": "/x.csv", {{mistyped}} } }
+            """);
+        var store = new SettingsStore(path, NullLogger<SettingsStore>.Instance);
+
+        var state = store.Load();
+
+        // This used to throw the whole block away, and the next save wrote the defaults over the file.
+        Assert.Equal("/books", state.Settings.SourcePath);
+        Assert.Equal("/x.csv", state.Settings.CsvPath);
+        Assert.True(store.TrySave(state, out _));
+        Assert.Contains("/books", File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void A_settings_entry_that_is_not_an_object_is_kept_aside_and_the_page_is_told()
+    {
+        using var workspace = new TempWorkspace();
+        var path = Path.Combine(workspace.Root, "settings.json");
+        File.WriteAllText(path, """{ "version": 1, "settings": ["/books"] }""");
+        var store = new SettingsStore(path, NullLogger<SettingsStore>.Instance);
+
+        Assert.Equal(new AppSettings(), store.Load().Settings);
+
+        Assert.Single(Directory.GetFiles(workspace.Root, "settings.json.unreadable-*"));
+        Assert.StartsWith("The saved settings could not be read", store.LoadWarning);
+    }
+
+    [Fact]
+    public void A_last_run_this_version_cannot_read_keeps_the_schedule_times()
+    {
+        using var workspace = new TempWorkspace();
+        var path = Path.Combine(workspace.Root, "settings.json");
+        File.WriteAllText(path, """
+            { "version": 1, "settings": {},
+              "schedule": { "lastAttemptUtc": "2026-01-01T00:00:00Z", "lastSuccessUtc": "2026-01-01T00:00:00Z",
+                            "lastRun": { "trigger": "api" } } }
+            """);
+
+        var schedule = new SettingsStore(path, NullLogger<SettingsStore>.Instance).Load().Schedule;
+
+        // Losing the times would start an automatic sort at once.
+        var expected = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        Assert.Equal(expected, schedule.LastAttemptUtc);
+        Assert.Equal(expected, schedule.LastSuccessUtc);
+        Assert.Null(schedule.LastRun);
+    }
+
     [Fact]
     public void A_change_that_cannot_be_saved_is_refused_with_the_reason_and_not_kept()
     {
@@ -340,6 +397,21 @@ public class SettingsServiceTests
 
         Assert.Equal("destinationPath", error!.Field);
         Assert.Null(backend.Settings.Effective.SourcePath);
+    }
+
+    [Fact]
+    public void A_source_picked_around_the_destination_is_refused_under_the_source_and_named()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = new TestBackend(new ServerConfig());
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { DestinationPath = workspace.Destination }, out _));
+
+        Assert.False(backend.Settings.TryUpdate(new AppSettingsPatch { SourcePath = workspace.Root }, out var error));
+
+        // The destination was not touched, so blaming it sent people to fix the wrong folder.
+        Assert.Equal("sourcePath", error!.Field);
+        Assert.Contains(workspace.Root, error.Message);
+        Assert.Equal(workspace.Destination, backend.Settings.Effective.DestinationPath);
     }
 
     [Fact]

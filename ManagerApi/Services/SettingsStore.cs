@@ -52,19 +52,22 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
             using var document = JsonDocument.Parse(File.ReadAllText(_path));
             var root = document.RootElement;
 
-            // "null", "[]" or a bare string parse fine, but have no properties to look up.
-            if (root.ValueKind != JsonValueKind.Object)
+            // "null", "[]" or a bare string parse fine, but have no settings to look up one at a
+            // time; nor does a "settings" entry that is not an object.
+            var settings = default(JsonElement);
+            var hasSettings = root.ValueKind == JsonValueKind.Object && TryGetValue(root, "settings", out settings);
+            if (root.ValueKind != JsonValueKind.Object || (hasSettings && settings.ValueKind != JsonValueKind.Object))
             {
                 logger.LogWarning(
                     "The settings file at {Path} does not hold settings ({Kind}); starting with the default settings",
-                    _path, root.ValueKind);
+                    _path, hasSettings ? settings.ValueKind : root.ValueKind);
                 SetAsideUnreadableFile();
                 return empty;
             }
 
             return new SavedState(
-                root.TryGetProperty("settings", out var settings) ? ReadSettings(settings, defaults) : defaults,
-                root.TryGetProperty("schedule", out var schedule) ? ReadSchedule(schedule) : new ScheduleState());
+                hasSettings ? ReadSettings(settings, defaults) : defaults,
+                TryGetValue(root, "schedule", out var schedule) ? ReadSchedule(schedule) : new ScheduleState());
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
@@ -141,43 +144,34 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
         }
     }
 
+    /// <summary>
+    /// Reads each setting on its own, so one of the wrong kind (a switch saved as "true", an interval
+    /// saved as 1440.0) falls back to its default without taking the paths and every other choice
+    /// with it.
+    /// </summary>
     private AppSettings ReadSettings(JsonElement element, AppSettings defaults)
     {
-        StoredSettings? stored;
-        try
-        {
-            stored = element.Deserialize<StoredSettings>(JsonOptions);
-        }
-        catch (JsonException ex)
-        {
-            logger.LogWarning(ex, "The saved settings in {Path} could not be read; using the defaults", _path);
-            return defaults;
-        }
-
-        if (stored is null)
-        {
-            return defaults;
-        }
-
         FileComparisonMode? comparisonMode = null;
-        if (stored.ComparisonMode is not null)
+        var comparisonText = ReadString(element, "comparisonMode");
+        if (comparisonText is not null)
         {
-            if (SortOptions.TryParseComparisonMode(stored.ComparisonMode, out var parsed))
+            if (SortOptions.TryParseComparisonMode(comparisonText, out var parsed))
             {
                 comparisonMode = parsed;
             }
             else
             {
-                Ignored("comparisonMode", stored.ComparisonMode);
+                Ignored("comparisonMode", comparisonText);
             }
         }
 
-        if (!SortOptions.TryParseCopySpeed(stored.CopySpeed, out var copySpeed))
+        var copySpeedText = ReadString(element, "copySpeed");
+        if (!SortOptions.TryParseCopySpeed(copySpeedText, out var copySpeed))
         {
-            Ignored("copySpeed", stored.CopySpeed);
+            Ignored("copySpeed", copySpeedText);
         }
 
-        var interval = stored.ScheduleIntervalMinutes;
+        var interval = ReadInt(element, "scheduleIntervalMinutes");
         if (interval is not null && !SortSchedule.IsValidInterval(interval.Value))
         {
             Ignored("scheduleIntervalMinutes", interval.ToString());
@@ -186,28 +180,116 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
 
         return new AppSettings
         {
-            CsvPath = stored.CsvPath,
-            SourcePath = stored.SourcePath,
-            DestinationPath = stored.DestinationPath,
+            CsvPath = ReadString(element, "csvPath"),
+            SourcePath = ReadString(element, "sourcePath"),
+            DestinationPath = ReadString(element, "destinationPath"),
             ComparisonMode = comparisonMode,
             CopySpeed = copySpeed,
             ScheduleIntervalMinutes = interval,
-            KeepRunningInBackground = stored.KeepRunningInBackground ?? defaults.KeepRunningInBackground,
-            OpenAtLogin = stored.OpenAtLogin ?? defaults.OpenAtLogin
+            KeepRunningInBackground = ReadBool(element, "keepRunningInBackground") ?? defaults.KeepRunningInBackground,
+            OpenAtLogin = ReadBool(element, "openAtLogin") ?? defaults.OpenAtLogin
         };
     }
 
+    /// <summary>
+    /// Reads each part of the history on its own: a last run this version cannot read (a newer
+    /// version's trigger, say) is dropped, but the times are kept, since losing them would start an
+    /// automatic sort at once.
+    /// </summary>
     private ScheduleState ReadSchedule(JsonElement element)
     {
-        try
+        if (element.ValueKind != JsonValueKind.Object)
         {
-            return element.Deserialize<ScheduleState>(JsonOptions) ?? new ScheduleState();
-        }
-        catch (JsonException ex)
-        {
-            logger.LogWarning(ex, "The automatic sorting history in {Path} could not be read; starting it afresh", _path);
+            Ignored("schedule", element.GetRawText());
             return new ScheduleState();
         }
+
+        return new ScheduleState
+        {
+            EnabledAtUtc = ReadTime(element, "enabledAtUtc"),
+            LastAttemptUtc = ReadTime(element, "lastAttemptUtc"),
+            LastSuccessUtc = ReadTime(element, "lastSuccessUtc"),
+            LastRun = ReadLastRun(element)
+        };
+    }
+
+    private RunRecord? ReadLastRun(JsonElement schedule)
+    {
+        if (!TryGetValue(schedule, "lastRun", out var value))
+        {
+            return null;
+        }
+
+        try
+        {
+            return value.Deserialize<RunRecord>(JsonOptions);
+        }
+        catch (JsonException)
+        {
+            Ignored("lastRun", value.GetRawText());
+            return null;
+        }
+    }
+
+    private string? ReadString(JsonElement parent, string name)
+    {
+        return Read(parent, name, value => value.ValueKind == JsonValueKind.String ? value.GetString() : null);
+    }
+
+    private bool? ReadBool(JsonElement parent, string name)
+    {
+        return Read(parent, name, value => value.ValueKind is JsonValueKind.True or JsonValueKind.False ? value.GetBoolean() : (bool?)null);
+    }
+
+    private int? ReadInt(JsonElement parent, string name)
+    {
+        return Read(parent, name, value => value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number) ? number : (int?)null);
+    }
+
+    private DateTime? ReadTime(JsonElement parent, string name)
+    {
+        return Read(parent, name, value => value.ValueKind == JsonValueKind.String && value.TryGetDateTime(out var time) ? time : (DateTime?)null);
+    }
+
+    /// <summary>
+    /// The value of one saved property, or null when it is missing or null. A value
+    /// <paramref name="convert"/> cannot use (another kind, or out of range) is logged and read as
+    /// null, so it falls back to its default.
+    /// </summary>
+    private T? Read<T>(JsonElement parent, string name, Func<JsonElement, T?> convert)
+    {
+        if (!TryGetValue(parent, name, out var value))
+        {
+            return default;
+        }
+
+        var result = convert(value);
+        if (result is null)
+        {
+            Ignored(name, value.GetRawText());
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Finds a property whatever its case, as the serializer's web defaults do, so a hand edit that
+    /// writes "SourcePath" still counts. Null counts as missing.
+    /// </summary>
+    private static bool TryGetValue(JsonElement parent, string name, out JsonElement value)
+    {
+        foreach (var property in parent.EnumerateObject())
+        {
+            if (string.Equals(property.Name, name, StringComparison.OrdinalIgnoreCase)
+                && property.Value.ValueKind != JsonValueKind.Null)
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     private void Ignored(string setting, string? value)
@@ -217,9 +299,8 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
 
     /// <summary>
     /// The settings as written to the file. The choices are kept as their wire spelling ("full",
-    /// "gentle") and parsed on the way back in, so an unknown value is caught by the same rules the
-    /// API applies instead of failing the whole file. The switches are nullable for the same reason:
-    /// a <c>null</c> there falls back to off instead of failing the whole file.
+    /// "gentle") and parsed on the way back in (see <see cref="ReadSettings"/>), so an unknown value
+    /// is caught by the same rules the API applies.
     /// </summary>
     private sealed record StoredSettings(
         string? CsvPath,
@@ -228,8 +309,8 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
         string? ComparisonMode,
         string? CopySpeed,
         int? ScheduleIntervalMinutes,
-        bool? KeepRunningInBackground,
-        bool? OpenAtLogin)
+        bool KeepRunningInBackground,
+        bool OpenAtLogin)
     {
         public static StoredSettings From(AppSettings settings)
         {

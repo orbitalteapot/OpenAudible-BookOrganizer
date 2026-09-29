@@ -18,7 +18,7 @@ const THEME_OPTIONS = [
  * the theme. Collapses to an icon rail on a narrow window rather than holding a fixed 240px, which
  * on a small laptop was taking a fifth of the width to show two words.
  */
-export default function Sidebar({ currentPage, onPageChange, bookCount, runStatus, theme, onThemeChange }) {
+export default function Sidebar({ currentPage, onPageChange, onShowProgress, bookCount, runStatus, theme, onThemeChange }) {
   return (
     <nav aria-label="Main" className="flex w-14 shrink-0 flex-col border-r border-line bg-canvas xl:w-52">
       <div className="flex h-14 items-center gap-3 px-4">
@@ -54,7 +54,7 @@ export default function Sidebar({ currentPage, onPageChange, bookCount, runStatu
       </ul>
 
       <div className="space-y-3 border-t border-line px-2 py-3 xl:px-3">
-        <RunPill status={runStatus} onOpen={() => onPageChange('sort')} />
+        <RunPill status={runStatus} onOpen={onShowProgress} />
 
         <div className="hidden px-2 xl:block">
           <p className="text-2xs text-fg-subtle">Books loaded</p>

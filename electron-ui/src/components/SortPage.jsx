@@ -11,8 +11,10 @@ import { Banner, Card } from './ui/Surface';
 /**
  * Where sorting is set up, started and followed. Everything on it reads from the backend: the
  * settings, the run in progress (whoever started it) and the schedule.
+ *
+ * `focusProgress` asks for the Progress card to take focus, and `onProgressFocused` says it has.
  */
-export default function SortPage({ settingsState, run, scheduleState, isElectron }) {
+export default function SortPage({ settingsState, run, scheduleState, isElectron, focusProgress, onProgressFocused }) {
   const { settings, update, refresh, saving, fieldErrors, error: settingsError } = settingsState;
   const [startError, setStartError] = useState(null);
   const runActive = isRunning(run.status);
@@ -64,20 +66,16 @@ export default function SortPage({ settingsState, run, scheduleState, isElectron
             fieldErrors={fieldErrors}
             runActive={runActive}
           />
-          <Card>
-            <StartSort
-              settings={settings}
-              run={run}
-              isElectron={isElectron}
-              error={startError}
-              onError={setStartError}
-              onRefused={refresh}
-            />
-          </Card>
         </div>
 
         <div className="flex flex-col gap-4">
-          <ProgressCard status={run.status} cancel={run.cancel} lostContact={run.error} />
+          <ProgressCard
+            status={run.status}
+            cancel={run.cancel}
+            lostContact={run.error}
+            focusRequested={focusProgress}
+            onFocused={onProgressFocused}
+          />
           <ScheduleCard
             scheduleState={scheduleState}
             settingsState={settingsState}
@@ -86,6 +84,19 @@ export default function SortPage({ settingsState, run, scheduleState, isElectron
           />
         </div>
       </div>
+
+      {/* Outside the scrolling cards, so it is always on screen: below them it sat under the fold
+          at every window size, with nothing to say it was there. */}
+      <Card>
+        <StartSort
+          settings={settings}
+          run={run}
+          isElectron={isElectron}
+          error={startError}
+          onError={setStartError}
+          onRefused={refresh}
+        />
+      </Card>
     </div>
   );
 }

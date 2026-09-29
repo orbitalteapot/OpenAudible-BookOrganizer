@@ -220,7 +220,7 @@ public class ApiEndpointTests
         // container, to be lost when it is recreated.
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("the-hobbit.m4b");
-        var missing = Path.Combine(workspace.Root, "unmounted");
+        var missing = Path.Combine(workspace.Root, "unmounted", "Audiobooks");
         await using var app = new ApiFactory(Locked(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), missing));
         using var client = app.CreateClient();
 

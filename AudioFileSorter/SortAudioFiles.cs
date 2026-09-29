@@ -15,7 +15,7 @@ public class FileSorter
     private const int CopyBufferSize = 81920;
     private const int ComparisonBufferSize = 131072;
     private const string PartialFileSuffix = ".oabo-partial";
-    private const string NotFoundMessage = "No file for this book in the source folder";
+    private const string NotFoundMessage = "No audio file for this book in the source folder";
 
     /// <summary>
     /// Sorts Open Audible books into the provided destination path.
@@ -218,7 +218,7 @@ public class FileSorter
     {
         return comparisonMode == FileComparisonMode.Full
             ? AreFilesIdenticalAsync(sourceFile, destinationFile, cancellationToken)
-            : AreFilesSameAsync(sourceFile, destinationFile, cancellationToken);
+            : Task.FromResult(AreFilesSame(sourceFile, destinationFile));
     }
 
     /// <summary>
@@ -269,9 +269,10 @@ public class FileSorter
 
     /// <summary>
     /// Cheap "is this the same file" check. Comparing every byte of a multi-gigabyte library on
-    /// every run is not viable, so size plus three sampled chunks is used instead.
+    /// every run is not viable, so size plus three sampled chunks is used instead. It reads a few
+    /// kilobytes, so it is synchronous: the planner uses it too, to tell whose an old file is.
     /// </summary>
-    private static async Task<bool> AreFilesSameAsync(string filePath1, string filePath2, CancellationToken cancellationToken)
+    internal static bool AreFilesSame(string filePath1, string filePath2)
     {
         try
         {
@@ -293,16 +294,16 @@ public class FileSorter
             var buffer1 = new byte[chunkSize];
             var buffer2 = new byte[chunkSize];
 
-            await using var stream1 = new FileStream(filePath1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize, true);
-            await using var stream2 = new FileStream(filePath2, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize, true);
+            using var stream1 = new FileStream(filePath1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize);
+            using var stream2 = new FileStream(filePath2, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize);
 
             foreach (var offset in GetSampleOffsets(length, chunkSize))
             {
                 stream1.Seek(offset, SeekOrigin.Begin);
                 stream2.Seek(offset, SeekOrigin.Begin);
 
-                var read1 = await stream1.ReadAtLeastAsync(buffer1, chunkSize, throwOnEndOfStream: false, cancellationToken);
-                var read2 = await stream2.ReadAtLeastAsync(buffer2, chunkSize, throwOnEndOfStream: false, cancellationToken);
+                var read1 = stream1.ReadAtLeast(buffer1, chunkSize, throwOnEndOfStream: false);
+                var read2 = stream2.ReadAtLeast(buffer2, chunkSize, throwOnEndOfStream: false);
 
                 if (read1 != read2 || !buffer1.AsSpan(0, read1).SequenceEqual(buffer2.AsSpan(0, read2)))
                 {
@@ -311,10 +312,6 @@ public class FileSorter
             }
 
             return true;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {

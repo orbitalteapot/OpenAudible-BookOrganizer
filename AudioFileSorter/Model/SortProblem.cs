@@ -14,5 +14,5 @@ public enum SortProblemKind
 
 /// <summary>Something that went wrong with one book, worded for the person running the sort.</summary>
 /// <param name="Book">The book as a person would name it: "We Are Legion (We Are Bob) — Dennis E. Taylor".</param>
-/// <param name="Message">What happened, in plain language: "No file for this book in the source folder".</param>
+/// <param name="Message">What happened, in plain language: "No audio file for this book in the source folder".</param>
 public sealed record SortProblem(SortProblemKind Kind, string Book, string Message);

@@ -110,7 +110,7 @@ public class FileSorterTests
             new SortProblem(
                 SortProblemKind.NotFound,
                 "We Are Legion (We Are Bob) — Dennis E. Taylor",
-                "No file for this book in the source folder"),
+                "No audio file for this book in the source folder"),
             Assert.Single(summary.Problems));
     }
 
@@ -194,6 +194,37 @@ public class FileSorterTests
             workspace.DestinationFiles());
         Assert.Equal("first-book", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "Collected Works.m4b")));
         Assert.Equal(SortCounts.Empty with { Moved = 1, NotFound = 1 }, summary.Counts);
+    }
+
+    [Fact]
+    public async Task Sort_moves_a_loose_book_whose_same_titled_twin_was_never_downloaded()
+    {
+        // main gave the plain name to the only "Collected Works" it had a file for.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("second.m4b", "second-book");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "second-book");
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Collected Works", filename: "first"),
+            TempWorkspace.Book(title: "Collected Works", filename: "second"));
+
+        Assert.Equal(["An Author/Collected Works (2)/Collected Works.m4b"], workspace.DestinationFiles());
+        Assert.Equal(SortCounts.Empty with { Moved = 1, NotFound = 1 }, summary.Counts);
+    }
+
+    [Fact]
+    public async Task Sort_reports_a_book_whose_audio_is_missing_even_when_its_pdf_is_there()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.pdf", "pdf");
+
+        var summary = await Sort(workspace, TempWorkspace.Book(pdf: "a-book.pdf"));
+
+        // Copying the PDF alone would call the book sorted and give library tools a folder with nothing to play.
+        Assert.Empty(workspace.DestinationFiles());
+        Assert.Equal(SortCounts.Empty with { NotFound = 1 }, summary.Counts);
+        Assert.Equal(SortProblemKind.NotFound, Assert.Single(summary.Problems).Kind);
     }
 
     [Fact]

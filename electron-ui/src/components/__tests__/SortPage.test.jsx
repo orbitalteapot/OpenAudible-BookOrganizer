@@ -222,4 +222,20 @@ describe('SortPage', () => {
     expect(await screen.findByText(/Couldn't start the sort: The destination folder \/destination was not found inside the container/)).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Create folder and sort' })).toBeNull();
   });
+
+  it('keeps Start sorting out of the scrolling cards, so it is always on screen', async () => {
+    await openSortPage();
+
+    const start = screen.getByRole('button', { name: 'Start sorting' });
+    const cards = screen.getByRole('heading', { name: 'Folders' }).closest('section').parentElement.parentElement;
+    expect(cards.contains(start)).toBe(false);
+  });
+
+  it('takes the run pill to the Progress card, from any page', async () => {
+    renderApp({ status: runningStatus() });
+
+    fireEvent.click(await screen.findByRole('button', { name: /Sorting… 42%\. Show progress/ }));
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Progress' })));
+  });
 });

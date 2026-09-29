@@ -232,7 +232,8 @@ public sealed class SettingsService
         if (SortPathValidator.InspectDestination(next.SourcePath, next.DestinationPath) is
             { Code: SortPathProblemCode.DestinationInsideSource } overlap)
         {
-            return ToError(overlap);
+            return OverlapError(overlap, sourceChanged: !SamePath(current.SourcePath, next.SourcePath),
+                destinationChanged: !SamePath(current.DestinationPath, next.DestinationPath), next);
         }
 
         var pathsOrIntervalChanged =
@@ -246,8 +247,35 @@ public sealed class SettingsService
             return null;
         }
 
-        var problem = SortPathValidator.Validate(next.CsvPath ?? "", next.SourcePath, next.DestinationPath, createDestination: false);
-        return problem is null ? null : ToError(problem);
+        return CheckForSort(next, createDestination: false) is { } problem ? ToError(problem) : null;
+    }
+
+    /// <summary>
+    /// The check every sort's paths must pass, worded for where it has to be fixed (see
+    /// <see cref="ServerConfig.Explain"/>): a start, and turning automatic sorting on, which an
+    /// unattended run relies on. Null when a sort can go ahead.
+    /// </summary>
+    public SortPathProblem? CheckForSort(AppSettings settings, bool createDestination)
+    {
+        // A sort from the settings reads the export, so it is checked even when none is set; the
+        // validator skips a null path, which is for the sorter, handed the books instead of the file.
+        var problem = SortPathValidator.Validate(settings.CsvPath ?? "", settings.SourcePath, settings.DestinationPath, createDestination);
+        return problem is null ? null : _config.Explain(problem);
+    }
+
+    /// <summary>
+    /// Refuses a source and destination that overlap under the folder the person just picked, and
+    /// names it: blaming the destination they never touched for the source they just chose sends
+    /// them to fix the wrong one, while the folder they picked vanishes without a word.
+    /// </summary>
+    private static SettingsError OverlapError(SortPathProblem overlap, bool sourceChanged, bool destinationChanged, AppSettings next)
+    {
+        return sourceChanged && !destinationChanged
+            ? new SettingsError(
+                $"The source folder cannot be the destination folder or a folder that holds it: {next.SourcePath}",
+                RunErrors.Field(SortPathField.Source),
+                RunErrors.Code(overlap))
+            : new SettingsError($"{overlap.Message.TrimEnd('.')}: {next.DestinationPath}", RunErrors.Field(overlap.Field), RunErrors.Code(overlap));
     }
 
     private SettingsError? LockedPathChange(SortPathField field, string? requested, string? current)
@@ -308,6 +336,6 @@ public sealed class SettingsService
             StringComparison.Ordinal);
     }
 
-    private SettingsError ToError(SortPathProblem problem) =>
-        new(_config.Explain(problem).Message, RunErrors.Field(problem.Field), RunErrors.Code(problem));
+    private static SettingsError ToError(SortPathProblem problem) =>
+        new(problem.Message, RunErrors.Field(problem.Field), RunErrors.Code(problem));
 }

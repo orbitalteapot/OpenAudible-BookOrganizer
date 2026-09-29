@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Square } from 'lucide-react';
 import { formatDateTime, RUN_COUNTS, summariseRun } from '../../format';
 import { isRunning, useFocusFallback } from '../../hooks';
@@ -32,7 +32,9 @@ function describeRun(status) {
 /** The outcome of a finished run, in the words every other place uses for it. */
 function RunResult({ summary: { headline, details, tone } }) {
   return (
-    <Banner tone={tone}>
+    // Not a live region: the announcer reads the outcome once as it happens, and an alert here was
+    // read again every time the Sort page was opened, as if the old result were news.
+    <Banner tone={tone} live={false}>
       <span className="block">{headline}</span>
       {details.map((detail) => (
         <span key={detail} className="mt-1 block">
@@ -47,9 +49,10 @@ function RunResult({ summary: { headline, details, tone } }) {
  * The current or last sort, however it was started. Follows the backend's run status, so a sort the
  * schedule started shows here with its progress and a Cancel button like any other.
  *
- * `lostContact` is set when the backend stopped answering.
+ * `lostContact` is set when the backend stopped answering. `focusRequested` moves focus to the
+ * card's heading, which scrolls it into view, and `onFocused` is then told.
  */
-export default function ProgressCard({ status, cancel, lostContact }) {
+export default function ProgressCard({ status, cancel, lostContact, focusRequested = false, onFocused }) {
   // Remembered with the run it belongs to: the card stays mounted between runs, and a failed Cancel
   // on one run says nothing about the next.
   const [cancelFailure, setCancelFailure] = useState(null);
@@ -61,10 +64,16 @@ export default function ProgressCard({ status, cancel, lostContact }) {
   const headingRef = useRef(null);
   const cancelFocus = useFocusFallback(!running, headingRef);
 
+  useEffect(() => {
+    if (!focusRequested) return;
+    headingRef.current?.focus();
+    onFocused?.();
+  }, [focusRequested, onFocused]);
+
   if (!status || status.state === 'idle') {
     return (
-      <Card title="Progress">
-        <p className="py-8 text-center text-sm text-fg-subtle">Progress will appear here once a sort starts.</p>
+      <Card title="Progress" titleRef={headingRef}>
+        <p className="py-8 text-center text-sm text-fg-subtle">Press Start sorting to begin. Progress will appear here.</p>
         {lostContact && <Banner tone="critical">{lostContact}</Banner>}
       </Card>
     );
@@ -127,7 +136,9 @@ export default function ProgressCard({ status, cancel, lostContact }) {
 
         {running && status.currentTitle && (
           <div className="rounded border border-line bg-raised p-3">
-            <p className="mb-1 text-2xs text-fg-subtle">Current book</p>
+            {/* Reported as each book finishes, so that is what it is: with Gentle, the book being
+                copied now can take minutes, and naming the finished one as current misled. */}
+            <p className="mb-1 text-2xs text-fg-subtle">Last finished</p>
             <p className="break-words text-sm text-fg-muted">{status.currentTitle}</p>
           </div>
         )}

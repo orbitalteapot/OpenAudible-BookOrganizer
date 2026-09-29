@@ -42,13 +42,16 @@ const BANNER_TONES = {
  * The tone colours the icon, border and tint; the text stays in the body colour. Status colours
  * clear 4.5:1 on the plain grounds but not on their own tint in light mode, and a message is
  * worth reading in full.
+ *
+ * A banner is announced when it appears. `live={false}` is for one that shows a stored state
+ * something else already announced: it would otherwise be read again whenever its page opens.
  */
-export function Banner({ tone = 'critical', children, className = '' }) {
+export function Banner({ tone = 'critical', live = true, children, className = '' }) {
   const { icon: Icon, frame, glyph } = BANNER_TONES[tone] ?? BANNER_TONES.critical;
 
   return (
     <div
-      role={tone === 'critical' ? 'alert' : 'status'}
+      role={live ? (tone === 'critical' ? 'alert' : 'status') : undefined}
       className={`flex items-start gap-2 rounded border px-3 py-2 text-sm text-fg ${frame} ${className}`}
     >
       <span className={`flex h-[1lh] shrink-0 items-center ${glyph}`}>

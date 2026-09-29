@@ -470,7 +470,7 @@ public class SortPlannerTests
     {
         // The first "Collected Works" is still in the export, but its file is gone from the source.
         using var workspace = new TempWorkspace();
-        workspace.WriteSourceFile("second.m4b");
+        workspace.WriteSourceFile("second.m4b", "second-book");
         workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "first-book");
         var secondLoose = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works (2).m4b"), "second-book");
 
@@ -485,6 +485,40 @@ public class SortPlannerTests
             Path.Combine(workspace.Destination, "An Author", "Collected Works (2)", "Collected Works.m4b"),
             planned[1].AudioDestination);
         Assert.Equal(secondLoose, planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_replays_the_plain_name_main_gave_when_an_earlier_book_of_the_same_title_was_never_downloaded()
+    {
+        // main gave a book with no file no name, so the downloaded second book got the plain one.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("second.m4b", "second-book");
+        var loose = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "second-book");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Collected Works", filename: "first"),
+            TempWorkspace.Book(title: "Collected Works", filename: "second"));
+
+        Assert.True(planned[0].IsMissingFromSource);
+        Assert.Equal(loose, planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_leaves_a_loose_file_in_place_when_it_could_be_a_missing_books_and_is_not_this_ones()
+    {
+        // The plain name is either the second book's (the first was never downloaded) or the first
+        // book's (it was, and has gone from the source since). The audio says which.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("second.m4b", "second-book");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "first-book");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Collected Works", filename: "first"),
+            TempWorkspace.Book(title: "Collected Works", filename: "second"));
+
+        Assert.Null(planned[1].AudioLegacyPath);
     }
 
     [Fact]

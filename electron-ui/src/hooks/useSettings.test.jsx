@@ -194,4 +194,37 @@ describe('useSettings', () => {
     await act(() => result.current.refresh());
     expect(result.current.error).toBe('Could not save the settings.');
   });
+
+  it('asks once for every refresh asked for while one waits its turn, so a save does not wait behind a pile', async () => {
+    const { result } = await renderLoaded();
+    const slow = deferred();
+    vi.mocked(getSettings).mockClear().mockReturnValueOnce(slow.promise).mockResolvedValue(settingsResponse());
+    vi.mocked(updateSettings).mockResolvedValue(settingsResponse({ copySpeed: 'gentle' }));
+
+    let inFlight;
+    act(() => {
+      inFlight = result.current.refresh();
+    });
+    await waitFor(() => expect(getSettings).toHaveBeenCalledTimes(1));
+
+    // Timer ticks, window focus and tab switches while the backend is stuck on an offline share.
+    let waiting;
+    act(() => {
+      waiting = [result.current.refresh(), result.current.refresh(), result.current.refresh()];
+    });
+    expect(waiting[1]).toBe(waiting[0]);
+    expect(waiting[2]).toBe(waiting[0]);
+
+    let saved;
+    act(() => {
+      saved = result.current.update({ copySpeed: 'gentle' });
+    });
+    await act(async () => {
+      slow.resolve(settingsResponse());
+      await Promise.all([inFlight, ...waiting, saved]);
+    });
+
+    expect(getSettings).toHaveBeenCalledTimes(2);
+    expect(result.current.settings.copySpeed).toBe('gentle');
+  });
 });

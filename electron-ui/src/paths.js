@@ -61,7 +61,7 @@ export function describePath({ field, status, kind, variable }, settings, error,
         text:
           kind === 'file'
             ? `${what} not found inside the container — check that the folder holding it is mapped to ${folderOf(settings[field])} and that ${variable} names the file`
-            : `${what} not found inside the container — check the volume mapping for ${variable}`,
+            : `${what} not found inside the container — check the volume mapping for ${variable}, or create the folder on the host if the mapping is right`,
       };
     }
     case 'notWritable':

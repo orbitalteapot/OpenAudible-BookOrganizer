@@ -16,6 +16,11 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     ContentRootPath = AppContext.BaseDirectory
 });
 
+// The framework logs six lines at Information for every request, and the page polls several times
+// a second during a sort: that buried the startup summary and the run results the README says to
+// read in "docker logs", and grew the log without end. Its warnings and errors still get through.
+builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
+
 // Read once, here. Everything else takes it from the container, so a test can swap in its own.
 var serverConfig = ServerConfig.FromEnvironment();
 

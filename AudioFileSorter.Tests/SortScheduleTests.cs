@@ -350,7 +350,7 @@ public class SortScheduleTests
     public void A_missing_mount_is_explained_in_container_terms_not_as_an_unplugged_drive()
     {
         using var workspace = new TempWorkspace();
-        var destination = Path.Combine(workspace.Root, "destination-not-mounted");
+        var destination = Path.Combine(workspace.Root, "destination-not-mounted", "Audiobooks");
         var config = new ServerConfig
         {
             CsvPath = workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"),
@@ -363,6 +363,26 @@ public class SortScheduleTests
 
         Assert.Equal(
             $"The destination folder {destination} was not found inside the container. Check the volume mapping for DESTINATION_PATH.",
+            scheduler.GetStatus().BlockedReason);
+    }
+
+    [Fact]
+    public void A_missing_subfolder_of_a_working_mount_is_not_blamed_on_the_mapping()
+    {
+        using var workspace = new TempWorkspace();
+        var destination = Path.Combine(workspace.Destination, "Audiobooks");
+        var config = new ServerConfig
+        {
+            CsvPath = workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"),
+            SourcePath = workspace.Source,
+            DestinationPath = destination,
+            ScheduleIntervalMinutes = 360
+        };
+        using var backend = new TestBackend(config);
+        using var scheduler = backend.CreateScheduler();
+
+        Assert.Equal(
+            $"The folder Audiobooks does not exist inside {workspace.Destination}. Create it on the host (in the folder mapped to {workspace.Destination}), then try again.",
             scheduler.GetStatus().BlockedReason);
     }
 
