@@ -25,7 +25,8 @@ public static class PathSanitizer
     private static readonly char[] PlatformInvalidChars = Path.GetInvalidFileNameChars();
     private static readonly HashSet<string> ReservedDeviceNames = BuildReservedDeviceNames();
 
-    private static readonly StringComparison PathComparison =
+    /// <summary>How this platform's file system compares names; the one rule every path comparison uses.</summary>
+    internal static readonly StringComparison PathComparison =
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;

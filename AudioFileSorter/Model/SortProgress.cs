@@ -12,6 +12,7 @@ namespace AudioFileSorter.Model;
 /// The problems recorded so far, oldest first, capped at <see cref="SortSummary.MaxReportedProblems"/>.
 /// Carried in every snapshot so a run that is cancelled part way still has them to show.
 /// </param>
+/// <param name="RecentProblems">The latest <see cref="RecentProblemLimit"/> problems, oldest first, for a page following the run.</param>
 /// <param name="ProblemCount">All problems recorded so far, which may be more than <paramref name="Problems"/> holds.</param>
 public sealed record SortProgressInfo(
     int TotalBooks,
@@ -19,8 +20,15 @@ public sealed record SortProgressInfo(
     string? CurrentTitle,
     SortCounts Counts,
     IReadOnlyList<SortProblem> Problems,
+    IReadOnlyList<SortProblem> RecentProblems,
     int ProblemCount)
 {
+    /// <summary>
+    /// Problems in <see cref="RecentProblems"/>. A page polls several times a second, and a run with an
+    /// unplugged source makes every book a problem, so only the latest few are sent while it runs.
+    /// </summary>
+    public const int RecentProblemLimit = 20;
+
     /// <summary>Share of the books finished, 0 to 100. An empty run is complete from the start.</summary>
     public double Percentage => TotalBooks <= 0
         ? 100

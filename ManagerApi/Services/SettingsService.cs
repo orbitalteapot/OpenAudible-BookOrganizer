@@ -19,13 +19,16 @@ public sealed class SettingsService
 
     private ScheduleState _schedule;
 
+    /// <summary>Why the last save failed, or null when it worked.</summary>
+    private string? _saveProblem;
+
     public SettingsService(ServerConfig config, SettingsStore store, TimeProvider time)
     {
         _config = config;
         _store = store;
         _time = time;
 
-        var state = store.Load(new AppSettings { ComparisonMode = config.DefaultComparisonMode });
+        var state = store.Load();
         _saved = state.Settings;
         _schedule = state.Schedule;
     }
@@ -36,8 +39,26 @@ public sealed class SettingsService
     public ServerConfig Config => _config;
 
     /// <summary>
+    /// Why the settings could not be saved last time, worded for the user, or null when they were.
+    /// Automatic runs record their history without anyone watching, so this is how a read-only or
+    /// full disk reaches the page.
+    /// </summary>
+    public string? SaveWarning
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _saveProblem is null
+                    ? null
+                    : $"The settings could not be saved, so changes will be forgotten when the app restarts: {_saveProblem}";
+            }
+        }
+    }
+
+    /// <summary>
     /// The settings in force: the saved ones, with the paths and the interval replaced by the
-    /// environment's wherever it sets them.
+    /// environment's wherever it sets them, and the environment's update check until one is picked.
     /// </summary>
     public AppSettings Effective
     {
@@ -71,7 +92,7 @@ public sealed class SettingsService
         var settings = Effective;
         return new SortOptions
         {
-            ComparisonMode = comparisonMode ?? settings.ComparisonMode,
+            ComparisonMode = comparisonMode ?? settings.ComparisonMode!.Value,
             MaxParallelism = SortOptions.ParallelismFor(settings.CopySpeed, _config.NormalParallelism),
             CreateDestination = createDestination
         };
@@ -88,26 +109,36 @@ public sealed class SettingsService
                 return false;
             }
 
-            if (Overlay(_saved).ScheduleIntervalMinutes is null && Overlay(next).ScheduleIntervalMinutes is not null)
+            var schedule = Overlay(_saved).ScheduleIntervalMinutes is null && Overlay(next).ScheduleIntervalMinutes is not null
+                ? _schedule with { EnabledAtUtc = _time.GetUtcNow().UtcDateTime }
+                : _schedule;
+
+            // Kept only once it is on disk: a change that is reported as saved but gone after a
+            // restart is worse than one that is refused with the reason.
+            if (!TrySave(next, schedule))
             {
-                _schedule = _schedule with { EnabledAtUtc = _time.GetUtcNow().UtcDateTime };
+                error = new SettingsError($"Could not save the settings: {_saveProblem}", null);
+                return false;
             }
 
             _saved = next;
-            Save();
+            _schedule = schedule;
         }
 
         Changed?.Invoke(this, EventArgs.Empty);
         return true;
     }
 
-    /// <summary>Records how an automatic run went.</summary>
+    /// <summary>
+    /// Records how an automatic run went. Kept in memory even when it cannot be saved, or the
+    /// schedule would run the same slot again; <see cref="SaveWarning"/> tells the user.
+    /// </summary>
     public void UpdateSchedule(Func<ScheduleState, ScheduleState> update)
     {
         lock (_lock)
         {
             _schedule = update(_schedule);
-            Save();
+            TrySave(_saved, _schedule);
         }
     }
 
@@ -141,10 +172,15 @@ public sealed class SettingsService
             }
         }
 
-        var comparisonMode = current.ComparisonMode;
-        if (patch.ComparisonMode is not null && !SortOptions.TryParseComparisonMode(patch.ComparisonMode, out comparisonMode))
+        var comparisonMode = _saved.ComparisonMode;
+        if (patch.ComparisonMode is not null)
         {
-            return new SettingsError($"Unknown update check \"{patch.ComparisonMode}\". Use \"quick\" or \"full\".", "comparisonMode");
+            if (!SortOptions.TryParseComparisonMode(patch.ComparisonMode, out var picked))
+            {
+                return new SettingsError($"Unknown update check \"{patch.ComparisonMode}\". Use \"quick\" or \"full\".", "comparisonMode");
+            }
+
+            comparisonMode = picked;
         }
 
         var copySpeed = current.CopySpeed;
@@ -227,12 +263,19 @@ public sealed class SettingsService
             };
         }
 
+        settings = settings with { ComparisonMode = saved.ComparisonMode ?? _config.DefaultComparisonMode };
+
         return _config.ScheduleLocked
             ? settings with { ScheduleIntervalMinutes = _config.ScheduleIntervalMinutes }
             : settings;
     }
 
-    private void Save() => _store.Save(new SavedState(_saved, _schedule));
+    private bool TrySave(AppSettings settings, ScheduleState schedule)
+    {
+        var saved = _store.TrySave(new SavedState(settings, schedule), out var problem);
+        _saveProblem = problem;
+        return saved;
+    }
 
     /// <summary>A path from a patch: null leaves it as it was, blank clears it.</summary>
     private static string? Cleared(string? requested, string? saved)

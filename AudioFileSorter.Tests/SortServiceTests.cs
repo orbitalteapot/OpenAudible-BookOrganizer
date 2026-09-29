@@ -115,23 +115,26 @@ public class SortServiceTests
     }
 
     [Fact]
-    public async Task While_running_only_the_latest_problems_are_sent_and_all_of_them_once_finished()
+    public async Task While_running_the_latest_problems_are_sent_and_the_capped_list_once_finished()
     {
         using var workspace = new TempWorkspace();
-        var rows = Enumerable.Range(0, 30).Select(i => $"Missing {i},Author,missing-{i}").ToArray();
+        var total = SortSummary.MaxReportedProblems + 20;
+        var rows = Enumerable.Range(0, total).Select(i => $"Missing {i},Author,missing-{i}").ToArray();
         using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv(rows));
 
         Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var run));
         var final = await run;
 
-        Assert.Equal(30, final.Problems.Count);
-        Assert.Equal(30, backend.Sort.GetStatus().Problems.Count);
+        Assert.Equal(SortSummary.MaxReportedProblems, final.Problems.Count);
+        Assert.Equal(SortSummary.MaxReportedProblems, backend.Sort.GetStatus().Problems.Count);
 
+        // Past the cap the kept list stops growing; a page following the run must still see the
+        // problems as they happen, not the same 20 from the 500th onwards.
         var running = final with { State = RunState.Running };
         var polled = running.ForPolling();
-        Assert.Equal(RunStatus.RunningProblemLimit, polled.Problems.Count);
-        Assert.Equal(final.Problems[^1], polled.Problems[^1]);
-        Assert.Equal(30, polled.ProblemCount);
+        Assert.Equal(SortProgressInfo.RecentProblemLimit, polled.Problems.Count);
+        Assert.All(polled.Problems, problem => Assert.DoesNotContain(problem, final.Problems));
+        Assert.Equal(total, polled.ProblemCount);
     }
 
     [Fact]

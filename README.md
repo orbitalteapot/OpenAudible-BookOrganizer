@@ -413,12 +413,13 @@ problems list for every run, and any ignored setting as a warning on the Automat
 | Symptom | Likely cause |
 | --- | --- |
 | Page does not load | Port `5123` is not published, or is taken on the host. |
-| A path says *"not found inside the container"* | The variable does not match where the volume is mounted. The startup log lists what the container sees. |
+| A path says *"not found inside the container"* | The volume for it is missing from `docker-compose.yml` or the `docker run` command, or the variable does not match where it is mounted. The startup log lists what the container sees. |
 | Everything is **Not found** | `SOURCE_PATH` is mounted somewhere other than where the books are. |
 | *"The destination folder cannot be the source folder or a folder inside it."* | Copying a folder into itself never terminates cleanly, so it is refused. Mount them separately. |
 | *"The destination folder does not exist. Is the drive connected?"* | The volume behind `DESTINATION_PATH` is not mounted, or the host folder is missing. Automatic sorts retry every 15 minutes until it is back. |
 | *"Cannot write to the destination folder"* | The container's user cannot write to the mounted folder. Check the host folder's permissions. |
 | A warning on the Automatic sorting card, such as ``SORT_INTERVAL="6x" was ignored`` | The value could not be read. Use something like `6h`, `12h` or `1d`, or `off`. |
+| A warning on the Automatic sorting card: *"The settings could not be saved…"* | The `./data` folder is mounted read-only, or its disk is full. The Sort page's choices and when automatic sorting last ran are forgotten on every restart until `settings.json` can be written. |
 | `docker pull` fails | Check the image name has no hyphen between "book" and "organizer", and that you are logged in to GHCR if the package is private. |
 
 The image is published to GitHub Packages, not attached to release assets:

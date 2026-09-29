@@ -1,3 +1,4 @@
+using System.Net;
 using AudioFileSorter.Model;
 
 namespace ManagerApi.Services;
@@ -43,6 +44,12 @@ public sealed record ServerConfig
     /// <summary>ASPNETCORE_URLS, or <see cref="DefaultBindUrl"/>.</summary>
     public string BindUrl { get; init; } = DefaultBindUrl;
 
+    /// <summary>
+    /// OABO_PARENT_PID: the desktop app that started this backend, which stops when that app is gone
+    /// (see <see cref="ParentProcessWatch"/>). Null for a backend nobody started, such as the container.
+    /// </summary>
+    public int? ParentProcessId { get; init; }
+
     /// <summary>Environment values that were ignored, worded for the person who set them.</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
 
@@ -57,6 +64,16 @@ public sealed record ServerConfig
     /// as does a value that could not be read — the warning says so rather than silently locking it.
     /// </summary>
     public bool ScheduleLocked => ScheduleIntervalMinutes is not null;
+
+    /// <summary>
+    /// Every address it listens on is this computer's own: the desktop app's backend. Only that one
+    /// can tell which Host names and origins are its own (see <see cref="LocalRequestGuard"/>); the
+    /// container is reached by whatever name the network gives it.
+    /// </summary>
+    public bool IsLoopbackOnly => BindUrl
+        .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .All(url => Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+                    (uri.IsLoopback || IPAddress.TryParse(uri.Host, out var address) && IPAddress.IsLoopback(address)));
 
     /// <summary>The variable that fixes <paramref name="field"/>, for messages that tell the user where to change it.</summary>
     public static string VariableFor(SortPathField field) => field switch
@@ -111,6 +128,7 @@ public sealed record ServerConfig
             ScheduleIntervalMinutes = intervalMinutes,
             SettingsPath = NullIfBlank(read("OABO_SETTINGS_PATH")),
             BindUrl = NullIfBlank(read("ASPNETCORE_URLS")) ?? DefaultBindUrl,
+            ParentProcessId = int.TryParse(read("OABO_PARENT_PID"), out var parentId) && parentId > 0 ? parentId : null,
             Warnings = warnings
         };
     }

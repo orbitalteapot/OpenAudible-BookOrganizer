@@ -52,6 +52,31 @@ describe('useSettings', () => {
     expect(result.current.error).toBeNull();
   });
 
+  it('drops an error about a folder once a refresh finds it, but not a refused pick of a new one', async () => {
+    const { result } = await renderLoaded();
+    const unplugged = settingsResponse({ pathStatus: { csv: 'ok', source: 'ok', destination: 'notFound' } });
+    vi.mocked(getSettings).mockResolvedValue(unplugged);
+    await act(() => result.current.refresh());
+
+    // Turning automatic sorting on is refused because of the destination...
+    vi.mocked(updateSettings).mockRejectedValueOnce(
+      new ApiError('The destination folder does not exist. Is the drive connected?', { status: 400, field: 'destinationPath' })
+    );
+    await act(() => result.current.update({ scheduleIntervalMinutes: 1440 }));
+    // ...and a new source folder is refused on its own account.
+    vi.mocked(updateSettings).mockRejectedValueOnce(
+      new ApiError('The source folder does not exist.', { status: 400, field: 'sourcePath' })
+    );
+    await act(() => result.current.update({ sourcePath: '/elsewhere' }));
+    expect(Object.keys(result.current.fieldErrors).sort()).toEqual(['destinationPath', 'sourcePath']);
+
+    // The drive is plugged back in.
+    vi.mocked(getSettings).mockResolvedValue(settingsResponse());
+    await act(() => result.current.refresh());
+
+    expect(result.current.fieldErrors).toEqual({ sourcePath: 'The source folder does not exist.' });
+  });
+
   it('sends one save at a time, in order, and shows what the backend saved', async () => {
     const { result } = await renderLoaded();
     const first = deferred();

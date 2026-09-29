@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AudioFileSorter;
 using AudioFileSorter.Model;
 
@@ -25,12 +26,6 @@ public enum RunTrigger
 /// </summary>
 public sealed record RunStatus
 {
-    /// <summary>
-    /// Problems sent while a run is going. The page polls several times a second, and a run with an
-    /// unplugged source makes every book a problem; the full list is sent once the run is finished.
-    /// </summary>
-    public const int RunningProblemLimit = 20;
-
     public static readonly RunStatus Idle = new();
 
     public RunState State { get; init; } = RunState.Idle;
@@ -43,6 +38,11 @@ public sealed record RunStatus
     public string? CurrentTitle { get; init; }
     public SortCounts Counts { get; init; } = SortCounts.Empty;
     public IReadOnlyList<SortProblem> Problems { get; init; } = [];
+
+    /// <summary>The latest problems, which is what a page following a run gets (see <see cref="ForPolling"/>).</summary>
+    [JsonIgnore]
+    public IReadOnlyList<SortProblem> RecentProblems { get; init; } = [];
+
     public int ProblemCount { get; init; }
     public bool IsCanceled { get; init; }
 
@@ -78,6 +78,7 @@ public sealed record RunStatus
             CurrentTitle = progress.CurrentTitle,
             Counts = progress.Counts,
             Problems = progress.Problems,
+            RecentProblems = progress.RecentProblems,
             ProblemCount = progress.ProblemCount
         };
     }
@@ -118,12 +119,13 @@ public sealed record RunStatus
         };
     }
 
-    /// <summary>This status as sent to a page that polls it: only the latest problems while the run is going.</summary>
+    /// <summary>
+    /// This status as sent to a page that polls it: only the latest problems while the run is going
+    /// (the capped <see cref="Problems"/> stop at the oldest 500), and all of them once it is finished.
+    /// </summary>
     public RunStatus ForPolling()
     {
-        return State == RunState.Running && Problems.Count > RunningProblemLimit
-            ? this with { Problems = Problems.Skip(Problems.Count - RunningProblemLimit).ToArray() }
-            : this;
+        return State == RunState.Running ? this with { Problems = RecentProblems } : this;
     }
 }
 

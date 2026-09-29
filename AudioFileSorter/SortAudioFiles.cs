@@ -49,7 +49,7 @@ public class FileSorter
             throw new SortPathException(pathProblem);
         }
 
-        var planned = new SortPlanner().Plan(books, source, Path.GetFullPath(destination));
+        var planned = new SortPlanner().Plan(books, source, Path.GetFullPath(destination), cancellationToken);
         var tally = new RunTally(books.Count, progress);
 
         foreach (var item in planned.Where(item => item.HasWork && item.Warning is not null))
@@ -443,6 +443,10 @@ public class FileSorter
 
         // Immutable, so every snapshot can share it instead of copying up to 500 problems per book.
         private ImmutableList<SortProblem> _problems = [];
+
+        // Kept apart from the capped list above, which stops at the oldest 500: a page following
+        // the run wants the latest ones.
+        private ImmutableList<SortProblem> _recentProblems = [];
         private int _problemCount;
         private SortCounts _counts = SortCounts.Empty;
 
@@ -492,11 +496,16 @@ public class FileSorter
             {
                 _problems = _problems.Add(problem);
             }
+
+            _recentProblems = _recentProblems.Count < SortProgressInfo.RecentProblemLimit
+                ? _recentProblems.Add(problem)
+                : _recentProblems.RemoveAt(0).Add(problem);
         }
 
         private SortProgressInfo Snapshot(string? currentTitle)
         {
-            return new SortProgressInfo(totalBooks, _counts.Total, currentTitle, _counts, _problems, _problemCount);
+            return new SortProgressInfo(
+                totalBooks, _counts.Total, currentTitle, _counts, _problems, _recentProblems, _problemCount);
         }
 
         private static SortCounts Add(SortCounts counts, BookOutcome outcome)

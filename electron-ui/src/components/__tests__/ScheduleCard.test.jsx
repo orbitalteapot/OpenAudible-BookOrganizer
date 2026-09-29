@@ -33,7 +33,7 @@ describe('ScheduleCard', () => {
 
     expect(screen.getByText("Every 2 hours. Set by the server's SORT_INTERVAL setting.")).toBeTruthy();
     expect(radio('Every 2 hours').getAttribute('aria-checked')).toBe('true');
-    expect(radio('Daily').disabled).toBe(true);
+    expect(radio('Daily').getAttribute('aria-disabled')).toBe('true');
     expect(screen.getByText(/in 1 hour/)).toBeTruthy();
   });
 
@@ -55,7 +55,9 @@ describe('ScheduleCard', () => {
   it('cannot be turned on until the paths are set, and says what is missing', () => {
     render(<Harness initial={scheduleResponse()} settings={settingsResponse({ csvPath: null })} isElectron />);
 
-    expect(radio('Daily').disabled).toBe(true);
+    expect(radio('Daily').getAttribute('aria-disabled')).toBe('true');
+    fireEvent.click(radio('Daily'));
+    expect(radio('Off').getAttribute('aria-checked')).toBe('true');
     expect(screen.getByText('Choose the CSV export first.')).toBeTruthy();
   });
 
@@ -106,7 +108,8 @@ describe('ScheduleCard', () => {
     );
 
     expect(screen.getByText(/^today at .* — Sort complete: 3 new, 120 up to date\.$/)).toBeTruthy();
-    expect(screen.getByText(/^today at .* \(in 3 hours\)$/)).toBeTruthy();
+    // "tomorrow" late in the evening.
+    expect(screen.getByText(/^(today|tomorrow) at .* \(in 3 hours\)$/)).toBeTruthy();
   });
 
   it('says when a failed run is retried, and why it failed', () => {
@@ -134,6 +137,47 @@ describe('ScheduleCard', () => {
       screen.getByText(/— last attempt failed: The destination folder does not exist\. Is the drive connected\?$/)
     ).toBeTruthy();
     expect(screen.queryByText('Last sort')).toBeNull();
+  });
+
+  it('lets the arrow keys look through the choices without turning automatic sorting on', async () => {
+    const changes = [];
+    render(
+      <Harness
+        initial={scheduleResponse()}
+        afterChange={(minutes) => {
+          changes.push(minutes);
+          return scheduleResponse({ intervalMinutes: minutes, nextRunUtc: new Date().toISOString() });
+        }}
+      />
+    );
+
+    radio('Off').focus();
+    fireEvent.keyDown(radio('Off'), { key: 'ArrowRight' });
+    fireEvent.keyDown(radio('6 hours'), { key: 'ArrowRight' });
+
+    expect(document.activeElement).toBe(radio('12 hours'));
+    expect(radio('Off').getAttribute('aria-checked')).toBe('true');
+    expect(changes).toEqual([]);
+
+    // Space or Enter on a button is a click: that is the choice.
+    fireEvent.click(document.activeElement);
+    await waitFor(() => expect(changes).toEqual([720]));
+  });
+
+  it('keeps focus on a busy choice instead of disabling it', () => {
+    render(
+      <ScheduleCard
+        scheduleState={{ schedule: scheduleResponse({ intervalMinutes: 1440 }), error: null, saving: true, changeInterval: vi.fn() }}
+        settingsState={{ settings: settingsResponse(), update: vi.fn(), saving: true }}
+        runStatus={idleStatus()}
+        isElectron
+      />
+    );
+
+    // A disabled button drops focus to the page; these only say they are busy.
+    expect(radio('Daily').disabled).toBe(false);
+    expect(radio('Daily').getAttribute('aria-disabled')).toBe('true');
+    expect(screen.getByRole('switch', { name: 'Start when I sign in' }).disabled).toBe(false);
   });
 
   it('offers the background switches on the desktop while a schedule is on', async () => {

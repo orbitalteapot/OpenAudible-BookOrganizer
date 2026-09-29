@@ -17,6 +17,9 @@ const VARIANTS = {
  * reason instead of finding the control silently missing from the tab order. When the page already
  * shows the reason, pass that element's id as `reasonId` and the button points at it instead of
  * carrying a hidden copy of its own.
+ *
+ * `loading` refuses clicks the same way, and marks the button busy: it keeps focus while its action
+ * runs, rather than dropping it back to the top of the page the moment Enter is pressed.
  */
 const Button = forwardRef(function Button(
   {
@@ -38,6 +41,7 @@ const Button = forwardRef(function Button(
   const ownReasonId = useId();
   const iconOnly = !children;
   const blocked = Boolean(disabledReason);
+  const inactive = blocked || loading;
   const reasonId = shownReasonId ?? ownReasonId;
 
   return (
@@ -45,11 +49,12 @@ const Button = forwardRef(function Button(
       <button
         ref={ref}
         type={type}
-        disabled={disabled || loading}
-        aria-disabled={blocked || undefined}
+        disabled={disabled}
+        aria-disabled={inactive || undefined}
+        aria-busy={loading || undefined}
         aria-describedby={[blocked && reasonId, describedBy].filter(Boolean).join(' ') || undefined}
         title={disabledReason}
-        onClick={blocked ? undefined : onClick}
+        onClick={inactive ? undefined : onClick}
         className={[
           'inline-flex h-control shrink-0 items-center justify-center gap-2 rounded',
           'text-sm transition-colors duration-150',

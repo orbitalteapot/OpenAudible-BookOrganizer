@@ -303,6 +303,51 @@ public class SortPlannerTests
         Assert.Equal(loose, planned[1].AudioLegacyPath);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void A_later_run_keeps_a_series_and_a_book_that_differs_only_by_the_in_their_own_folders(bool seriesFolderFirst)
+    {
+        // The disk's listing order follows creation order on some file systems and the alphabet
+        // on others, so both orders are tried.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("witcher.m4b");
+        workspace.WriteSourceFile("blood-of-elves.m4b");
+        var seriesFile = Path.Combine("An Author", "The Witcher", "Book 1", "Blood of Elves.m4b");
+        var bookFile = Path.Combine("An Author", "Witcher", "Witcher.m4b");
+        foreach (var file in seriesFolderFirst ? new[] { seriesFile, bookFile } : [bookFile, seriesFile])
+        {
+            workspace.WriteDestinationFile(file, "audio");
+        }
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Blood of Elves", filename: "blood-of-elves", seriesName: "The Witcher", seriesSequence: "1"),
+            TempWorkspace.Book(title: "Witcher", filename: "witcher"));
+
+        Assert.Equal(Path.Combine(workspace.Destination, seriesFile), planned[0].AudioDestination);
+        Assert.Equal(Path.Combine(workspace.Destination, bookFile), planned[1].AudioDestination);
+    }
+
+    [Fact]
+    public void A_new_series_does_not_take_over_the_folder_of_a_book_named_like_it()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("witcher.m4b");
+        workspace.WriteSourceFile("blood-of-elves.m4b");
+        var bookFile = workspace.WriteDestinationFile(Path.Combine("An Author", "Witcher", "Witcher.m4b"), "audio");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Blood of Elves", filename: "blood-of-elves", seriesName: "The Witcher", seriesSequence: "1"),
+            TempWorkspace.Book(title: "Witcher", filename: "witcher"));
+
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "The Witcher", "Book 1", "Blood of Elves.m4b"),
+            planned[0].AudioDestination);
+        Assert.Equal(bookFile, planned[1].AudioDestination);
+    }
+
     [Fact]
     public void Upgrade_replays_the_old_numbering_independently_of_the_new_folders()
     {
@@ -533,6 +578,18 @@ public class SortPlannerTests
         Assert.Equal(
             first.Select(p => p.AudioDestination),
             second.Select(p => p.AudioDestination));
+    }
+
+    [Fact]
+    public void Plan_stops_when_the_run_is_canceled()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b");
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+
+        Assert.Throws<OperationCanceledException>(() => new SortPlanner().Plan(
+            [TempWorkspace.Book()], workspace.Source, workspace.Destination, canceled.Token));
     }
 
     private static List<PlannedCopy> Plan(TempWorkspace workspace, params OpenAudible[] books)

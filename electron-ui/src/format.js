@@ -1,3 +1,5 @@
+import { isDesktop } from './mode';
+
 // OpenAudible writes a book's length in one of two shapes depending on version and export
 // settings: a clock value, "18:22:00", or prose, "12 hrs and 34 mins". Both are understood, and
 // anything else is passed through untouched rather than being dropped.
@@ -143,6 +145,22 @@ function booksProcessed(counts) {
   return RUN_COUNTS.reduce((sum, { key }) => sum + countOf(counts, key), 0);
 }
 
+/**
+ * Not one book of the export was in the source folder. Undownloaded books do not explain that; a
+ * source folder that is the wrong one (or, in a container, not mapped) does.
+ */
+function noneFound(counts) {
+  const processed = booksProcessed(counts);
+  return processed > 0 && countOf(counts, 'notFound') === processed;
+}
+
+/** Where to look when no book was found, in terms of where the source folder is set. */
+function sourceFolderAdvice() {
+  return isDesktop()
+    ? 'Check that the source folder is the one OpenAudible downloads your books into.'
+    : 'Check that the source folder is the one OpenAudible downloads your books into, and that SOURCE_PATH is mapped to it.';
+}
+
 /** What the user may want to act on or be told about, whichever way the run ended. */
 function outcomeNotes(counts) {
   const moved = countOf(counts, 'moved');
@@ -151,9 +169,11 @@ function outcomeNotes(counts) {
 
   return [
     moved > 0 &&
-      `${pluralBooks(moved)} from an older layout ${moved === 1 ? 'was' : 'were'} moved into ${moved === 1 ? 'its own folder' : 'their own folders'}.`,
+      `${pluralBooks(moved)} that an older version left in the destination folder ${moved === 1 ? 'was' : 'were'} moved into ${moved === 1 ? 'its own folder' : 'their own folders'} there.`,
     notFound > 0 &&
-      `${pluralBooks(notFound)} in the export ${notFound === 1 ? 'has' : 'have'} no file in the source folder. These are usually books that have not been downloaded yet.`,
+      (noneFound(counts)
+        ? `None of the books in the export were found in the source folder. ${sourceFolderAdvice()}`
+        : `${pluralBooks(notFound)} in the export ${notFound === 1 ? 'has' : 'have'} no file in the source folder. These are usually books that have not been downloaded yet.`),
     failed > 0 && `${pluralBooks(failed)} could not be copied. The problems list says why.`,
   ].filter(Boolean);
 }
@@ -185,9 +205,13 @@ export function summariseRun(run) {
     return { headline: `Sort failed: ${run.error}`, details: [...soFar, ...notes], tone: 'critical' };
   }
 
-  const tone = countOf(counts, 'failed') > 0 ? 'critical' : run?.problemCount > 0 ? 'caution' : 'positive';
-  const headline =
-    processed > 0 ? `Sort complete: ${describeCounts(counts)}.` : 'Sort complete: the export lists no books.';
+  const tone =
+    countOf(counts, 'failed') > 0 || noneFound(counts) ? 'critical' : run?.problemCount > 0 ? 'caution' : 'positive';
+  const headline = noneFound(counts)
+    ? `Sort complete, but no book was found in the source folder (${pluralBooks(processed)} in the export).`
+    : processed > 0
+      ? `Sort complete: ${describeCounts(counts)}.`
+      : 'Sort complete: the export lists no books.';
 
   return { headline, details: notes, tone };
 }

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { cancelSort, getRunStatus, startSort } from '../api';
+import { unreachableMessage } from '../mode';
 
 // Fast enough for a progress bar to move smoothly while a sort runs; slow enough otherwise that
 // watching for a run the schedule starts costs next to nothing.
@@ -50,7 +51,7 @@ export default function useRunStatus() {
       } catch (err) {
         if (!active || id !== latest) return;
         failures += 1;
-        if (failures >= FAILURES_BEFORE_ERROR) setError(`Lost contact with the backend: ${err.message}`);
+        if (failures >= FAILURES_BEFORE_ERROR) setError(unreachableMessage());
       }
       timer = setTimeout(poll, running ? RUNNING_POLL_MS : IDLE_POLL_MS);
     };
@@ -89,5 +90,13 @@ export default function useRunStatus() {
     }
   }, []);
 
-  return useMemo(() => ({ status, start, cancel, starting, error }), [status, start, cancel, starting, error]);
+  // Without contact, the last report of a running sort says nothing about now: the backend may have
+  // died with it. Showing it would keep "Sorting… 42%" up and every control disabled for a run that
+  // is no longer happening.
+  const shown = error && isRunning(status) ? null : status;
+
+  return useMemo(
+    () => ({ status: shown, start, cancel, starting, error }),
+    [shown, start, cancel, starting, error]
+  );
 }

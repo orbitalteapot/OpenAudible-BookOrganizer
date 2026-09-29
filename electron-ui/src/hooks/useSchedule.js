@@ -1,22 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getSchedule } from '../api';
 
-// Keeps "Next sort: in 3 hours" and a retry after a failed run current without a page reload.
-export const SCHEDULE_REFRESH_MS = 30_000;
-
 /**
  * Automatic sorting: when the next sort is due and how the last one went.
  *
  * Its timing is a setting like any other, so it is changed through `useSettings`. Every settings
- * response (a save, or a refresh after a run) and every finished run moves the next sort, so the
- * schedule is asked for again whenever `settings` or `runFinishedUtc` changes, and every 30 seconds.
+ * response (a save, or one of the app's regular refreshes) and every finished run moves the next
+ * sort, so the schedule is asked for again whenever `settings` or `runFinishedUtc` changes. That
+ * also keeps "Next sort: in 3 hours" and a retry after a failed run current without a page reload.
  *
  * `schedule` stays null until the backend has answered, which hides the card rather than showing
  * it empty.
+ *
+ * `error` says why the last change was refused. A refusal about a path ("The destination folder
+ * does not exist") is the one `fieldErrors` holds for that path, shown until that one goes: a
+ * different path is picked, or the folder turns up.
  */
-export default function useSchedule({ settings, update, runFinishedUtc }) {
+export default function useSchedule({ settings, update, fieldErrors, runFinishedUtc }) {
   const [schedule, setSchedule] = useState(null);
-  const [error, setError] = useState(null);
+  const [refusal, setRefusal] = useState(null);
   const [saving, setSaving] = useState(false);
   const latest = useRef(0);
 
@@ -36,11 +38,6 @@ export default function useSchedule({ settings, update, runFinishedUtc }) {
     refresh();
   }, [refresh, settings, runFinishedUtc]);
 
-  useEffect(() => {
-    const timer = setInterval(refresh, SCHEDULE_REFRESH_MS);
-    return () => clearInterval(timer);
-  }, [refresh]);
-
   /**
    * Sorts every `minutes`, or turns automatic sorting off with null. Turning it off also turns off
    * running in the background and starting at sign-in: those only exist to keep the schedule going,
@@ -50,7 +47,7 @@ export default function useSchedule({ settings, update, runFinishedUtc }) {
   const changeInterval = useCallback(
     async (minutes) => {
       setSaving(true);
-      setError(null);
+      setRefusal(null);
       const patch =
         minutes === null
           ? { scheduleIntervalMinutes: null, keepRunningInBackground: false, openAtLogin: false }
@@ -58,11 +55,13 @@ export default function useSchedule({ settings, update, runFinishedUtc }) {
 
       const refused = await update(patch);
       setSaving(false);
-      if (refused) setError(refused.message);
+      if (refused) setRefusal({ field: refused.field, message: refused.message });
       return !refused;
     },
     [update]
   );
+
+  const error = refusal?.field ? (fieldErrors?.[refusal.field] ?? null) : (refusal?.message ?? null);
 
   return useMemo(
     () => ({ schedule, error, saving, changeInterval }),

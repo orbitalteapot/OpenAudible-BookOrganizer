@@ -1,32 +1,12 @@
 import { FileSpreadsheet, FolderOpen, FolderOutput } from 'lucide-react';
 import { chooseCsvFile, chooseFolder } from '../../desktop';
-import { PATH_FIELDS } from '../../paths';
+import { describePath, PATH_FIELDS } from '../../paths';
 import Button from '../ui/Button';
 import { Field, PathInput } from '../ui/Field';
 import StatusDot from '../ui/StatusDot';
 import { Card } from '../ui/Surface';
 
 const ICONS = { csvPath: FileSpreadsheet, sourcePath: FolderOpen, destinationPath: FolderOutput };
-
-/**
- * One path's status line: the last error the backend gave for it, otherwise what the backend sees
- * there now. In the browser the paths come from the container, so that is where it says to look.
- */
-function describePath({ kind, variable }, status, error, isElectron) {
-  if (error) return { tone: 'critical', text: error };
-
-  const where = isElectron ? '' : ' inside the container — check the volume mapping';
-  switch (status) {
-    case 'ok':
-      return { tone: 'positive', text: 'Found' };
-    case 'notFound':
-      return { tone: 'critical', text: `${kind === 'file' ? 'File' : 'Folder'} not found${where}` };
-    case 'notWritable':
-      return { tone: 'critical', text: "Can't write to this folder" };
-    default:
-      return { tone: 'neutral', text: isElectron ? 'Not set' : `Not set — set ${variable} in the container` };
-  }
-}
 
 /** Why a path cannot be changed right now, or null when it can. */
 function browseBlockedReason({ variable }, locked, runActive) {
@@ -54,11 +34,16 @@ export default function FoldersCard({ settings, update, errors, runActive, isEle
     <Card title="Folders">
       <div className="space-y-4">
         {PATH_FIELDS.map((path) => {
-          const status = describePath(path, settings.pathStatus?.[path.status], errors[path.field], isElectron);
+          const status = describePath(path, settings, errors[path.field], isElectron);
           const blocked = browseBlockedReason(path, settings.locks?.paths, runActive);
 
           return (
-            <Field key={path.field} label={path.label} hint={<StatusDot tone={status.tone}>{status.text}</StatusDot>}>
+            <Field
+              key={path.field}
+              label={path.label}
+              description={path.description}
+              hint={<StatusDot tone={status.tone}>{status.text}</StatusDot>}
+            >
               {(id, hintId) => (
                 <div className="flex gap-2">
                   <PathInput

@@ -8,13 +8,16 @@ import RunAnnouncer from './components/RunAnnouncer';
 import { Banner, EmptyState } from './components/ui/Surface';
 import { useIsElectron, useLibrary, useRunStatus, useSchedule, useSettings, useTheme } from './hooks';
 
+// How often the folder statuses (and with them the schedule) are asked for again.
+const STATUS_REFRESH_MS = 30_000;
+
 /** Shown until the backend has answered with the settings, which every page is built from. */
 function Starting({ error }) {
   return (
     <EmptyState
       icon={Headphones}
       title="Starting the organizer…"
-      description={error ? 'The backend is not answering yet. Still trying.' : undefined}
+      description={error ? 'The organizer is not answering yet. Still trying.' : undefined}
     >
       {error && <Banner tone="critical">{error}</Banner>}
     </EmptyState>
@@ -30,7 +33,12 @@ export default function App() {
   const { settings, refresh: refreshSettings } = settingsState;
   const run = useRunStatus();
   const runFinishedUtc = run.status?.state === 'finished' ? run.status.finishedUtc : null;
-  const scheduleState = useSchedule({ settings, update: settingsState.update, runFinishedUtc });
+  const scheduleState = useSchedule({
+    settings,
+    update: settingsState.update,
+    fieldErrors: settingsState.fieldErrors,
+    runFinishedUtc,
+  });
   const library = useLibrary(settings?.csvPath);
 
   // A run can create the destination, and whatever it found out about the folders is worth
@@ -38,6 +46,24 @@ export default function App() {
   useEffect(() => {
     if (runFinishedUtc) refreshSettings();
   }, [runFinishedUtc, refreshSettings]);
+
+  // Folders also come and go on their own: a drive is plugged in or pulled out, a container's volume
+  // comes back. So the statuses are asked for again every 30 seconds and whenever the window comes
+  // back into view. The schedule follows every settings answer (see useSchedule), so the Folders
+  // card and the schedule card are always describing the same moment.
+  useEffect(() => {
+    const refreshIfVisible = () => {
+      if (document.visibilityState === 'visible') refreshSettings();
+    };
+    const timer = setInterval(refreshSettings, STATUS_REFRESH_MS);
+    window.addEventListener('focus', refreshSettings);
+    document.addEventListener('visibilitychange', refreshIfVisible);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('focus', refreshSettings);
+      document.removeEventListener('visibilitychange', refreshIfVisible);
+    };
+  }, [refreshSettings]);
 
   // Electron owns the tray and the login item, so it is told whenever the backend confirms a change.
   const settingsLoaded = settings !== null;

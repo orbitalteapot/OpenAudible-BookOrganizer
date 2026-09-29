@@ -16,15 +16,20 @@ import { Banner } from '../ui/Surface';
 export default function StartSort({ settings, run, isElectron, error, onError, onRefused }) {
   const [confirmCreate, setConfirmCreate] = useState(false);
   const createRef = useRef(null);
+  const startRef = useRef(null);
+  const wasConfirming = useRef(false);
   const reasonId = useId();
 
   const active = isRunning(run.status);
   const reason = active ? 'A sort is already running.' : pathsBlockedReason(settings, isElectron);
 
   // Move to the question, so keyboard and screen-reader users are not left on a button that
-  // appears to have done nothing.
+  // appears to have done nothing; and back to Start sorting once it is answered, since the
+  // question's buttons disappear with it and would drop focus to the top of the page.
   useEffect(() => {
     if (confirmCreate) createRef.current?.focus();
+    else if (wasConfirming.current) startRef.current?.focus();
+    wasConfirming.current = confirmCreate;
   }, [confirmCreate]);
 
   const begin = async (createDestination) => {
@@ -55,6 +60,7 @@ export default function StartSort({ settings, run, isElectron, error, onError, o
         </div>
       ) : (
         <Button
+          ref={startRef}
           variant="primary"
           icon={Play}
           className="w-full"

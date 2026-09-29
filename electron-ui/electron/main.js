@@ -9,13 +9,16 @@ const {
   nativeImage,
   nativeTheme,
   powerMonitor,
+  shell,
 } = require('electron');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const fs = require('fs');
 const backend = require('./backend');
 const { HIDDEN_ARG, launchedAtLogin, setOpenAtLogin } = require('./login-item');
 
 const APP_NAME = 'OpenAudible Book Organizer';
+const DEV_SERVER_URL = 'http://localhost:5173';
 const THEMES = new Set(['system', 'light', 'dark']);
 // The page's canvas colour in each theme, so the window never flashes the wrong one before it paints.
 const WINDOW_BACKGROUND = { dark: '#0c0e11', light: '#f7f8fa' };
@@ -80,11 +83,8 @@ function createWindow({ reveal }) {
     },
   });
 
-  if (isDev()) {
-    mainWindow.loadURL('http://localhost:5173');
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
-  }
+  mainWindow.loadURL(appUrl());
+  keepWindowOnTheApp(mainWindow.webContents);
 
   if (reveal) mainWindow.once('ready-to-show', () => mainWindow?.show());
   mainWindow.on('close', onWindowClose);
@@ -106,6 +106,37 @@ function createWindow({ reveal }) {
   };
   mainWindow.on('maximize', publishMaximized);
   mainWindow.on('unmaximize', publishMaximized);
+}
+
+/**
+ * The window only ever shows the app. A file dropped on it would otherwise replace the app with that
+ * file (and the frameless window has no way back), and any page loaded there would get the preload
+ * API: the file dialogs and the sign-in setting. Web links open in the browser instead.
+ */
+function keepWindowOnTheApp(webContents) {
+  webContents.on('will-navigate', (event, url) => {
+    if (!isAppPage(url)) event.preventDefault();
+  });
+  webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
+    return { action: 'deny' };
+  });
+}
+
+/** The page the window shows: the Vite dev server in development, the built page otherwise. */
+function appUrl() {
+  return isDev() ? DEV_SERVER_URL : pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
+}
+
+/** `url` is the app's own page, reloaded or with a different #fragment. */
+function isAppPage(url) {
+  try {
+    const page = new URL(appUrl());
+    const target = new URL(url);
+    return target.protocol === page.protocol && target.host === page.host && target.pathname === page.pathname;
+  } catch {
+    return false;
+  }
 }
 
 function showWindow() {

@@ -28,13 +28,13 @@ public sealed record SettingsResponse(
             settings.CsvPath,
             settings.SourcePath,
             settings.DestinationPath,
-            SortOptions.ToWireValue(settings.ComparisonMode),
+            SortOptions.ToWireValue(settings.ComparisonMode!.Value),
             SortOptions.ToWireValue(settings.CopySpeed),
             settings.ScheduleIntervalMinutes,
             settings.KeepRunningInBackground,
             settings.OpenAtLogin,
             new SettingsLocks(config.PathsLocked, config.ScheduleLocked),
             PathStatus.For(settings),
-            config.Warnings);
+            service.SaveWarning is { } saveWarning ? [.. config.Warnings, saveWarning] : config.Warnings);
     }
 }

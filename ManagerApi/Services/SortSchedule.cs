@@ -27,8 +27,7 @@ public static partial class SortSchedule
     /// run started. After a failure, <see cref="RetryDelay"/> after it, but never later than the
     /// interval would have been.
     ///
-    /// A time in the future can only come from a clock that has since been set back; taken at
-    /// face value it would hold the schedule off until then, so it counts as now.
+    /// A time in the future counts as now (see <see cref="ClampToNow"/>).
     /// </summary>
     public static DateTime? NextRunUtc(int? intervalMinutes, ScheduleState state, DateTime nowUtc)
     {
@@ -37,15 +36,14 @@ public static partial class SortSchedule
             return null;
         }
 
-        var lastAttempt = NotAfter(state.LastAttemptUtc, nowUtc);
-        var enabled = NotAfter(state.EnabledAtUtc, nowUtc);
-        if (lastAttempt is null || lastAttempt < enabled)
+        state = ClampToNow(state, nowUtc);
+        var lastAttempt = state.LastAttemptUtc;
+        if (lastAttempt is null || lastAttempt < state.EnabledAtUtc)
         {
             return nowUtc;
         }
 
-        var lastSuccess = NotAfter(state.LastSuccessUtc, nowUtc);
-        var normalDue = (lastSuccess ?? lastAttempt.Value).AddMinutes(intervalMinutes.Value);
+        var normalDue = (state.LastSuccessUtc ?? lastAttempt.Value).AddMinutes(intervalMinutes.Value);
         if (!LastAttemptFailed(state))
         {
             return normalDue;
@@ -53,6 +51,25 @@ public static partial class SortSchedule
 
         var retryDue = lastAttempt.Value + RetryDelay;
         return retryDue < normalDue ? retryDue : normalDue;
+    }
+
+    /// <summary>
+    /// <paramref name="state"/> with every time later than <paramref name="nowUtc"/> brought back to it.
+    ///
+    /// A time in the future can only come from a clock that has since been set back. Taken at face
+    /// value it would hold the schedule off until then. Counted as "now" afresh on every look it is
+    /// no better: the due time slides along with the clock, and an EnabledAtUtc that stays ahead of
+    /// every run starts one sort after another. So the scheduler saves the clamped times once, and
+    /// the next run is worked out from a fixed point.
+    /// </summary>
+    public static ScheduleState ClampToNow(ScheduleState state, DateTime nowUtc)
+    {
+        return state with
+        {
+            EnabledAtUtc = NotAfter(state.EnabledAtUtc, nowUtc),
+            LastAttemptUtc = NotAfter(state.LastAttemptUtc, nowUtc),
+            LastSuccessUtc = NotAfter(state.LastSuccessUtc, nowUtc)
+        };
     }
 
     /// <summary>The last automatic attempt did not sort the library, so the next one is a retry.</summary>

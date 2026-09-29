@@ -132,6 +132,8 @@ export default function ScheduleCard({ scheduleState, settingsState, runStatus, 
               options={intervalOptions(schedule.intervalMinutes)}
               describedBy={hintId}
               disabled={saving || schedule.locked || Boolean(blocked)}
+              // Choosing starts a sort, so looking through the options with the arrows must not.
+              manualActivation
               onChange={select}
             />
           )}

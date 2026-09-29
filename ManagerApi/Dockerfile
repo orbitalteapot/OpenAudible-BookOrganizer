@@ -34,6 +34,10 @@ ENV ASPNETCORE_URLS=http://0.0.0.0:5123
 ENV OABO_SETTINGS_PATH=/data/settings.json
 EXPOSE 5123
 
-VOLUME ["/data", "/source", "/destination"]
+# Only /data. Declaring /source and /destination as volumes would make Docker put an empty, hidden
+# volume there whenever a mount is forgotten or mistyped: the folder would show as Found and a
+# whole library could be copied where nobody can see it, and lost with the container. Left
+# undeclared, a missing mount shows as "not found inside the container".
+VOLUME ["/data"]
 
 ENTRYPOINT ["dotnet", "ManagerApi.dll"]

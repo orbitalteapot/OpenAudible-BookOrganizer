@@ -7,6 +7,9 @@ import { useId } from 'react';
  *
  * The button is larger than the track it draws, so the hit target is 32px tall; the negative
  * margin keeps the track centred on the label's first line all the same.
+ *
+ * `disabled` refuses changes without the disabled attribute, so the switch keeps keyboard focus while
+ * a change is being saved instead of dropping it back to the top of the page.
  */
 export default function Switch({ label, description, checked, onChange, disabled = false }) {
   const id = useId();
@@ -32,9 +35,11 @@ export default function Switch({ label, description, checked, onChange, disabled
         aria-checked={checked}
         aria-labelledby={labelId}
         aria-describedby={descriptionId}
-        disabled={disabled}
-        onClick={() => onChange(!checked)}
-        className="-my-1.5 inline-flex h-8 w-11 shrink-0 items-center justify-center rounded disabled:cursor-not-allowed disabled:opacity-45"
+        aria-disabled={disabled || undefined}
+        onClick={() => {
+          if (!disabled) onChange(!checked);
+        }}
+        className="-my-1.5 inline-flex h-8 w-11 shrink-0 items-center justify-center rounded aria-disabled:cursor-not-allowed aria-disabled:opacity-45"
       >
         <span
           aria-hidden="true"

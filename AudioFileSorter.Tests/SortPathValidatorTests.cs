@@ -85,6 +85,18 @@ public class SortPathValidatorTests
     }
 
     [Fact]
+    public void A_destination_anywhere_on_a_source_that_is_a_whole_drive_is_refused()
+    {
+        // "/" or "C:\" keeps its separator when trimmed, which a plain prefix test got wrong.
+        using var workspace = new TempWorkspace();
+        var driveRoot = Path.GetPathRoot(workspace.Destination)!;
+
+        AssertProblem(
+            SortPathField.Destination, SortPathProblemCode.DestinationInsideSource,
+            SortPathValidator.Validate(null, driveRoot, workspace.Destination, createDestination: false));
+    }
+
+    [Fact]
     public void A_missing_destination_is_reported_and_left_alone()
     {
         using var workspace = new TempWorkspace();

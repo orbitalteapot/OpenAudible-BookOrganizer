@@ -83,6 +83,23 @@ describe('useRunStatus', () => {
     expect(result.current.status.state).toBe('running');
   });
 
+  it('stops showing a sort as running once contact is lost, in plain words', async () => {
+    vi.mocked(getRunStatus).mockResolvedValue(runningStatus());
+    const { result } = renderHook(() => useRunStatus());
+    await advance(0);
+    expect(result.current.status.state).toBe('running');
+
+    // The backend died with the sort: "Sorting… 42%" and the disabled controls must not stay up.
+    vi.mocked(getRunStatus).mockRejectedValue(new ApiError('unreachable', { code: 'unreachable' }));
+    await advance(RUNNING_POLL_MS * 30);
+
+    expect(result.current.status).toBeNull();
+    expect(result.current.error).toBe(
+      "Can't reach the organizer server. Check that the container is running, then reload this page."
+    );
+    expect(result.current.error).not.toMatch(/backend/);
+  });
+
   it('passes any other refusal on to the page', async () => {
     const { result } = renderHook(() => useRunStatus());
     await advance(0);

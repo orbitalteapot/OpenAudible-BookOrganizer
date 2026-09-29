@@ -212,6 +212,72 @@ public class SortScheduleTests
     }
 
     [Fact]
+    public async Task A_schedule_turned_on_at_a_time_the_clock_has_since_gone_back_past_runs_once()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), 1440, time: time);
+        backend.Settings.UpdateSchedule(_ => new ScheduleState
+        {
+            EnabledAtUtc = Now.AddHours(1),
+            LastAttemptUtc = Now.AddHours(-1),
+            LastSuccessUtc = Now.AddHours(-1)
+        });
+        using var scheduler = backend.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastAttemptUtc == Now, "the first run");
+
+        // Clamped afresh on every look, "turned on" stayed ahead of every run and started one sort after another.
+        for (var minute = 0; minute < 4; minute++)
+        {
+            await AdvanceAndSettle(time, TimeSpan.FromMinutes(1));
+        }
+
+        await scheduler.StopAsync(CancellationToken.None);
+        Assert.Equal(Now, backend.Settings.Schedule.LastAttemptUtc);
+        Assert.Equal(Now, backend.Settings.Schedule.EnabledAtUtc);
+        Assert.Equal(Now.AddDays(1), scheduler.GetStatus().NextRunUtc);
+    }
+
+    [Fact]
+    public async Task After_the_clock_is_set_back_the_next_run_still_comes_one_interval_later()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), 60, time: time);
+        backend.Settings.UpdateSchedule(_ => Succeeded(Now.AddDays(2)));
+        using var scheduler = backend.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastSuccessUtc == Now, "the future time to be brought back");
+
+        // Counted as "now" afresh on every wake, the due time slid along with the clock and never came.
+        await AdvanceAndSettle(time, TimeSpan.FromMinutes(30));
+        Assert.Equal(Now.AddMinutes(60), scheduler.GetStatus().NextRunUtc);
+        await AdvanceAndSettle(time, TimeSpan.FromMinutes(29));
+
+        await AdvanceUntil(time, () => backend.Settings.Schedule.LastRun is not null, "the run an interval later");
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.InRange(backend.Settings.Schedule.LastAttemptUtc!.Value, Now.AddMinutes(60), Now.AddMinutes(62));
+    }
+
+    [Fact]
+    public void Clamping_brings_only_the_times_in_the_future_back_to_now()
+    {
+        var state = new ScheduleState { EnabledAtUtc = Now.AddDays(-1), LastAttemptUtc = Now.AddHours(3), LastSuccessUtc = null };
+
+        var clamped = SortSchedule.ClampToNow(state, Now);
+
+        Assert.Equal(Now.AddDays(-1), clamped.EnabledAtUtc);
+        Assert.Equal(Now, clamped.LastAttemptUtc);
+        Assert.Null(clamped.LastSuccessUtc);
+    }
+
+    [Fact]
     public void The_schedule_says_why_it_cannot_run_naming_the_server_setting()
     {
         using var workspace = new TempWorkspace();

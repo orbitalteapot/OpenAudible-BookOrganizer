@@ -148,7 +148,7 @@ public class ApiEndpointTests
         using var client = app.CreateClient();
 
         // No body at all: every field of a start request is optional.
-        var response = await client.PostAsync("/api/sort/start", null);
+        var response = await client.PostAsync("/api/sort/start", EmptyJson());
 
         var started = await ExpectStatus(response, HttpStatusCode.Accepted);
         Assert.Equal("running", started.GetProperty("state").GetString());
@@ -176,11 +176,11 @@ public class ApiEndpointTests
         var second = await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.Conflict);
         Assert.Equal("alreadyRunning", second.GetProperty("code").GetString());
 
-        await ExpectStatus(await client.PostAsync("/api/sort/cancel", null), HttpStatusCode.OK);
+        await ExpectStatus(await client.PostAsync("/api/sort/cancel", EmptyJson()), HttpStatusCode.OK);
 
         var finished = await WaitForFinish(client);
         Assert.True(finished.GetProperty("isCanceled").GetBoolean());
-        await ExpectStatus(await client.PostAsync("/api/sort/cancel", null), HttpStatusCode.BadRequest);
+        await ExpectStatus(await client.PostAsync("/api/sort/cancel", EmptyJson()), HttpStatusCode.BadRequest);
     }
 
     [Fact]
@@ -228,7 +228,7 @@ public class ApiEndpointTests
         await using var app = new ApiFactory(new ServerConfig());
         using var client = app.CreateClient();
 
-        var missing = await ExpectStatus(await client.PostAsync("/api/books/parse", null), HttpStatusCode.BadRequest);
+        var missing = await ExpectStatus(await client.PostAsync("/api/books/parse", EmptyJson()), HttpStatusCode.BadRequest);
         Assert.Equal("csvPath", missing.GetProperty("field").GetString());
         Assert.Equal("notSet", missing.GetProperty("code").GetString());
 
@@ -236,7 +236,7 @@ public class ApiEndpointTests
             await client.PutAsJsonAsync("/api/settings", new { csvPath = workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit") }),
             HttpStatusCode.OK);
 
-        var parsed = await ExpectStatus(await client.PostAsync("/api/books/parse", null), HttpStatusCode.OK);
+        var parsed = await ExpectStatus(await client.PostAsync("/api/books/parse", EmptyJson()), HttpStatusCode.OK);
         Assert.Equal(1, parsed.GetProperty("books").GetArrayLength());
         var books = await client.GetFromJsonAsync<JsonElement>("/api/books");
         Assert.Equal(1, books.GetArrayLength());
@@ -283,6 +283,57 @@ public class ApiEndpointTests
             await Task.Delay(20);
         }
     }
+
+    [Fact]
+    public async Task The_desktop_backend_refuses_requests_from_web_sites()
+    {
+        using var workspace = new TempWorkspace();
+        await using var app = new ApiFactory(Locked(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit")));
+        using var client = app.CreateClient();
+
+        // A page on any site can send a simple POST to 127.0.0.1; CORS only hides the answer.
+        using var crossSite = new HttpRequestMessage(HttpMethod.Post, "/api/sort/start") { Content = EmptyJson() };
+        crossSite.Headers.Add("Origin", "https://evil.example");
+        await ExpectStatus(await client.SendAsync(crossSite), HttpStatusCode.Forbidden);
+
+        // Without JSON a browser sends it cross-site with no preflight, so it is refused as well.
+        await ExpectStatus(await client.PostAsync("/api/sort/start", null), HttpStatusCode.UnsupportedMediaType);
+
+        // A name rebound to 127.0.0.1 must not be able to read the library.
+        using var rebound = new HttpRequestMessage(HttpMethod.Get, "/api/settings");
+        rebound.Headers.Host = "evil.example";
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.SendAsync(rebound)).StatusCode);
+
+        Assert.Equal("idle", (await client.GetFromJsonAsync<JsonElement>("/api/sort/progress")).GetProperty("state").GetString());
+    }
+
+    [Fact]
+    public async Task The_page_of_the_dev_server_and_of_the_desktop_window_may_send_changes()
+    {
+        await using var app = new ApiFactory(new ServerConfig());
+        using var client = app.CreateClient();
+
+        foreach (var origin in new[] { "http://localhost:5173", "null", "file://" })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Put, "/api/settings") { Content = JsonContent.Create(new { copySpeed = "gentle" }) };
+            request.Headers.Add("Origin", origin);
+            await ExpectStatus(await client.SendAsync(request), HttpStatusCode.OK);
+        }
+    }
+
+    [Fact]
+    public async Task A_container_answers_to_any_name()
+    {
+        await using var app = new ApiFactory(new ServerConfig { BindUrl = "http://0.0.0.0:5123" });
+        using var client = app.CreateClient();
+
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/settings");
+        request.Headers.Host = "nas.local";
+        await ExpectStatus(await client.SendAsync(request), HttpStatusCode.OK);
+    }
+
+    /// <summary>A POST with no body, sent as JSON the way the page sends it.</summary>
+    private static StringContent EmptyJson() => new(string.Empty, System.Text.Encoding.UTF8, "application/json");
 
     /// <summary>The real app, with the given configuration in place of whatever the environment says.</summary>
     private sealed class ApiFactory(ServerConfig config) : WebApplicationFactory<Program>

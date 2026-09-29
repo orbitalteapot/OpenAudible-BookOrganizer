@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using AudioFileSorter;
 using AudioFileSorter.Model;
 using ManagerApi.Services;
+using Microsoft.AspNetCore.HostFiltering;
 
 // Pin the content root to where the binary actually lives. The default is the current working
 // directory, which is fine for the container (WORKDIR is the app) but arbitrary for the desktop
@@ -22,7 +23,7 @@ builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins("http://localhost:5173", "http://127.0.0.1:5173")
+        policy.WithOrigins(LocalRequestGuard.DevServerOrigins)
               .AllowAnyMethod()
               .AllowAnyHeader();
     });
@@ -41,15 +42,48 @@ builder.Services.AddSingleton<SettingsService>();
 builder.Services.AddSingleton<SortService>();
 builder.Services.AddSingleton<SortScheduler>();
 builder.Services.AddHostedService(services => services.GetRequiredService<SortScheduler>());
+builder.Services.AddHostedService<ParentProcessWatch>();
+
+// The desktop backend only answers to its own names, so a web site cannot rebind one of its own
+// to 127.0.0.1 and read the library. Read from the registered ServerConfig, so a test's own applies.
+builder.Services.AddOptions<HostFilteringOptions>().Configure<ServerConfig>((options, config) =>
+{
+    if (config.IsLoopbackOnly)
+    {
+        options.AllowedHosts = LocalRequestGuard.AllowedHosts;
+    }
+});
 
 builder.WebHost.UseUrls(serverConfig.BindUrl);
 
 var app = builder.Build();
 
 var logger = app.Logger;
-app.Services.GetRequiredService<ServerConfig>().Log(logger);
+var config = app.Services.GetRequiredService<ServerConfig>();
+config.Log(logger);
+
+using var settingsLock = SettingsFileLock.Acquire(config.SettingsPath, logger);
+if (settingsLock is null)
+{
+    return SettingsFileLock.InUseExitCode;
+}
 
 app.UseCors();
+
+if (config.IsLoopbackOnly)
+{
+    app.Use(async (context, next) =>
+    {
+        if (LocalRequestGuard.Refusal(context.Request) is { } refusal)
+        {
+            context.Response.StatusCode = refusal.Status;
+            await context.Response.WriteAsJsonAsync(new { error = refusal.Error });
+            return;
+        }
+
+        await next(context);
+    });
+}
 
 // The desktop app ships the backend without a wwwroot: its window loads the interface straight
 // off disk, and the backend is only an API. Only wire up static hosting when there is something
@@ -176,6 +210,7 @@ if (servesWebUi)
 }
 
 app.Run();
+return 0;
 
 static IResult CsvError(string message, string code)
 {

@@ -30,7 +30,7 @@ describe('summariseRun', () => {
 
     expect(summary.headline).toBe('Sort complete: 2 moved, 5 up to date, 1 not found.');
     expect(summary.details).toEqual([
-      '2 books from an older layout were moved into their own folders.',
+      '2 books that an older version left in the destination folder were moved into their own folders there.',
       '1 book in the export has no file in the source folder. These are usually books that have not been downloaded yet.',
     ]);
     expect(summary.tone).toBe('caution');
@@ -66,6 +66,16 @@ describe('summariseRun', () => {
 
     expect(summary.headline).toBe('Sort failed: The destination folder does not exist. Is the drive connected?');
     expect(summary.details).toEqual([]);
+    expect(summary.tone).toBe('critical');
+  });
+
+  it('points at the source folder, not at downloads, when no book was found at all', () => {
+    const summary = summariseRun({ counts: counts({ notFound: 1204 }), problemCount: 1204 });
+
+    expect(summary.headline).toBe('Sort complete, but no book was found in the source folder (1,204 books in the export).');
+    expect(summary.details).toEqual([
+      'None of the books in the export were found in the source folder. Check that the source folder is the one OpenAudible downloads your books into, and that SOURCE_PATH is mapped to it.',
+    ]);
     expect(summary.tone).toBe('critical');
   });
 

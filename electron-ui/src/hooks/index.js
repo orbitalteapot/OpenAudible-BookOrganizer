@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { isDesktop } from '../mode';
 
 export { default as useVirtualRows } from './useVirtualRows';
 export { default as useLibrary } from './useLibrary';
@@ -14,7 +15,7 @@ export { default as useTheme, THEMES } from './useTheme';
 export function useIsElectron() {
   // Read once: window.electronAPI is injected by the preload script before React mounts and never
   // changes afterwards, so re-checking on every render only invites inconsistent branches.
-  const [isElectron] = useState(() => typeof window !== 'undefined' && !!window.electronAPI);
+  const [isElectron] = useState(isDesktop);
   return isElectron;
 }
 

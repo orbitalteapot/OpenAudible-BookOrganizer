@@ -47,7 +47,8 @@ public class SettingsServiceTests
         var file = JsonNode.Parse(File.ReadAllText(config.SettingsPath!))!;
         Assert.Equal(1, file["version"]!.GetValue<int>());
         Assert.Equal("gentle", file["settings"]!["copySpeed"]!.GetValue<string>());
-        Assert.Equal("quick", file["settings"]!["comparisonMode"]!.GetValue<string>());
+        // Nobody picked an update check, so none is saved and COMPARISON_MODE keeps deciding.
+        Assert.Null(file["settings"]!["comparisonMode"]);
         Assert.NotNull(file["schedule"]);
     }
 
@@ -62,11 +63,10 @@ public class SettingsServiceTests
               "schedule": { "lastAttemptUtc": "2026-01-01T00:00:00Z" } }
             """);
 
-        var state = new SettingsStore(path, NullLogger<SettingsStore>.Instance)
-            .Load(new AppSettings { ComparisonMode = FileComparisonMode.Full });
+        var state = new SettingsStore(path, NullLogger<SettingsStore>.Instance).Load();
 
         Assert.Equal("/books", state.Settings.SourcePath);
-        Assert.Equal(FileComparisonMode.Full, state.Settings.ComparisonMode);
+        Assert.Null(state.Settings.ComparisonMode);
         Assert.Equal(CopySpeed.Gentle, state.Settings.CopySpeed);
         Assert.Null(state.Settings.ScheduleIntervalMinutes);
         Assert.Equal(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), state.Schedule.LastAttemptUtc);
@@ -79,10 +79,103 @@ public class SettingsServiceTests
         var path = Path.Combine(workspace.Root, "settings.json");
         File.WriteAllText(path, "{ not json");
 
-        var state = new SettingsStore(path, NullLogger<SettingsStore>.Instance).Load(new AppSettings());
+        var state = new SettingsStore(path, NullLogger<SettingsStore>.Instance).Load();
 
         Assert.Equal(new AppSettings(), state.Settings);
         Assert.Equal(new ScheduleState(), state.Schedule);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("\"x\"")]
+    [InlineData("5")]
+    public void A_file_that_is_not_a_settings_object_starts_from_the_defaults(string content)
+    {
+        using var workspace = new TempWorkspace();
+        var config = new ServerConfig { SettingsPath = Path.Combine(workspace.Root, "settings.json") };
+        File.WriteAllText(config.SettingsPath, content);
+
+        // This used to throw from the constructor, and the backend never started.
+        using var backend = new TestBackend(config);
+
+        Assert.Equal(CopySpeed.Normal, backend.Settings.Effective.CopySpeed);
+    }
+
+    [Fact]
+    public void A_switch_saved_as_null_does_not_throw_away_the_other_settings()
+    {
+        using var workspace = new TempWorkspace();
+        var path = Path.Combine(workspace.Root, "settings.json");
+        File.WriteAllText(path, """
+            { "version": 1, "settings": { "csvPath": "/data/books.csv", "openAtLogin": null, "keepRunningInBackground": true } }
+            """);
+
+        var state = new SettingsStore(path, NullLogger<SettingsStore>.Instance).Load();
+
+        Assert.Equal("/data/books.csv", state.Settings.CsvPath);
+        Assert.False(state.Settings.OpenAtLogin);
+        Assert.True(state.Settings.KeepRunningInBackground);
+    }
+
+    [Fact]
+    public void A_change_that_cannot_be_saved_is_refused_with_the_reason_and_not_kept()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = WithUnwritableSettings(workspace);
+
+        Assert.False(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out var error));
+
+        Assert.StartsWith("Could not save the settings: ", error!.Message);
+        Assert.Equal(CopySpeed.Normal, backend.Settings.Effective.CopySpeed);
+    }
+
+    [Fact]
+    public void Automatic_sorting_history_that_cannot_be_saved_is_kept_and_the_page_is_told()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = WithUnwritableSettings(workspace);
+
+        backend.Settings.UpdateSchedule(state => state with { LastAttemptUtc = new DateTime(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc) });
+
+        // Forgetting it would run the same slot again at once.
+        Assert.NotNull(backend.Settings.Schedule.LastAttemptUtc);
+        Assert.Contains(
+            SettingsResponse.From(backend.Settings).ServerWarnings,
+            warning => warning.StartsWith("The settings could not be saved"));
+    }
+
+    [Fact]
+    public void A_later_save_that_works_clears_the_warning()
+    {
+        using var workspace = new TempWorkspace();
+        var settingsPath = Path.Combine(workspace.Root, "settings.json");
+        using var backend = new TestBackend(new ServerConfig { SettingsPath = settingsPath });
+        Directory.CreateDirectory(settingsPath + ".tmp");
+
+        backend.Settings.UpdateSchedule(state => state with { LastAttemptUtc = DateTime.UtcNow });
+        Assert.NotNull(backend.Settings.SaveWarning);
+
+        Directory.Delete(settingsPath + ".tmp");
+        backend.Settings.UpdateSchedule(state => state with { LastSuccessUtc = DateTime.UtcNow });
+        Assert.Null(backend.Settings.SaveWarning);
+    }
+
+    [Fact]
+    public void Comparison_mode_from_the_environment_still_applies_after_other_settings_were_saved()
+    {
+        using var workspace = new TempWorkspace();
+        var settingsPath = Path.Combine(workspace.Root, "settings.json");
+
+        using (var first = new TestBackend(new ServerConfig { SettingsPath = settingsPath, DefaultComparisonMode = FileComparisonMode.Quick }))
+        {
+            // An automatic run's history is saved without anyone picking an update check.
+            first.Settings.UpdateSchedule(state => state with { LastAttemptUtc = DateTime.UtcNow });
+        }
+
+        using var restarted = new TestBackend(new ServerConfig { SettingsPath = settingsPath, DefaultComparisonMode = FileComparisonMode.Full });
+
+        Assert.Equal(FileComparisonMode.Full, restarted.Settings.Effective.ComparisonMode);
     }
 
     [Fact]
@@ -277,6 +370,32 @@ public class SettingsServiceTests
         Assert.True(config.PathsLocked);
         Assert.Null(config.CsvPath);
         Assert.Equal(3, config.NormalParallelism);
+    }
+
+    /// <summary>A backend whose settings file cannot be written: its folder is a file.</summary>
+    private static TestBackend WithUnwritableSettings(TempWorkspace workspace)
+    {
+        var notAFolder = Path.Combine(workspace.Root, "not-a-folder");
+        File.WriteAllText(notAFolder, "");
+        return new TestBackend(new ServerConfig { SettingsPath = Path.Combine(notAFolder, "settings.json") });
+    }
+
+    [Fact]
+    public void Only_a_backend_that_listens_on_this_computer_alone_counts_as_the_desktop_one()
+    {
+        Assert.True(new ServerConfig { BindUrl = "http://127.0.0.1:5123" }.IsLoopbackOnly);
+        Assert.True(new ServerConfig { BindUrl = "http://localhost:5123;http://[::1]:5123" }.IsLoopbackOnly);
+        Assert.False(new ServerConfig { BindUrl = "http://0.0.0.0:5123" }.IsLoopbackOnly);
+        Assert.False(new ServerConfig { BindUrl = "http://+:5123" }.IsLoopbackOnly);
+        Assert.False(new ServerConfig { BindUrl = "http://127.0.0.1:5123;http://0.0.0.0:5124" }.IsLoopbackOnly);
+    }
+
+    [Fact]
+    public void The_app_that_started_the_backend_is_read_from_the_environment()
+    {
+        Assert.Equal(4242, ServerConfig.FromEnvironment(Env(("OABO_PARENT_PID", "4242"))).ParentProcessId);
+        Assert.Null(ServerConfig.FromEnvironment(Env(("OABO_PARENT_PID", "soon"))).ParentProcessId);
+        Assert.Null(ServerConfig.FromEnvironment(_ => null).ParentProcessId);
     }
 
     private static Func<string, string?> Env(params (string Name, string? Value)[] variables)

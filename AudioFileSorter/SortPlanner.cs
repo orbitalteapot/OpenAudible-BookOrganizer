@@ -23,6 +23,7 @@ public sealed class SortPlanner
     private readonly Dictionary<string, string> _claimedBookDirectories = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _claimedLooseNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _claimedLegacyFiles = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _standaloneBookFolders = new(StringComparer.Ordinal);
 
     /// <summary>Which normaliser decides that two folder names mean the same thing.</summary>
     private enum FolderKind
@@ -52,7 +53,15 @@ public sealed class SortPlanner
     }
 
     /// <summary>Builds the copy plan for every book in <paramref name="books"/>.</summary>
-    public List<PlannedCopy> Plan(IReadOnlyList<OpenAudible> books, string sourceRoot, string destinationRoot)
+    /// <param name="cancellationToken">
+    /// Checked once per book: planning a large library on a slow network drive can take minutes,
+    /// and Cancel has to work during that time too.
+    /// </param>
+    public List<PlannedCopy> Plan(
+        IReadOnlyList<OpenAudible> books,
+        string sourceRoot,
+        string destinationRoot,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(books);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceRoot);
@@ -60,6 +69,13 @@ public sealed class SortPlanner
 
         var fullDestinationRoot = Path.GetFullPath(destinationRoot);
         var namingPlans = books.Select(BookNaming.BuildPlan).ToList();
+
+        // Known before any series folder is resolved, so a series never settles on a folder that
+        // is a standalone book's own (see ResolveDirectoryName).
+        foreach (var plan in namingPlans.Where(plan => plan.SeriesName is null))
+        {
+            _standaloneBookFolders.Add(BookFolderKey(ResolveAuthorDirectory(fullDestinationRoot, plan), plan.FileStem));
+        }
 
         // Reserve every series folder first, so a standalone book titled like a series ("Bobiverse")
         // gets a "Bobiverse (2)" folder of its own instead of being dropped loose into the series,
@@ -70,12 +86,16 @@ public sealed class SortPlanner
         }
 
         var planned = books
-            .Select((book, index) => PlanBook(book, namingPlans[index], sourceRoot, fullDestinationRoot))
+            .Select((book, index) =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                return PlanBook(book, namingPlans[index], sourceRoot, fullDestinationRoot);
+            })
             .ToList();
 
         // Only now is every destination known, so an old file can be matched to its book without
         // the risk of it being a path some other book is about to write to.
-        return ClaimLegacyFiles(planned, namingPlans, fullDestinationRoot);
+        return ClaimLegacyFiles(planned, namingPlans, fullDestinationRoot, cancellationToken);
     }
 
     private PlannedCopy PlanBook(OpenAudible book, BookSortPlan plan, string sourceRoot, string destinationRoot)
@@ -182,7 +202,11 @@ public sealed class SortPlanner
     /// it into the book's folder instead of copying the book a second time and leaving the old file
     /// behind to keep confusing library tools.
     /// </summary>
-    private List<PlannedCopy> ClaimLegacyFiles(List<PlannedCopy> planned, List<BookSortPlan> namingPlans, string destinationRoot)
+    private List<PlannedCopy> ClaimLegacyFiles(
+        List<PlannedCopy> planned,
+        List<BookSortPlan> namingPlans,
+        string destinationRoot,
+        CancellationToken cancellationToken)
     {
         // Worked out for every book, in list order, before anything is claimed: the old names are
         // a replay of the old list-order naming, which has to see every book to come out right.
@@ -190,6 +214,7 @@ public sealed class SortPlanner
         var pdfCandidates = new List<List<(LegacyLayout Layout, string Path)>>(planned.Count);
         for (var i = 0; i < planned.Count; i++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var copy = planned[i];
             audioCandidates.Add(LegacyCandidates(namingPlans[i], copy.AudioSource, copy.AudioDestination, destinationRoot));
             pdfCandidates.Add(LegacyCandidates(namingPlans[i], copy.PdfSource, copy.PdfDestination, destinationRoot));
@@ -201,6 +226,7 @@ public sealed class SortPlanner
         {
             for (var i = 0; i < planned.Count; i++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 audioLegacy[i] ??= ClaimLegacyFile(audioCandidates[i], layout, destinationRoot);
                 pdfLegacy[i] ??= ClaimLegacyFile(pdfCandidates[i], layout, destinationRoot);
             }
@@ -358,19 +384,30 @@ public sealed class SortPlanner
             return cached;
         }
 
-        var resolved = requestedName;
-        foreach (var existingDirectory in SafeEnumerateDirectories(parentDirectory))
-        {
-            var existingName = Path.GetFileName(existingDirectory);
-            if (!string.IsNullOrWhiteSpace(existingName) && Normalize(existingName, kind) == normalized)
-            {
-                resolved = existingName;
-                break;
-            }
-        }
+        var existingNames = SafeEnumerateDirectories(parentDirectory)
+            .Select(Path.GetFileName)
+            .OfType<string>()
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .ToList();
+
+        // The folder this name was given before comes first. The looser series match would
+        // otherwise let "The Witcher" settle on a standalone book's "Witcher" folder whenever the
+        // disk happens to list that one first, and copy both the series and the book again.
+        var exactKey = PathSanitizer.NormalizeComparisonKey(requestedName);
+        var resolved = existingNames.FirstOrDefault(name => PathSanitizer.NormalizeComparisonKey(name) == exactKey)
+            ?? existingNames.FirstOrDefault(name =>
+                Normalize(name, kind) == normalized &&
+                !(kind == FolderKind.Series && _standaloneBookFolders.Contains(BookFolderKey(parentDirectory, name))))
+            ?? requestedName;
 
         _resolvedDirectoryNames[cacheKey] = resolved;
         return resolved;
+    }
+
+    /// <summary>Identifies the folder a standalone book titled <paramref name="name"/> uses in <paramref name="parentDirectory"/>.</summary>
+    private static string BookFolderKey(string parentDirectory, string name)
+    {
+        return $"{parentDirectory}\u0000{PathSanitizer.NormalizeComparisonKey(name)}";
     }
 
     /// <summary>

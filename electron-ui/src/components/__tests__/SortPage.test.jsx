@@ -12,6 +12,9 @@ async function openSortPage(options) {
   return screen.findByRole('heading', { name: 'Sort', level: 1 });
 }
 
+/** The status line under a path's field: the last of the descriptions it points at. */
+const statusLine = (input) => document.getElementById(input.getAttribute('aria-describedby').split(' ').pop());
+
 const progressCard = () => screen.getByRole('heading', { name: 'Progress' }).closest('section');
 
 describe('SortPage', () => {
@@ -73,11 +76,50 @@ describe('SortPage', () => {
 
     // The row agrees with the question instead of still saying "Found".
     const destination = screen.getByLabelText('Destination folder');
-    const hint = document.getElementById(destination.getAttribute('aria-describedby'));
+    const hint = statusLine(destination);
     await waitFor(() => expect(hint.textContent).toMatch(/^Folder not found/));
 
     fireEvent.click(create);
     await waitFor(() => expect(startSort).toHaveBeenLastCalledWith({ createDestination: true }));
+  });
+
+  it('goes back to Start sorting when the create-folder question is dismissed', async () => {
+    await openSortPage();
+    vi.mocked(startSort).mockRejectedValueOnce(
+      new ApiError('The destination folder does not exist. Is the drive connected?', {
+        status: 400,
+        code: 'destinationMissing',
+        field: 'destinationPath',
+      })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start sorting' }));
+    await screen.findByRole('button', { name: 'Create folder and sort' });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Start sorting' })));
+  });
+
+  it('says what each folder is for, and that the source is only read', async () => {
+    await openSortPage();
+
+    expect(screen.getByText('Made in OpenAudible with File > Export.')).toBeTruthy();
+    expect(screen.getByText(/Files here are only read, never changed\./)).toBeTruthy();
+    expect(screen.getByText(/The source folder is never changed\./)).toBeTruthy();
+  });
+
+  it('asks for the folder statuses again when the window comes back into view', async () => {
+    await openSortPage();
+    const destination = screen.getByLabelText('Destination folder');
+    expect(statusLine(destination).textContent).toBe('Found');
+
+    // The drive was pulled out while the window was in the background.
+    vi.mocked(getSettings).mockResolvedValue(
+      settingsResponse({ pathStatus: { csv: 'ok', source: 'ok', destination: 'notFound' } })
+    );
+    fireEvent.focus(window);
+
+    await waitFor(() => expect(statusLine(destination).textContent).toMatch(/^Folder not found/));
   });
 
   it('shows a refused start under the path it was about', async () => {
@@ -94,7 +136,7 @@ describe('SortPage', () => {
 
     const destination = await screen.findByLabelText('Destination folder');
     await waitFor(() => expect(destination.getAttribute('aria-invalid')).toBe('true'));
-    const hint = document.getElementById(destination.getAttribute('aria-describedby'));
+    const hint = statusLine(destination);
     expect(hint.textContent).toBe('Cannot write to the destination folder: Access denied');
   });
 
@@ -113,7 +155,7 @@ describe('SortPage', () => {
 
     const card = progressCard();
     expect(await within(card).findByText('Sort complete: 1 new, 2 moved, 5 up to date, 1 not found.')).toBeTruthy();
-    expect(within(card).getByText('2 books from an older layout were moved into their own folders.')).toBeTruthy();
+    expect(within(card).getByText('2 books that an older version left in the destination folder were moved into their own folders there.')).toBeTruthy();
 
     fireEvent.click(within(card).getByRole('button', { name: 'Problems (1)' }));
     expect(within(card).getByText('No file in the source folder')).toBeTruthy();

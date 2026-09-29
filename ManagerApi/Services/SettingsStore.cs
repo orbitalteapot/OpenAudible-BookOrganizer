@@ -27,9 +27,10 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
 
     private readonly string? _path = string.IsNullOrWhiteSpace(path) ? null : path;
 
-    /// <param name="defaults">The settings used for anything the file does not hold, or holds wrongly.</param>
-    public SavedState Load(AppSettings defaults)
+    /// <summary>The saved state, with the defaults for anything the file does not hold, or holds wrongly.</summary>
+    public SavedState Load()
     {
+        var defaults = new AppSettings();
         var empty = new SavedState(defaults, new ScheduleState());
         if (_path is null || !File.Exists(_path))
         {
@@ -40,6 +41,15 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
         {
             using var document = JsonDocument.Parse(File.ReadAllText(_path));
             var root = document.RootElement;
+
+            // "null", "[]" or a bare string parse fine, but have no properties to look up.
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                logger.LogWarning(
+                    "The settings file at {Path} does not hold settings ({Kind}); starting with the default settings",
+                    _path, root.ValueKind);
+                return empty;
+            }
 
             return new SavedState(
                 root.TryGetProperty("settings", out var settings) ? ReadSettings(settings, defaults) : defaults,
@@ -56,11 +66,13 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
     /// Written beside the target, flushed to the disk and renamed over it, so a crash or a power cut
     /// leaves either the old file or the new one, never half of one.
     /// </summary>
-    public void Save(SavedState state)
+    /// <param name="error">Why it could not be saved (the system's reason, which names the file); null when it was.</param>
+    public bool TrySave(SavedState state, out string? error)
     {
+        error = null;
         if (_path is null)
         {
-            return;
+            return true;
         }
 
         var partialPath = _path + ".tmp";
@@ -76,10 +88,13 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
             }
 
             File.Move(partialPath, _path, overwrite: true);
+            return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            logger.LogWarning(ex, "Could not save the settings to {Path}; changes will be forgotten on restart", _path);
+            logger.LogWarning(ex, "Could not save the settings to {Path}", _path);
+            error = ex.Message;
+            return false;
         }
     }
 
@@ -101,11 +116,17 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
             return defaults;
         }
 
-        var comparisonMode = defaults.ComparisonMode;
-        if (stored.ComparisonMode is not null && !SortOptions.TryParseComparisonMode(stored.ComparisonMode, out comparisonMode))
+        FileComparisonMode? comparisonMode = null;
+        if (stored.ComparisonMode is not null)
         {
-            Ignored("comparisonMode", stored.ComparisonMode);
-            comparisonMode = defaults.ComparisonMode;
+            if (SortOptions.TryParseComparisonMode(stored.ComparisonMode, out var parsed))
+            {
+                comparisonMode = parsed;
+            }
+            else
+            {
+                Ignored("comparisonMode", stored.ComparisonMode);
+            }
         }
 
         if (!SortOptions.TryParseCopySpeed(stored.CopySpeed, out var copySpeed))
@@ -128,8 +149,8 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
             ComparisonMode = comparisonMode,
             CopySpeed = copySpeed,
             ScheduleIntervalMinutes = interval,
-            KeepRunningInBackground = stored.KeepRunningInBackground,
-            OpenAtLogin = stored.OpenAtLogin
+            KeepRunningInBackground = stored.KeepRunningInBackground ?? defaults.KeepRunningInBackground,
+            OpenAtLogin = stored.OpenAtLogin ?? defaults.OpenAtLogin
         };
     }
 
@@ -154,7 +175,8 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
     /// <summary>
     /// The settings as written to the file. The choices are kept as their wire spelling ("full",
     /// "gentle") and parsed on the way back in, so an unknown value is caught by the same rules the
-    /// API applies instead of failing the whole file.
+    /// API applies instead of failing the whole file. The switches are nullable for the same reason:
+    /// a <c>null</c> there falls back to off instead of failing the whole file.
     /// </summary>
     private sealed record StoredSettings(
         string? CsvPath,
@@ -163,8 +185,8 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
         string? ComparisonMode,
         string? CopySpeed,
         int? ScheduleIntervalMinutes,
-        bool KeepRunningInBackground,
-        bool OpenAtLogin)
+        bool? KeepRunningInBackground,
+        bool? OpenAtLogin)
     {
         public static StoredSettings From(AppSettings settings)
         {
@@ -172,7 +194,7 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
                 settings.CsvPath,
                 settings.SourcePath,
                 settings.DestinationPath,
-                SortOptions.ToWireValue(settings.ComparisonMode),
+                settings.ComparisonMode is { } mode ? SortOptions.ToWireValue(mode) : null,
                 SortOptions.ToWireValue(settings.CopySpeed),
                 settings.ScheduleIntervalMinutes,
                 settings.KeepRunningInBackground,

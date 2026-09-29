@@ -31,8 +31,11 @@ services:
       # the Sort page, and when automatic sorting last ran, are kept here too (settings.json), so
       # they survive a restart or a new image.
       - ./data:/data
-      # Replace the left-hand side with your actual audiobook source directory
+      # Replace the left-hand side with your actual audiobook source directory. It is only read.
+      # Without this line the Sort page shows the source folder as not found inside the container.
       - /path/to/your/audiobooks:/source
-      # Replace the left-hand side with the directory you want books sorted into
+      # Replace the left-hand side with the directory you want books sorted into. Without this line
+      # nothing is sorted: the Sort page shows the destination folder as not found, rather than
+      # copying the library somewhere inside the container where it would be lost.
       - /path/to/your/organized:/destination
     restart: unless-stopped

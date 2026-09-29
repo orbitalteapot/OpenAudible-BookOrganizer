@@ -12,7 +12,14 @@ public sealed record AppSettings
     public string? CsvPath { get; init; }
     public string? SourcePath { get; init; }
     public string? DestinationPath { get; init; }
-    public FileComparisonMode ComparisonMode { get; init; } = SortOptions.Default.ComparisonMode;
+
+    /// <summary>
+    /// The update check a person picked. Null until they pick one, so the server's COMPARISON_MODE
+    /// keeps deciding (and can still be changed) until then; <see cref="SettingsService.Effective"/>
+    /// always fills it in.
+    /// </summary>
+    public FileComparisonMode? ComparisonMode { get; init; }
+
     public CopySpeed CopySpeed { get; init; } = CopySpeed.Normal;
 
     /// <summary>Minutes between automatic sorts. Null means automatic sorting is off.</summary>

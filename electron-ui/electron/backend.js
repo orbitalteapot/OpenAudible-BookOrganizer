@@ -10,6 +10,8 @@ const START_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 500;
 // Short, because these requests sit between the user and a window closing or the app quitting.
 const REQUEST_TIMEOUT_MS = 3_000;
+// What the backend exits with when another copy of it still holds the settings file (SettingsFileLock).
+const SETTINGS_IN_USE_EXIT_CODE = 75;
 
 let baseUrl = null;
 let child = null;
@@ -78,7 +80,10 @@ function attachProcessLogging(proc, onUnexpectedExit) {
   // that will never be answered.
   proc.on('exit', (code, signal) => {
     console.error(`[API] Backend exited (code ${code}, signal ${signal})`);
-    failure ??= `The backend stopped (exit code ${code === null ? signal : code}).`;
+    failure ??=
+      code === SETTINGS_IN_USE_EXIT_CODE
+        ? 'Another copy of the Book Organizer is still running. Wait a moment, then open the app again.'
+        : `The backend stopped (exit code ${code === null ? signal : code}).`;
     child = null;
     if (!stopping) onUnexpectedExit(failure);
   });
@@ -109,7 +114,14 @@ async function start({ packaged, settingsPath, onUnexpectedExit }) {
   console.log(`[API] Starting backend on ${baseUrl}: ${command.file} ${command.args.join(' ')}`);
   child = spawn(command.file, command.args, {
     stdio: 'pipe',
-    env: { ...process.env, ASPNETCORE_URLS: baseUrl, OABO_SETTINGS_PATH: settingsPath },
+    // OABO_PARENT_PID: the backend stops itself when this process is gone, so a crash or a
+    // force-quit never leaves it running automatic sorts on its own.
+    env: {
+      ...process.env,
+      ASPNETCORE_URLS: baseUrl,
+      OABO_SETTINGS_PATH: settingsPath,
+      OABO_PARENT_PID: String(process.pid),
+    },
   });
   attachProcessLogging(child, onUnexpectedExit);
   return baseUrl;
@@ -119,7 +131,9 @@ async function start({ packaged, settingsPath, onUnexpectedExit }) {
 async function request(pathname, method = 'GET') {
   if (!baseUrl) return null;
   try {
-    const res = await fetch(`${baseUrl}${pathname}`, { method, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    // The backend only accepts changes sent as JSON (see LocalRequestGuard).
+    const headers = method === 'GET' ? {} : { 'Content-Type': 'application/json' };
+    const res = await fetch(`${baseUrl}${pathname}`, { method, headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
     return res.ok ? await res.json() : null;
   } catch {
     return null;

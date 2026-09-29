@@ -2,6 +2,7 @@ import { memo, useCallback, useMemo, useState } from 'react';
 import { BookOpen, FileUp, RefreshCw, Search } from 'lucide-react';
 import { chooseCsvFile } from '../desktop';
 import { useDebounced } from '../hooks';
+import { CSV_FIELD, describePath } from '../paths';
 import { compareBooks, filterBooks, SORT_LABELS } from '../sorting';
 import Button from './ui/Button';
 import Disclosure from './ui/Disclosure';
@@ -77,7 +78,10 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
 
   const { books } = library;
   const csvPath = settings.csvPath;
-  const error = fieldErrors.csvPath || library.error;
+  // An export the backend cannot see is explained the way the Folders card does, which in the browser
+  // names the container's mapping and CSV_PATH; any other failure to read it is the backend's own words.
+  const csvStatus = describePath(CSV_FIELD, settings, fieldErrors.csvPath, isElectron);
+  const error = csvStatus.tone === 'critical' ? csvStatus.text : library.error;
 
   const handleChoose = useCallback(async () => {
     const path = await chooseCsvFile();

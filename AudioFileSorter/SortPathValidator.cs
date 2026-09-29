@@ -136,10 +136,11 @@ public static class SortPathValidator
         {
             var source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourcePath));
             var destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationPath));
-            var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
-            return string.Equals(source, destination, comparison) ||
-                   destination.StartsWith(source + Path.DirectorySeparatorChar, comparison);
+            // IsWithin, not a prefix test of its own: a source that is a drive root ("D:\", "/")
+            // keeps its separator when trimmed, which a hand-made "source + separator" test misses.
+            return string.Equals(source, destination, PathSanitizer.PathComparison) ||
+                   PathSanitizer.IsWithin(source, destination);
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {

@@ -28,6 +28,18 @@ describe('Library', () => {
     expect(parseLibrary).not.toHaveBeenCalled();
   });
 
+  it('says where to look in the container when the export is not there', async () => {
+    renderApp({ settings: settingsResponse({ csvPath: '/data/books.csv', pathStatus: { csv: 'notFound', source: 'ok', destination: 'ok' } }) });
+    vi.mocked(parseLibrary).mockRejectedValue(new Error('The library export was not found: /data/books.csv'));
+
+    expect(await screen.findByText("Couldn't read the library export")).toBeTruthy();
+    expect(
+      screen.getByText(
+        'File not found inside the container — check that the folder holding it is mapped to /data and that CSV_PATH names the file'
+      )
+    ).toBeTruthy();
+  });
+
   it('shows rows the export could not read, folded away', async () => {
     renderApp({ library: { books: [book('We Are Legion')], skippedRows: 1, warnings: ['Row 7: no title'] } });
 

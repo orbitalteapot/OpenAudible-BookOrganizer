@@ -1,3 +1,5 @@
+import { unreachableMessage } from './mode';
+
 /** The dev backend's fixed address, for a plain browser tab on the Vite dev server. */
 const DEV_BACKEND_URL = 'http://127.0.0.1:5123';
 const VITE_DEV_PORT = '5173';
@@ -56,16 +58,16 @@ async function readError(res) {
 
 async function request(path, { method = 'GET', body } = {}) {
   const options = { method };
-  if (body !== undefined) {
-    options.headers = { 'Content-Type': 'application/json' };
-    options.body = JSON.stringify(body);
-  }
+  // Every change is sent as JSON, with or without a body: the desktop backend refuses anything else,
+  // because a web site can only send JSON to it after a preflight the backend turns down.
+  if (method !== 'GET') options.headers = { 'Content-Type': 'application/json' };
+  if (body !== undefined) options.body = JSON.stringify(body);
 
   let res;
   try {
     res = await fetch(`${apiBase()}${path}`, options);
   } catch {
-    throw new ApiError('Could not reach the backend. Check that it is still running.', { code: 'unreachable' });
+    throw new ApiError(unreachableMessage(), { code: 'unreachable' });
   }
 
   if (!res.ok) throw await readError(res);

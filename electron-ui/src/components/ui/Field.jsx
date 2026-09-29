@@ -8,13 +8,18 @@ import { useId, useLayoutEffect, useRef } from 'react';
  * a <label for> pointing at a group is not a valid association, and the group carries its own
  * accessible name instead.
  *
- * `children(id, hintId)`: the control takes `id` and puts `hintId` in its aria-describedby, so the
- * hint (a description, a status, why it is disabled) is read out with it. `hintId` is undefined
- * when there is no hint.
+ * `description` says what the setting is for, under the label; `hint` says how it stands (a status,
+ * why it is disabled), under the control.
+ *
+ * `children(id, describedBy)`: the control takes `id` and puts `describedBy` in its aria-describedby,
+ * so the description and the hint are read out with it. `describedBy` is undefined when there is
+ * neither.
  */
-export function Field({ label, hint, group = false, children, className = '' }) {
+export function Field({ label, description, hint, group = false, children, className = '' }) {
   const id = useId();
+  const descriptionId = description ? `${id}-description` : undefined;
   const hintId = hint ? `${id}-hint` : undefined;
+  const describedBy = [descriptionId, hintId].filter(Boolean).join(' ') || undefined;
 
   return (
     <div className={className}>
@@ -25,7 +30,12 @@ export function Field({ label, hint, group = false, children, className = '' }) 
           {label}
         </label>
       )}
-      {children(id, hintId)}
+      {description && (
+        <p id={descriptionId} className="-mt-1 mb-2 text-2xs text-fg-subtle">
+          {description}
+        </p>
+      )}
+      {children(id, describedBy)}
       {hint && (
         <div id={hintId} className="mt-2 text-2xs text-fg-subtle">
           {hint}

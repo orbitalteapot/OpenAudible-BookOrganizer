@@ -85,6 +85,7 @@ public sealed class SortScheduler : BackgroundService
             }
 
             var now = UtcNow();
+            SaveClampedTimes(now);
             var dueUtc = SortSchedule.NextRunUtc(_settings.Effective.ScheduleIntervalMinutes, _settings.Schedule, now);
             if (dueUtc <= now)
             {
@@ -143,6 +144,16 @@ public sealed class SortScheduler : BackgroundService
             LastSuccessUtc = succeeded ? startedUtc : state.LastSuccessUtc,
             LastRun = record
         });
+    }
+
+    /// <summary>Keeps times the clock has since gone back past, as now (see <see cref="SortSchedule.ClampToNow"/>).</summary>
+    private void SaveClampedTimes(DateTime now)
+    {
+        var state = _settings.Schedule;
+        if (SortSchedule.ClampToNow(state, now) != state)
+        {
+            _settings.UpdateSchedule(current => SortSchedule.ClampToNow(current, now));
+        }
     }
 
     private void OnSettingsChanged(object? sender, EventArgs e)
