@@ -74,6 +74,17 @@ describe('ScheduleCard', () => {
     expect(screen.getByText('An automatic sort is running.')).toBeTruthy();
   });
 
+  it('does not promise a first sort when turned on during a sort, which covers that slot', async () => {
+    const onSchedule = (minutes) =>
+      scheduleResponse({ intervalMinutes: minutes, nextRunUtc: new Date(Date.now() + 24 * 3_600_000).toISOString() });
+    render(<Harness initial={scheduleResponse()} afterChange={onSchedule} runStatus={runningStatus()} />);
+
+    fireEvent.click(radio('Daily'));
+
+    expect(await screen.findByText(/^tomorrow at /)).toBeTruthy();
+    expect(screen.queryByText(/The first sort starts now/)).toBeNull();
+  });
+
   it('reports the last automatic run in the same words as the Progress card', () => {
     render(
       <Harness

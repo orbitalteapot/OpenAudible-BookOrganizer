@@ -113,8 +113,10 @@ export default function ScheduleCard({ scheduleState, settingsState, runStatus, 
 
   const select = async (value) => {
     const minutes = value === OFF ? null : Number(value);
-    const turningOn = !isOn && minutes !== null;
-    if ((await changeInterval(minutes)) && turningOn) setFirstRun({ lastRunKey });
+    // A sort already running does the first slot's job, so the backend skips that slot without a
+    // run of its own and no first sort starts; the notice would then stay up for a whole interval.
+    const firstSortStarts = !isOn && minutes !== null && !isRunning(runStatus);
+    if ((await changeInterval(minutes)) && firstSortStarts) setFirstRun({ lastRunKey });
   };
 
   const showFirstRun = isOn && firstRun && firstRun.lastRunKey === lastRunKey;
