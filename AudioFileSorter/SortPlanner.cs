@@ -21,7 +21,35 @@ public sealed class SortPlanner
     private readonly Dictionary<string, Dictionary<string, string>> _directoryFileIndex = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _claimedDestinations = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _claimedBookDirectories = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _claimedLooseNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _claimedLegacyFiles = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Which normaliser decides that two folder names mean the same thing.</summary>
+    private enum FolderKind
+    {
+        /// <summary>Author and book folders: spelling and punctuation are ignored.</summary>
+        Name,
+
+        /// <summary>Series folders: also ignores a leading "The" and a trailing "Series", "Saga"...</summary>
+        Series
+    }
+
+    /// <summary>
+    /// The layouts older versions left a book in, in the order they are tried. Every book's
+    /// candidates of one layout are claimed before any book's of the next, so a book that has
+    /// changed shape never takes a file that is exactly where an older version put another book.
+    /// </summary>
+    private enum LegacyLayout
+    {
+        /// <summary>Loose in the author folder, or in the series folder for a series book without a number.</summary>
+        Loose,
+
+        /// <summary>Filed as a standalone book, before the book gained series metadata.</summary>
+        Standalone,
+
+        /// <summary>Filed as a series book without a number, before it gained one.</summary>
+        Unnumbered
+    }
 
     /// <summary>Builds the copy plan for every book in <paramref name="books"/>.</summary>
     public List<PlannedCopy> Plan(IReadOnlyList<OpenAudible> books, string sourceRoot, string destinationRoot)
@@ -41,174 +69,290 @@ public sealed class SortPlanner
             _claimedBookDirectories.TryAdd(ResolveParentDirectory(fullDestinationRoot, plan), SeriesFolderClaim);
         }
 
-        return books
+        var planned = books
             .Select((book, index) => PlanBook(book, namingPlans[index], sourceRoot, fullDestinationRoot))
             .ToList();
+
+        // Only now is every destination known, so an old file can be matched to its book without
+        // the risk of it being a path some other book is about to write to.
+        return ClaimLegacyFiles(planned, namingPlans, fullDestinationRoot);
     }
 
     private PlannedCopy PlanBook(OpenAudible book, BookSortPlan plan, string sourceRoot, string destinationRoot)
     {
-        var label = BuildLabel(book, plan);
+        var title = BuildTitle(book, plan);
 
         var audioSource = SourceFileLocator.FindAudioFile(book, sourceRoot);
         var pdfSource = SourceFileLocator.FindPdfFile(book, sourceRoot);
 
         if (audioSource is null && pdfSource is null)
         {
-            return new PlannedCopy
-            {
-                Book = book,
-                Label = label,
-                Warning = $"No source file found for \"{plan.FileStem}\" (file name: {book.Filename ?? "n/a"})"
-            };
+            return new PlannedCopy { Book = book, Title = title, IsMissingFromSource = true };
         }
 
         // Folders are only named here, never created: a book whose files turn out to be
         // unreadable should not leave an empty folder tree behind.
-        var target = ResolveTargetDirectory(destinationRoot, plan, audioSource ?? pdfSource!);
-        var targetDirectory = target.Directory;
+        var targetDirectory = ResolveTargetDirectory(destinationRoot, plan, audioSource ?? pdfSource!);
         if (!PathSanitizer.IsWithin(destinationRoot, targetDirectory))
         {
             return new PlannedCopy
             {
                 Book = book,
-                Label = label,
+                Title = title,
                 Warning = $"Refusing to write \"{plan.FileStem}\" outside the destination folder"
             };
         }
 
         string? audioDestination = null;
         string? pdfDestination = null;
-        string? audioLegacy = null;
-        string? pdfLegacy = null;
         var warnings = new List<string>();
 
         if (audioSource is not null)
         {
-            var extension = Path.GetExtension(audioSource);
             audioDestination = ClaimDestination(
-                targetDirectory, plan.FileStem, extension, audioSource, destinationRoot, warnings);
-            audioLegacy = ClaimLegacyFile(target, audioDestination, extension, destinationRoot);
+                targetDirectory, plan.FileStem, Path.GetExtension(audioSource), audioSource, destinationRoot, warnings);
         }
 
         if (pdfSource is not null)
         {
             pdfDestination = ClaimDestination(
                 targetDirectory, plan.FileStem, ".pdf", pdfSource, destinationRoot, warnings);
-            pdfLegacy = ClaimLegacyFile(target, pdfDestination, ".pdf", destinationRoot);
         }
 
         return new PlannedCopy
         {
             Book = book,
-            Label = label,
+            Title = title,
             TargetDirectory = audioDestination is null && pdfDestination is null ? null : targetDirectory,
             AudioSource = audioDestination is null ? null : audioSource,
             AudioDestination = audioDestination,
-            AudioLegacyPath = audioLegacy,
             PdfSource = pdfDestination is null ? null : pdfSource,
             PdfDestination = pdfDestination,
-            PdfLegacyPath = pdfLegacy,
             Warning = warnings.Count > 0 ? string.Join("; ", warnings) : null
         };
     }
-
-    /// <summary>Where a book goes, and where older versions left it loose.</summary>
-    /// <param name="Directory">The folder the book's files are written to.</param>
-    /// <param name="LegacyDirectory">
-    /// The folder that used to hold the book's files loose, when the book now gets a folder of its
-    /// own; null when the layout for this book has not changed.
-    /// </param>
-    /// <param name="LegacyStem">The file name, without extension, the book had in that folder.</param>
-    private sealed record TargetDirectory(string Directory, string? LegacyDirectory, string? LegacyStem);
 
     /// <summary>
     /// Every book gets a folder of its own. Audiobookshelf, Plex and friends treat a folder as one
     /// book, and an audio file lying loose in an author or series folder makes them read that whole
     /// folder as a single book, hiding every series underneath it.
     /// </summary>
-    private TargetDirectory ResolveTargetDirectory(string destinationRoot, BookSortPlan plan, string sourcePath)
+    private string ResolveTargetDirectory(string destinationRoot, BookSortPlan plan, string sourcePath)
     {
         var parentDirectory = ResolveParentDirectory(destinationRoot, plan);
 
         // "Book 3" already is a folder per book, and always has been.
         return plan.SeriesSequence is null
             ? ClaimBookDirectory(parentDirectory, plan.FileStem, sourcePath)
-            : new TargetDirectory(Path.Combine(parentDirectory, $"Book {plan.SeriesSequence}"), null, null);
+            : Path.Combine(parentDirectory, $"Book {plan.SeriesSequence}");
+    }
+
+    private string ResolveAuthorDirectory(string destinationRoot, BookSortPlan plan)
+    {
+        return Path.Combine(destinationRoot, ResolveDirectoryName(destinationRoot, plan.Author, FolderKind.Name));
     }
 
     /// <summary>The author folder, or the series folder inside it when the book is in a series.</summary>
     private string ResolveParentDirectory(string destinationRoot, BookSortPlan plan)
     {
-        var authorDirectory = Path.Combine(
-            destinationRoot,
-            ResolveDirectoryName(destinationRoot, plan.Author, PathSanitizer.NormalizeComparisonKey));
+        var authorDirectory = ResolveAuthorDirectory(destinationRoot, plan);
 
         return plan.SeriesName is null
             ? authorDirectory
-            : Path.Combine(
-                authorDirectory,
-                ResolveDirectoryName(authorDirectory, plan.SeriesName, PathSanitizer.NormalizeSeriesKey));
+            : Path.Combine(authorDirectory, ResolveDirectoryName(authorDirectory, plan.SeriesName, FolderKind.Series));
     }
 
     /// <summary>
     /// Names the folder for a book filed by title. Two different books with the same title must
     /// not share one, or a library tool would merge them into a single book, so the second becomes
-    /// "Title (2)" — in list order, which is also the order older versions used when they named the
-    /// loose files "Title (2).m4b", so the two line up.
+    /// "Title (2)", in list order.
     /// </summary>
-    private TargetDirectory ClaimBookDirectory(string parentDirectory, string title, string sourcePath)
+    private string ClaimBookDirectory(string parentDirectory, string title, string sourcePath)
     {
-        var baseName = ResolveDirectoryName(parentDirectory, title, PathSanitizer.NormalizeComparisonKey);
+        var baseName = ResolveDirectoryName(parentDirectory, title, FolderKind.Name);
         var claim = ClaimFirstFree(
             _claimedBookDirectories, sourcePath, suffix => Path.Combine(parentDirectory, baseName + suffix));
 
         // Out of names: share the folder; ClaimDestination still keeps the files apart.
-        return claim is null
-            ? new TargetDirectory(Path.Combine(parentDirectory, baseName), null, null)
-            : new TargetDirectory(claim.Path, parentDirectory, title + claim.Suffix);
+        return claim?.Path ?? Path.Combine(parentDirectory, baseName);
     }
 
     /// <summary>
-    /// Finds the copy an older version left loose in the author or series folder, so the sort can
-    /// move it into the book's new folder instead of copying the book a second time and leaving
-    /// the loose file behind to keep confusing library tools.
+    /// Finds the copy of each book that an older version filed somewhere else, so the sort can move
+    /// it into the book's folder instead of copying the book a second time and leaving the old file
+    /// behind to keep confusing library tools.
     /// </summary>
-    private string? ClaimLegacyFile(TargetDirectory target, string? destination, string extension, string destinationRoot)
+    private List<PlannedCopy> ClaimLegacyFiles(List<PlannedCopy> planned, List<BookSortPlan> namingPlans, string destinationRoot)
     {
-        if (destination is null || target.LegacyDirectory is null || target.LegacyStem is null || File.Exists(destination))
+        // Worked out for every book, in list order, before anything is claimed: the old names are
+        // a replay of the old list-order naming, which has to see every book to come out right.
+        var audioCandidates = new List<List<(LegacyLayout Layout, string Path)>>(planned.Count);
+        var pdfCandidates = new List<List<(LegacyLayout Layout, string Path)>>(planned.Count);
+        for (var i = 0; i < planned.Count; i++)
+        {
+            var copy = planned[i];
+            audioCandidates.Add(LegacyCandidates(namingPlans[i], copy.AudioSource, copy.AudioDestination, destinationRoot));
+            pdfCandidates.Add(LegacyCandidates(namingPlans[i], copy.PdfSource, copy.PdfDestination, destinationRoot));
+        }
+
+        var audioLegacy = new string?[planned.Count];
+        var pdfLegacy = new string?[planned.Count];
+        foreach (var layout in Enum.GetValues<LegacyLayout>())
+        {
+            for (var i = 0; i < planned.Count; i++)
+            {
+                audioLegacy[i] ??= ClaimLegacyFile(audioCandidates[i], layout, destinationRoot);
+                pdfLegacy[i] ??= ClaimLegacyFile(pdfCandidates[i], layout, destinationRoot);
+            }
+        }
+
+        return planned
+            .Select((copy, i) => copy with { AudioLegacyPath = audioLegacy[i], PdfLegacyPath = pdfLegacy[i] })
+            .ToList();
+    }
+
+    /// <summary>
+    /// Where older versions may have left one of a book's files, most likely first. Empty when the
+    /// book has nothing to write or its file is already where it belongs.
+    /// </summary>
+    private List<(LegacyLayout Layout, string Path)> LegacyCandidates(
+        BookSortPlan plan,
+        string? sourcePath,
+        string? destination,
+        string destinationRoot)
+    {
+        var candidates = new List<(LegacyLayout Layout, string Path)>();
+        if (sourcePath is null || destination is null)
+        {
+            return candidates;
+        }
+
+        var stem = plan.FileStem;
+        var extension = Path.GetExtension(destination);
+        var fileName = stem + extension;
+        var authorDirectory = ResolveAuthorDirectory(destinationRoot, plan);
+        var parentDirectory = ResolveParentDirectory(destinationRoot, plan);
+
+        // Replayed even when the file is already in place: later books' old names depend on it.
+        var looseFile = plan.SeriesSequence is null
+            ? ReplayLooseFileName(parentDirectory, stem, extension, sourcePath)
+            : null;
+
+        if (File.Exists(destination))
+        {
+            return candidates;
+        }
+
+        if (looseFile is not null)
+        {
+            candidates.Add((LegacyLayout.Loose, looseFile));
+        }
+
+        if (plan.SeriesName is not null)
+        {
+            candidates.Add((LegacyLayout.Standalone, Path.Combine(authorDirectory, fileName)));
+            candidates.Add((LegacyLayout.Standalone, Path.Combine(BookFolderIn(authorDirectory, stem), fileName)));
+        }
+
+        if (plan.SeriesSequence is not null)
+        {
+            candidates.Add((LegacyLayout.Unnumbered, Path.Combine(BookFolderIn(parentDirectory, stem), fileName)));
+            candidates.Add((LegacyLayout.Unnumbered, Path.Combine(parentDirectory, fileName)));
+        }
+
+        return candidates;
+    }
+
+    /// <summary>
+    /// The name an older version gave a book it left loose in <paramref name="directory"/>. Those
+    /// versions named files one at a time, in list order: the plain name, or "Title (2)" only when
+    /// another book had already taken the plain name with the same extension. That numbering has
+    /// nothing to do with the "(2)" of the new book folders (which ignore extensions and make way
+    /// for series folders), so it is replayed on its own. Null when this file was a repeat of
+    /// another book's and so never got a name of its own.
+    /// </summary>
+    private string? ReplayLooseFileName(string directory, string stem, string extension, string sourcePath)
+    {
+        var fileIndex = GetDirectoryFileIndex(directory);
+        var plainName = fileIndex.TryGetValue(BuildFileIndexKey(stem, extension), out var existingName)
+            ? existingName
+            : stem + extension;
+
+        var claim = ClaimFirstFree(
+            _claimedLooseNames,
+            sourcePath,
+            suffix => Path.Combine(directory, suffix.Length == 0 ? plainName : $"{stem}{suffix}{extension}"));
+
+        if (claim is null || claim.AlreadyOwned)
         {
             return null;
         }
 
-        var fileIndex = GetDirectoryFileIndex(target.LegacyDirectory);
-        if (!fileIndex.TryGetValue(BuildFileIndexKey(target.LegacyStem, extension), out var legacyName))
+        // As the old versions did, so a later title spelled differently but meaning the same
+        // collides with this one. A name that is not on disk is never matched: see FindExistingFile.
+        fileIndex.TryAdd(BuildFileIndexKey(Path.GetFileNameWithoutExtension(claim.Path), extension), Path.GetFileName(claim.Path));
+        return claim.Path;
+    }
+
+    /// <summary>The first candidate of <paramref name="layout"/> that exists and nothing else owns.</summary>
+    private string? ClaimLegacyFile(List<(LegacyLayout Layout, string Path)> candidates, LegacyLayout layout, string destinationRoot)
+    {
+        foreach (var candidate in candidates.Where(candidate => candidate.Layout == layout))
+        {
+            var existing = FindExistingFile(candidate.Path);
+            if (existing is not null &&
+                PathSanitizer.IsWithin(destinationRoot, existing) &&
+                !_claimedDestinations.ContainsKey(existing) &&
+                _claimedLegacyFiles.Add(existing))
+            {
+                return existing;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>The file on disk that <paramref name="path"/> names, allowing for equivalent spellings.</summary>
+    private string? FindExistingFile(string path)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (directory is null)
         {
             return null;
         }
 
-        var legacyPath = Path.Combine(target.LegacyDirectory, legacyName);
-        if (!PathSanitizer.IsWithin(destinationRoot, legacyPath) || !_claimedLegacyFiles.Add(legacyPath))
+        var key = BuildFileIndexKey(Path.GetFileNameWithoutExtension(path), Path.GetExtension(path));
+        if (!GetDirectoryFileIndex(directory).TryGetValue(key, out var name))
         {
             return null;
         }
 
-        return legacyPath;
+        // The index also holds names planned in this run, which are not on disk yet.
+        var existing = Path.Combine(directory, name);
+        return File.Exists(existing) ? existing : null;
+    }
+
+    /// <summary>The folder a book titled <paramref name="stem"/> was given inside <paramref name="parentDirectory"/>.</summary>
+    private string BookFolderIn(string parentDirectory, string stem)
+    {
+        return Path.Combine(parentDirectory, ResolveDirectoryName(parentDirectory, stem, FolderKind.Name));
     }
 
     /// <summary>
     /// Picks the folder name to use inside <paramref name="parentDirectory"/>, preferring a folder
     /// that already exists and means the same thing so repeat runs do not fragment a library.
     /// </summary>
-    private string ResolveDirectoryName(string parentDirectory, string requestedName, Func<string?, string> normalizer)
+    private string ResolveDirectoryName(string parentDirectory, string requestedName, FolderKind kind)
     {
-        var normalized = normalizer(requestedName);
+        var normalized = Normalize(requestedName, kind);
         if (normalized.Length == 0)
         {
             return requestedName;
         }
 
-        var cacheKey = $"{parentDirectory}\u0000{normalized}";
+        // The kind is part of the key: "The Witcher" as a series and "Witcher" as a book normalise
+        // to the same text under different rules, and must not be given each other's folder.
+        var cacheKey = $"{parentDirectory}\u0000{kind}\u0000{normalized}";
         if (_resolvedDirectoryNames.TryGetValue(cacheKey, out var cached))
         {
             return cached;
@@ -218,7 +362,7 @@ public sealed class SortPlanner
         foreach (var existingDirectory in SafeEnumerateDirectories(parentDirectory))
         {
             var existingName = Path.GetFileName(existingDirectory);
-            if (!string.IsNullOrWhiteSpace(existingName) && normalizer(existingName) == normalized)
+            if (!string.IsNullOrWhiteSpace(existingName) && Normalize(existingName, kind) == normalized)
             {
                 resolved = existingName;
                 break;
@@ -278,9 +422,8 @@ public sealed class SortPlanner
     }
 
     /// <summary>A path reserved by <see cref="ClaimFirstFree"/>.</summary>
-    /// <param name="Suffix">"" for the plain name, otherwise " (2)", " (3)", ...</param>
     /// <param name="AlreadyOwned">The owner had claimed this path earlier in the run.</param>
-    private sealed record Claim(string Path, string Suffix, bool AlreadyOwned);
+    private sealed record Claim(string Path, bool AlreadyOwned);
 
     /// <summary>
     /// Reserves the first of "Name", "Name (2)", "Name (3)"... that nobody else has claimed in this
@@ -295,16 +438,23 @@ public sealed class SortPlanner
 
             if (claims.TryAdd(candidate, owner))
             {
-                return new Claim(candidate, suffix, AlreadyOwned: false);
+                return new Claim(candidate, AlreadyOwned: false);
             }
 
             if (string.Equals(claims[candidate], owner, StringComparison.OrdinalIgnoreCase))
             {
-                return new Claim(candidate, suffix, AlreadyOwned: true);
+                return new Claim(candidate, AlreadyOwned: true);
             }
         }
 
         return null;
+    }
+
+    private static string Normalize(string name, FolderKind kind)
+    {
+        return kind == FolderKind.Series
+            ? PathSanitizer.NormalizeSeriesKey(name)
+            : PathSanitizer.NormalizeComparisonKey(name);
     }
 
     private Dictionary<string, string> GetDirectoryFileIndex(string directory)
@@ -361,28 +511,10 @@ public sealed class SortPlanner
         }
     }
 
-    private static string BuildLabel(OpenAudible book, BookSortPlan plan)
+    /// <summary>"We Are Legion (We Are Bob) — Dennis E. Taylor": how a person would name the book.</summary>
+    private static string BuildTitle(OpenAudible book, BookSortPlan plan)
     {
-        var parts = new List<string> { $"Artist: {plan.Author}" };
-
-        if (plan.SeriesName is not null)
-        {
-            parts.Add($"Series: {plan.SeriesName}");
-        }
-
-        if (plan.SeriesSequence is not null)
-        {
-            parts.Add($"Book: {plan.SeriesSequence}");
-        }
-
-        var title = PathSanitizer.SanitizeSegment(book.Title) ?? plan.FileStem;
-        parts.Add($"Title: {title}");
-
-        if (!string.IsNullOrWhiteSpace(book.Filename))
-        {
-            parts.Add($"File: {book.Filename.Trim()}");
-        }
-
-        return string.Join(" | ", parts);
+        var title = string.IsNullOrWhiteSpace(book.Title) ? plan.FileStem : book.Title.Trim();
+        return $"{title} — {plan.Author}";
     }
 }

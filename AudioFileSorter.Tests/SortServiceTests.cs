@@ -71,7 +71,7 @@ public class SortServiceTests
         await sortTask;
         Assert.True(service.GetProgress().IsComplete);
 
-        service.SetProgress(new SortProgressInfo { CurrentBook = 1, TotalBooks = 25, Percentage = 4 });
+        service.SetProgress(new SortProgressResponse { CurrentBook = 1, TotalBooks = 25, Percentage = 4 });
 
         var progress = service.GetProgress();
         Assert.True(progress.IsComplete);

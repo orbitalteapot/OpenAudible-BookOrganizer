@@ -13,8 +13,7 @@ public class FileSorterTests
         var summary = await Sort(workspace, TempWorkspace.Book());
 
         Assert.Equal(["An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(0, summary.FailedBooks);
+        Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
         Assert.Equal("audio-bytes", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
     }
 
@@ -70,9 +69,8 @@ public class FileSorterTests
         var first = await Sort(workspace, TempWorkspace.Book());
         var second = await Sort(workspace, TempWorkspace.Book());
 
-        Assert.Equal(1, first.CopiedBooks);
-        Assert.Equal(0, second.CopiedBooks);
-        Assert.Equal(1, second.SkippedBooks);
+        Assert.Equal(SortCounts.Empty with { New = 1 }, first.Counts);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, second.Counts);
         Assert.Single(workspace.DestinationFiles());
     }
 
@@ -85,7 +83,7 @@ public class FileSorterTests
 
         var summary = await Sort(workspace, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.CopiedBooks);
+        Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
         Assert.Equal("new-audio", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
     }
 
@@ -97,9 +95,23 @@ public class FileSorterTests
         var summary = await Sort(workspace, TempWorkspace.Book());
 
         Assert.Empty(workspace.DestinationDirectories());
-        Assert.Equal(0, summary.CopiedBooks);
-        Assert.Equal(1, summary.MissingBooks);
-        Assert.Equal(1, summary.WarningCount);
+        Assert.Equal(SortCounts.Empty with { NotFound = 1 }, summary.Counts);
+        Assert.Equal(1, summary.ProblemCount);
+    }
+
+    [Fact]
+    public async Task Sort_names_the_book_and_the_problem_in_plain_language()
+    {
+        using var workspace = new TempWorkspace();
+
+        var summary = await Sort(workspace, TempWorkspace.Book(title: "We Are Legion (We Are Bob)", author: "Dennis E. Taylor"));
+
+        Assert.Equal(
+            new SortProblem(
+                SortProblemKind.NotFound,
+                "We Are Legion (We Are Bob) — Dennis E. Taylor",
+                "No file for this book in the source folder"),
+            Assert.Single(summary.Problems));
     }
 
     [Fact]
@@ -113,13 +125,9 @@ public class FileSorterTests
             TempWorkspace.Book(title: "Present Book", filename: "present"),
             TempWorkspace.Book(title: "Absent Book", filename: "absent"));
 
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(1, summary.MissingBooks);
-
         // The distinction is the whole point: reporting a book that was never downloaded as
         // "already up to date" tells someone their library is organised when it is not.
-        Assert.Equal(0, summary.SkippedBooks);
-        Assert.Equal(0, summary.FailedBooks);
+        Assert.Equal(SortCounts.Empty with { New = 1, NotFound = 1 }, summary.Counts);
     }
 
     [Fact]
@@ -137,9 +145,7 @@ public class FileSorterTests
         await Sort(workspace, books);
         var second = await Sort(workspace, books);
 
-        Assert.Equal(0, second.CopiedBooks);
-        Assert.Equal(1, second.SkippedBooks);
-        Assert.Equal(1, second.MissingBooks);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1, NotFound = 1 }, second.Counts);
     }
 
     [Fact]
@@ -157,16 +163,16 @@ public class FileSorterTests
             TempWorkspace.Book(title: "Present Book", filename: "present"),
             TempWorkspace.Book(title: "Absent Book", filename: "absent"));
 
-        await WaitForAsync(() => { lock (reports) { return reports.Any(r => r.IsComplete); } });
+        await WaitForAsync(() => { lock (reports) { return reports.Any(r => r.CurrentBook == 2); } });
 
         SortProgressInfo final;
         lock (reports)
         {
-            final = reports.Last(r => r.IsComplete);
+            final = reports.Single(r => r.CurrentBook == 2);
         }
 
-        Assert.Equal(1, final.MissingBooks);
-        Assert.Equal(0, final.SkippedBooks);
+        Assert.Equal(1, final.Counts.NotFound);
+        Assert.Equal(0, final.Counts.UpToDate);
     }
 
     [Fact]
@@ -188,8 +194,37 @@ public class FileSorterTests
         Assert.Equal(
             ["An Author/A Book/A Book.m4b", "An Author/A Book/A Book.pdf", "An Author/The Series/Book 1/Series Book.m4b"],
             workspace.DestinationFiles());
-        Assert.Equal(0, summary.CopiedBooks);
-        Assert.Equal(2, summary.SkippedBooks);
+        // The loose book was moved; the series book was already in place.
+        Assert.Equal(SortCounts.Empty with { Moved = 1, UpToDate = 1 }, summary.Counts);
+    }
+
+    [Fact]
+    public async Task Sort_upgrades_an_old_library_so_nothing_is_left_loose_beside_a_series()
+    {
+        // The layout main wrote for a standalone book named like its author's series, plus a book
+        // this version filed standalone before it gained a series named after itself.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("standalone.m4b", "standalone");
+        workspace.WriteSourceFile("legion.m4b", "legion");
+        workspace.WriteSourceFile("foo.m4b", "foo");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Bobiverse.m4b"), "standalone");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Bobiverse", "Book 1", "We Are Legion.m4b"), "legion");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Foo", "Foo.m4b"), "foo");
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Bobiverse", filename: "standalone"),
+            TempWorkspace.Book(title: "We Are Legion", filename: "legion", seriesName: "Bobiverse", seriesSequence: "1"),
+            TempWorkspace.Book(title: "Foo", filename: "foo", seriesName: "Foo", seriesSequence: "1"));
+
+        Assert.Equal(
+            [
+                "An Author/Bobiverse (2)/Bobiverse.m4b",
+                "An Author/Bobiverse/Book 1/We Are Legion.m4b",
+                "An Author/Foo/Book 1/Foo.m4b"
+            ],
+            workspace.DestinationFiles());
+        Assert.Equal(SortCounts.Empty with { Moved = 2, UpToDate = 1 }, summary.Counts);
     }
 
     [Fact]
@@ -203,7 +238,8 @@ public class FileSorterTests
 
         Assert.Equal(["An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
         Assert.Equal("new-audio", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
-        Assert.Equal(1, summary.UpdatedBooks);
+        // Moved and then replaced: counted once, as the stronger of the two.
+        Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
     }
 
     [Fact]
@@ -222,10 +258,13 @@ public class FileSorterTests
             TempWorkspace.Book(title: "Blocked Book", filename: "blocked"));
 
         Assert.Equal(2, summary.TotalBooks);
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(1, summary.FailedBooks);
+        Assert.Equal(SortCounts.Empty with { New = 1, Failed = 1 }, summary.Counts);
         Assert.Contains("An Author/Good Book/Good Book.m4b", workspace.DestinationFiles());
-        Assert.Contains(summary.Warnings, warning => warning.Contains("blocked", StringComparison.OrdinalIgnoreCase));
+
+        var problem = Assert.Single(summary.Problems);
+        Assert.Equal(SortProblemKind.Failed, problem.Kind);
+        Assert.Equal("Blocked Book — An Author", problem.Book);
+        Assert.StartsWith("Could not copy the file: ", problem.Message);
     }
 
     [Fact]
@@ -281,7 +320,7 @@ public class FileSorterTests
             workspace.Source, workspace.Destination, [], progress: new Progress<SortProgressInfo>(reports.Add));
 
         Assert.Equal(0, summary.TotalBooks);
-        await WaitForAsync(() => reports.Any(r => r.IsComplete));
+        await WaitForAsync(() => reports.Any(r => r.Percentage == 100));
         Assert.All(reports, report => Assert.False(double.IsNaN(report.Percentage)));
     }
 
@@ -290,8 +329,11 @@ public class FileSorterTests
     {
         using var workspace = new TempWorkspace();
 
-        await Assert.ThrowsAsync<DirectoryNotFoundException>(() => new FileSorter().SortAudioFiles(
+        var error = await Assert.ThrowsAsync<SortPathException>(() => new FileSorter().SortAudioFiles(
             Path.Combine(workspace.Root, "does-not-exist"), workspace.Destination, [TempWorkspace.Book()]));
+
+        Assert.Equal(SortPathField.Source, error.Problem.Field);
+        Assert.Equal(SortPathProblemCode.NotFound, error.Problem.Code);
     }
 
     [Theory]
@@ -302,23 +344,43 @@ public class FileSorterTests
     {
         using var workspace = new TempWorkspace();
 
-        await Assert.ThrowsAsync<ArgumentException>(() => new FileSorter().SortAudioFiles(
-            path, workspace.Destination, [TempWorkspace.Book()]));
+        var missingSource = await Assert.ThrowsAsync<SortPathException>(() => new FileSorter().SortAudioFiles(
+            path!, workspace.Destination, [TempWorkspace.Book()]));
+        Assert.Equal(new { Field = SortPathField.Source, Code = SortPathProblemCode.NotSet },
+            new { missingSource.Problem.Field, missingSource.Problem.Code });
 
-        await Assert.ThrowsAsync<ArgumentException>(() => new FileSorter().SortAudioFiles(
-            workspace.Source, path, [TempWorkspace.Book()]));
+        var missingDestination = await Assert.ThrowsAsync<SortPathException>(() => new FileSorter().SortAudioFiles(
+            workspace.Source, path!, [TempWorkspace.Book()]));
+        Assert.Equal(new { Field = SortPathField.Destination, Code = SortPathProblemCode.NotSet },
+            new { missingDestination.Problem.Field, missingDestination.Problem.Code });
     }
 
     [Fact]
-    public async Task Sort_creates_the_destination_folder_when_it_does_not_exist_yet()
+    public async Task Sort_creates_a_missing_destination_folder_only_when_asked_to()
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b");
         var destination = Path.Combine(workspace.Root, "new-destination");
 
-        await new FileSorter().SortAudioFiles(workspace.Source, destination, [TempWorkspace.Book()]);
+        await new FileSorter().SortAudioFiles(
+            workspace.Source, destination, [TempWorkspace.Book()], new SortOptions { CreateDestination = true });
 
         Assert.True(File.Exists(Path.Combine(destination, "An Author", "A Book", "A Book.m4b")));
+    }
+
+    [Fact]
+    public async Task Sort_refuses_a_missing_destination_folder_by_default()
+    {
+        // Usually an unplugged drive: creating the folder would fill the internal disk instead.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b");
+        var destination = Path.Combine(workspace.Root, "unplugged-drive");
+
+        var error = await Assert.ThrowsAsync<SortPathException>(() =>
+            new FileSorter().SortAudioFiles(workspace.Source, destination, [TempWorkspace.Book()]));
+
+        Assert.Equal(SortPathProblemCode.DestinationMissing, error.Problem.Code);
+        Assert.False(Directory.Exists(destination));
     }
 
     [Fact]
@@ -357,15 +419,53 @@ public class FileSorterTests
         {
             lock (reports)
             {
-                return reports.Any(r => r.IsComplete);
+                return reports.Any(r => r.Percentage == 100);
             }
         });
 
         lock (reports)
         {
             Assert.All(reports, report => Assert.InRange(report.Percentage, 0, 100));
-            Assert.Equal(100, reports.Last(r => r.IsComplete).Percentage);
         }
+    }
+
+    [Fact]
+    public async Task Every_progress_report_is_a_consistent_snapshot()
+    {
+        // Books finish concurrently; a report pairing one worker's count with another's total
+        // would show numbers that do not add up.
+        using var workspace = new TempWorkspace();
+        var books = new List<OpenAudible>();
+        for (var i = 0; i < 60; i++)
+        {
+            if (i % 3 != 0)
+            {
+                workspace.WriteSourceFile($"book-{i}.m4b", $"content-{i}");
+            }
+
+            books.Add(TempWorkspace.Book(title: $"Book {i}", filename: $"book-{i}"));
+        }
+
+        var reports = new List<SortProgressInfo>();
+        await new FileSorter().SortAudioFiles(
+            workspace.Source, workspace.Destination, books,
+            new SortOptions { MaxParallelism = 8 }, new InlineProgress(reports.Add));
+
+        Assert.All(reports, report => Assert.Equal(report.CurrentBook, report.Counts.Total));
+        Assert.All(reports, report => Assert.Equal(report.Counts.NotFound, report.ProblemCount));
+        Assert.Equal(Enumerable.Range(0, 61), reports.Select(report => report.CurrentBook));
+    }
+
+    [Fact]
+    public async Task Sort_copies_a_book_listed_twice_once_and_does_not_call_the_repeat_missing()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b");
+
+        var summary = await Sort(workspace, TempWorkspace.Book(), TempWorkspace.Book());
+
+        Assert.Equal(SortCounts.Empty with { New = 1, UpToDate = 1 }, summary.Counts);
+        Assert.Empty(summary.Problems);
     }
 
     [Fact]
@@ -391,15 +491,27 @@ public class FileSorterTests
 
         var summary = await new FileSorter().SortAudioFiles(workspace.Source, workspace.Destination, books);
 
-        Assert.Equal(120, summary.CopiedBooks);
-        Assert.Equal(0, summary.FailedBooks);
+        Assert.Equal(SortCounts.Empty with { New = 120 }, summary.Counts);
         Assert.Equal(3, Directory.GetDirectories(workspace.Destination).Length);
         Assert.Equal(120, workspace.DestinationFiles().Length);
     }
 
+    /// <summary>Cancels as soon as the first book is done (not at the report made when the run starts).</summary>
     private sealed class CancelOnFirstReport(CancellationTokenSource cancellation) : IProgress<SortProgressInfo>
     {
-        public void Report(SortProgressInfo value) => cancellation.Cancel();
+        public void Report(SortProgressInfo value)
+        {
+            if (value.CurrentBook > 0)
+            {
+                cancellation.Cancel();
+            }
+        }
+    }
+
+    /// <summary>Reports on the calling thread, in the order the sorter made the reports.</summary>
+    private sealed class InlineProgress(Action<SortProgressInfo> handler) : IProgress<SortProgressInfo>
+    {
+        public void Report(SortProgressInfo value) => handler(value);
     }
 
     private static Task<SortSummary> Sort(TempWorkspace workspace, params OpenAudible[] books)

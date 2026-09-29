@@ -1,3 +1,4 @@
+using AudioFileSorter.Model;
 using ManagerApi.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -86,7 +87,7 @@ public class SortScheduleTests
         using var workspace = new TempWorkspace();
 
         Assert.False(CreateScheduler(null).TryUpdate(Runnable(workspace) with { CsvPath = "missing.csv" }, out var error));
-        Assert.Contains("CSV file not found", error);
+        Assert.Contains("library export was not found", error);
     }
 
     [Fact]
@@ -125,7 +126,8 @@ public class SortScheduleTests
     private static SortScheduler CreateScheduler(string? settingsPath, SortSchedule? serverSchedule = null)
     {
         var logger = NullLogger<SortScheduler>.Instance;
-        return new SortScheduler(new SortService(), new SortScheduleStore(settingsPath, logger), serverSchedule, logger);
+        return new SortScheduler(
+            new SortService(), new SortScheduleStore(settingsPath, logger), serverSchedule, logger, SortOptions.DefaultParallelism);
     }
 
     /// <summary>A schedule whose paths exist, with one book in the export.</summary>

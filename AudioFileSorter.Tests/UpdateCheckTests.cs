@@ -19,8 +19,7 @@ public class UpdateCheckTests
 
         var summary = await Sort(workspace, mode, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(1, summary.UpdatedBooks);
+        Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
         Assert.Equal(
             "the-re-recorded-and-longer-edition",
             File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
@@ -39,9 +38,7 @@ public class UpdateCheckTests
 
         var summary = await Sort(workspace, mode, TempWorkspace.Book());
 
-        Assert.Equal(0, summary.CopiedBooks);
-        Assert.Equal(0, summary.UpdatedBooks);
-        Assert.Equal(1, summary.SkippedBooks);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
         Assert.Equal(writtenAt, File.GetLastWriteTimeUtc(destination));
     }
 
@@ -60,8 +57,7 @@ public class UpdateCheckTests
 
         var summary = await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
 
-        Assert.Equal(0, summary.CopiedBooks);
-        Assert.Equal(1, summary.SkippedBooks);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
         Assert.Equal(original, File.ReadAllText(destination));
     }
 
@@ -83,8 +79,7 @@ public class UpdateCheckTests
 
         var summary = await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(1, summary.UpdatedBooks);
+        Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
         Assert.Equal(edited, File.ReadAllText(destination));
     }
 
@@ -98,9 +93,7 @@ public class UpdateCheckTests
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(1, summary.UpdatedBooks);
-        Assert.Equal(0, summary.FailedBooks);
+        Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
         Assert.Equal(edited, File.ReadAllText(destination));
     }
 
@@ -116,20 +109,19 @@ public class UpdateCheckTests
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.UpdatedBooks);
+        Assert.Equal(1, summary.Counts.Updated);
         Assert.Equal(edited, File.ReadAllText(destinationPdf));
     }
 
     [Fact]
-    public async Task A_brand_new_book_counts_as_copied_but_not_as_updated()
+    public async Task A_brand_new_book_counts_as_new_not_as_updated()
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "audio");
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(0, summary.UpdatedBooks);
+        Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
     }
 
     [Fact]
@@ -143,7 +135,7 @@ public class UpdateCheckTests
         var summary = await new FileSorter().SortAudioFiles(
             workspace.Source, workspace.Destination, [TempWorkspace.Book()]);
 
-        Assert.Equal(0, summary.CopiedBooks);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
         Assert.Equal(original, File.ReadAllText(destination));
     }
 
@@ -163,8 +155,8 @@ public class UpdateCheckTests
             new SortOptions { ComparisonMode = FileComparisonMode.Full },
             new InlineTestProgress(reports.Add));
 
-        Assert.Contains(reports, report => report.UpdatedBooks == 1);
-        Assert.Equal(1, reports[^1].UpdatedBooks);
+        Assert.Contains(reports, report => report.Counts.Updated == 1);
+        Assert.Equal(1, reports[^1].Counts.Updated);
     }
 
     /// <summary>
@@ -295,7 +287,7 @@ public class UpdateCheckTests
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.UpdatedBooks);
+        Assert.Equal(1, summary.Counts.Updated);
         Assert.Equal(100_000, new FileInfo(destination).Length);
     }
 

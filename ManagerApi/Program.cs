@@ -26,6 +26,13 @@ if (!SortOptions.TryParseComparisonMode(configuredComparisonMode, out var defaul
     defaultComparisonMode = SortOptions.Default.ComparisonMode;
 }
 
+// OABO_MAX_PARALLELISM overrides how many books are copied at once, for a NAS or a USB disk that
+// slows down under several concurrent copies.
+var maxParallelism =
+    int.TryParse(Environment.GetEnvironmentVariable("OABO_MAX_PARALLELISM"), out var requestedParallelism) && requestedParallelism > 0
+        ? requestedParallelism
+        : SortOptions.DefaultParallelism;
+
 // SORT_INTERVAL ("6h", "1d", ...) sorts on a timer using the three paths above. Setting it fixes
 // the schedule for the container; leaving it unset lets the Sort page set one instead.
 var configuredInterval = Environment.GetEnvironmentVariable("SORT_INTERVAL");
@@ -66,7 +73,7 @@ builder.Services.AddSingleton(services =>
 {
     var logger = services.GetRequiredService<ILogger<SortScheduler>>();
     var store = new SortScheduleStore(Environment.GetEnvironmentVariable("OABO_SETTINGS_PATH"), logger);
-    return new SortScheduler(services.GetRequiredService<SortService>(), store, serverSchedule, logger);
+    return new SortScheduler(services.GetRequiredService<SortService>(), store, serverSchedule, logger, maxParallelism);
 });
 builder.Services.AddHostedService(services => services.GetRequiredService<SortScheduler>());
 
@@ -172,14 +179,15 @@ app.MapPost("/api/sort/start", (SortRequest? request, SortService sortService) =
 
     // Validate before starting so the user gets a real error instead of a run that reports
     // failure seconds later, or worse, never reports at all.
-    var pathError = SortService.ValidatePaths(request.CsvPath, request.SourcePath, request.DestinationPath);
+    // A person pressed Start, so a missing destination is created as it always has been here.
+    var pathError = SortService.ValidatePaths(request.CsvPath, request.SourcePath, request.DestinationPath, createDestination: true);
     if (pathError is not null)
     {
         return Results.BadRequest(new { error = pathError });
     }
 
     // Checking IsSorting separately would leave a window where two requests both start a run.
-    var options = new SortOptions { ComparisonMode = comparisonMode };
+    var options = new SortOptions { ComparisonMode = comparisonMode, MaxParallelism = maxParallelism, CreateDestination = true };
     if (!sortService.TryStartSort(request.CsvPath, request.SourcePath, request.DestinationPath, options, out var sortTask))
     {
         return Results.Conflict(new { error = "Sort already in progress" });

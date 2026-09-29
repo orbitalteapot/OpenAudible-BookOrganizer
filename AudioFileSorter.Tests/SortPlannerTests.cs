@@ -232,16 +232,192 @@ public class SortPlannerTests
         Assert.Equal(secondLoose, planned[1].AudioLegacyPath);
     }
 
+    // The upgrade tests below seed the destination with exactly what the version on main wrote:
+    // standalone books loose in the author folder, series books without a number loose in the
+    // series folder, numbered series books in "Series/Book N/", and a " (2)" suffix only when two
+    // files of the same name and extension landed in the same folder, in list order.
+
     [Fact]
-    public void Plan_never_moves_files_for_a_numbered_series_book()
+    public void Upgrade_moves_a_standalone_book_named_like_its_authors_series()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("standalone.m4b");
+        workspace.WriteSourceFile("bobiverse-1.m4b");
+        var loose = workspace.WriteDestinationFile(Path.Combine("Dennis E. Taylor", "Bobiverse.m4b"), "audio");
+        workspace.WriteDestinationFile(Path.Combine("Dennis E. Taylor", "Bobiverse", "Book 1", "We Are Legion.m4b"), "audio");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(author: "Dennis E. Taylor", title: "Bobiverse", filename: "standalone"),
+            TempWorkspace.Book(
+                author: "Dennis E. Taylor", title: "We Are Legion", filename: "bobiverse-1",
+                seriesName: "Bobiverse", seriesSequence: "1"));
+
+        // The new folder is "Bobiverse (2)" because the series has "Bobiverse", but the old file
+        // never had a suffix: main only numbered files that collided with another file.
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "Dennis E. Taylor", "Bobiverse (2)", "Bobiverse.m4b"),
+            planned[0].AudioDestination);
+        Assert.Equal(loose, planned[0].AudioLegacyPath);
+        Assert.Null(planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_moves_both_formats_of_a_title_that_never_needed_a_suffix()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("first.m4b");
+        workspace.WriteSourceFile("second.mp3");
+        var looseM4b = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "audio");
+        var looseMp3 = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.mp3"), "audio");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Collected Works", filename: "first"),
+            TempWorkspace.Book(title: "Collected Works", filename: "second", m4b: null, mp3: "Yes"));
+
+        Assert.Equal(looseM4b, planned[0].AudioLegacyPath);
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "Collected Works (2)", "Collected Works.mp3"),
+            planned[1].AudioDestination);
+        Assert.Equal(looseMp3, planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_keeps_a_book_apart_from_a_series_that_differs_only_by_the()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("witcher.m4b");
+        workspace.WriteSourceFile("blood-of-elves.m4b");
+        var loose = workspace.WriteDestinationFile(Path.Combine("An Author", "Witcher.m4b"), "audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "The Witcher", "Book 1", "Blood of Elves.m4b"), "audio");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Blood of Elves", filename: "blood-of-elves", seriesName: "The Witcher", seriesSequence: "1"),
+            TempWorkspace.Book(title: "Witcher", filename: "witcher"));
+
+        // Series names ignore a leading "The"; book names do not. Sharing one lookup gave the book
+        // the series' folder name, then a "(2)" because the series owns it.
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "Witcher", "Witcher.m4b"), planned[1].AudioDestination);
+        Assert.Equal(loose, planned[1].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_replays_the_old_numbering_independently_of_the_new_folders()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("series-1.m4b");
+        workspace.WriteSourceFile("first.m4b");
+        workspace.WriteSourceFile("second.m4b");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works", "Book 1", "Volume One.m4b"), "audio");
+        var firstLoose = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "audio");
+        var secondLoose = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works (2).m4b"), "audio");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Volume One", filename: "series-1", seriesName: "Collected Works", seriesSequence: "1"),
+            TempWorkspace.Book(title: "Collected Works", filename: "first"),
+            TempWorkspace.Book(title: "Collected Works", filename: "second"));
+
+        // The series takes "Collected Works", so the folders are "(2)" and "(3)"; the old files were
+        // the plain name and "(2)".
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "Collected Works (2)", "Collected Works.m4b"),
+            planned[1].AudioDestination);
+        Assert.Equal(firstLoose, planned[1].AudioLegacyPath);
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "Collected Works (3)", "Collected Works.m4b"),
+            planned[2].AudioDestination);
+        Assert.Equal(secondLoose, planned[2].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_moves_a_book_that_has_since_gained_series_metadata()
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b");
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "audio");
+        var loose = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "audio");
 
         var planned = Plan(workspace, TempWorkspace.Book(seriesName: "The Series", seriesSequence: "1"));
 
+        Assert.Equal(loose, planned[0].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_moves_a_book_out_of_its_folder_when_a_series_of_the_same_name_takes_it_over()
+    {
+        // Filed by this version as a standalone book, then given series metadata whose series is
+        // named after the book. The series reuses the folder; the file must not stay loose in it.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b");
+        var old = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "audio");
+
+        var planned = Plan(workspace, TempWorkspace.Book(seriesName: "A Book", seriesSequence: "1"));
+
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "A Book", "Book 1", "A Book.m4b"),
+            planned[0].AudioDestination);
+        Assert.Equal(old, planned[0].AudioLegacyPath);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Upgrade_moves_a_series_book_that_has_since_gained_a_number(bool filedInItsOwnFolder)
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b");
+        var old = workspace.WriteDestinationFile(
+            filedInItsOwnFolder
+                ? Path.Combine("An Author", "The Series", "A Book", "A Book.m4b")
+                : Path.Combine("An Author", "The Series", "A Book.m4b"),
+            "audio");
+
+        var planned = Plan(workspace, TempWorkspace.Book(seriesName: "The Series", seriesSequence: "2"));
+
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "The Series", "Book 2", "A Book.m4b"),
+            planned[0].AudioDestination);
+        Assert.Equal(old, planned[0].AudioLegacyPath);
+    }
+
+    [Fact]
+    public void Upgrade_never_takes_a_file_another_book_is_about_to_write()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("standalone.m4b");
+        workspace.WriteSourceFile("series.m4b");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "audio");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(filename: "series", seriesName: "Other Series", seriesSequence: "1"),
+            TempWorkspace.Book(filename: "standalone"));
+
+        // "An Author/A Book/A Book.m4b" looks like where the series book used to be filed, but it is
+        // the standalone book's own destination.
         Assert.Null(planned[0].AudioLegacyPath);
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b"), planned[1].AudioDestination);
+    }
+
+    [Fact]
+    public void Upgrade_gives_a_loose_file_to_the_book_that_left_it_there_over_one_that_changed_shape()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("series.m4b");
+        workspace.WriteSourceFile("standalone.m4b");
+        var loose = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "audio");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(filename: "series", seriesName: "Other Series", seriesSequence: "1"),
+            TempWorkspace.Book(filename: "standalone"));
+
+        // Listed first, the series book might once have been standalone too, but the standalone
+        // book is exactly where main put it, so the file is its.
+        Assert.Null(planned[0].AudioLegacyPath);
+        Assert.Equal(loose, planned[1].AudioLegacyPath);
     }
 
     [Fact]
@@ -264,7 +440,7 @@ public class SortPlannerTests
         var planned = Plan(workspace, TempWorkspace.Book());
 
         Assert.False(planned[0].HasWork);
-        Assert.NotNull(planned[0].Warning);
+        Assert.True(planned[0].IsMissingFromSource);
         Assert.Null(planned[0].TargetDirectory);
     }
 

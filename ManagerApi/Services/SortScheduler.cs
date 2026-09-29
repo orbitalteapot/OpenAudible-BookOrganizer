@@ -20,17 +20,25 @@ public sealed class SortScheduler : BackgroundService
     private readonly SortService _sortService;
     private readonly SortScheduleStore _store;
     private readonly ILogger<SortScheduler> _logger;
+    private readonly int _maxParallelism;
     private readonly object _lock = new();
 
     private SortSchedule _schedule;
     private CancellationTokenSource _wake = new();
 
     /// <param name="serverSchedule">A schedule fixed by the environment, or null to let the page set it.</param>
-    public SortScheduler(SortService sortService, SortScheduleStore store, SortSchedule? serverSchedule, ILogger<SortScheduler> logger)
+    /// <param name="maxParallelism">Books copied at once by a scheduled run.</param>
+    public SortScheduler(
+        SortService sortService,
+        SortScheduleStore store,
+        SortSchedule? serverSchedule,
+        ILogger<SortScheduler> logger,
+        int maxParallelism)
     {
         _sortService = sortService;
         _store = store;
         _logger = logger;
+        _maxParallelism = maxParallelism;
 
         var saved = store.Load();
         IsManagedByServer = serverSchedule is not null;
@@ -103,7 +111,7 @@ public sealed class SortScheduler : BackgroundService
         }
 
         return schedule.IsEnabled
-            ? SortService.ValidatePaths(schedule.CsvPath!, schedule.SourcePath!, schedule.DestinationPath!)
+            ? SortService.ValidatePaths(schedule.CsvPath!, schedule.SourcePath!, schedule.DestinationPath!, createDestination: false)
             : "Choose all three paths before turning on automatic sorting.";
     }
 
@@ -146,10 +154,12 @@ public sealed class SortScheduler : BackgroundService
         var startedUtc = DateTime.UtcNow;
         _logger.LogInformation("Starting scheduled sort of {CsvPath}", schedule.CsvPath);
 
-        var result = SortService.ValidatePaths(schedule.CsvPath!, schedule.SourcePath!, schedule.DestinationPath!);
+        // Never creates the destination: nobody is there to notice it landing on the internal disk
+        // because the drive it belongs on is unplugged.
+        var result = SortService.ValidatePaths(schedule.CsvPath!, schedule.SourcePath!, schedule.DestinationPath!, createDestination: false);
         if (result is null)
         {
-            var options = new SortOptions { ComparisonMode = schedule.ComparisonMode };
+            var options = new SortOptions { ComparisonMode = schedule.ComparisonMode, MaxParallelism = _maxParallelism };
             if (_sortService.TryStartSort(schedule.CsvPath!, schedule.SourcePath!, schedule.DestinationPath!, options, out var sortTask))
             {
                 await sortTask;
@@ -172,7 +182,7 @@ public sealed class SortScheduler : BackgroundService
     }
 
     /// <summary>"Done: 3 copied, 120 up to date." Only the numbers that are not zero.</summary>
-    private static string Describe(SortProgressInfo progress)
+    private static string Describe(SortProgressResponse progress)
     {
         if (progress.Error is not null)
         {

@@ -15,7 +15,7 @@ public class SortService
     private List<OpenAudible> _books = [];
     private string? _booksCsvPath;
     private (DateTime LastWriteUtc, long Length)? _booksCsvStamp;
-    private SortProgressInfo _currentProgress = new();
+    private SortProgressResponse _currentProgress = new();
     private CancellationTokenSource? _sortCancellation;
     private bool _isSorting;
 
@@ -70,7 +70,7 @@ public class SortService
         }
     }
 
-    public SortProgressInfo GetProgress()
+    public SortProgressResponse GetProgress()
     {
         lock (_sortLock)
         {
@@ -102,32 +102,11 @@ public class SortService
 
     /// <summary>
     /// Checks the three paths a sort needs. Returns a message for the user, or null when the sort
-    /// can go ahead. Creates the destination folder if it is missing.
+    /// can go ahead. Creates a missing destination folder only when <paramref name="createDestination"/> is set.
     /// </summary>
-    public static string? ValidatePaths(string csvPath, string sourcePath, string destinationPath)
+    public static string? ValidatePaths(string csvPath, string sourcePath, string destinationPath, bool createDestination)
     {
-        if (!File.Exists(csvPath))
-        {
-            return $"CSV file not found: {csvPath}";
-        }
-
-        if (!Directory.Exists(sourcePath))
-        {
-            return $"Source folder not found: {sourcePath}";
-        }
-
-        try
-        {
-            Directory.CreateDirectory(destinationPath);
-        }
-        catch (Exception ex)
-        {
-            return $"Destination folder is not writable: {ex.Message}";
-        }
-
-        return PathsOverlap(sourcePath, destinationPath)
-            ? "The destination folder cannot be the source folder or live inside it."
-            : null;
+        return SortPathValidator.Validate(csvPath, sourcePath, destinationPath, createDestination)?.Message;
     }
 
     /// <summary>Starts a sort with the default settings.</summary>
@@ -151,7 +130,7 @@ public class SortService
             }
 
             _isSorting = true;
-            _currentProgress = new SortProgressInfo();
+            _currentProgress = new SortProgressResponse();
             _sortCancellation = new CancellationTokenSource();
         }
 
@@ -182,22 +161,10 @@ public class SortService
             // Deliberately not Progress<T>: it marshals each report through the thread pool, so a
             // per-book report could be delivered after the final one and leave the run looking
             // unfinished forever.
-            var progress = new InlineProgress<SortProgressInfo>(SetProgress);
+            var progress = new InlineProgress<SortProgressInfo>(info => SetProgress(SortProgressResponse.From(info)));
             var summary = await _fileSorter.SortAudioFiles(sourcePath, destinationPath, books, options, progress, cancellation.Token);
 
-            SetProgress(new SortProgressInfo
-            {
-                CurrentBook = summary.TotalBooks,
-                TotalBooks = summary.TotalBooks,
-                CopiedBooks = summary.CopiedBooks,
-                UpdatedBooks = summary.UpdatedBooks,
-                SkippedBooks = summary.SkippedBooks,
-                MissingBooks = summary.MissingBooks,
-                FailedBooks = summary.FailedBooks,
-                WarningCount = summary.WarningCount,
-                Percentage = 100,
-                IsComplete = true
-            });
+            SetProgress(SortProgressResponse.Completed(summary));
         }
         catch (OperationCanceledException)
         {
@@ -221,24 +188,9 @@ public class SortService
     }
 
     /// <summary>The last progress of a run that stopped early, marked as finished.</summary>
-    private static SortProgressInfo Finished(SortProgressInfo snapshot, bool isCanceled = false, string? error = null)
+    private static SortProgressResponse Finished(SortProgressResponse snapshot, bool isCanceled = false, string? error = null)
     {
-        return new SortProgressInfo
-        {
-            CurrentBook = snapshot.CurrentBook,
-            TotalBooks = snapshot.TotalBooks,
-            CopiedBooks = snapshot.CopiedBooks,
-            UpdatedBooks = snapshot.UpdatedBooks,
-            SkippedBooks = snapshot.SkippedBooks,
-            MissingBooks = snapshot.MissingBooks,
-            FailedBooks = snapshot.FailedBooks,
-            WarningCount = snapshot.WarningCount,
-            CurrentTitle = snapshot.CurrentTitle,
-            Percentage = snapshot.Percentage,
-            IsComplete = true,
-            IsCanceled = isCanceled,
-            Error = error
-        };
+        return snapshot with { IsComplete = true, IsCanceled = isCanceled, Error = error };
     }
 
     /// <summary>
@@ -285,25 +237,6 @@ public class SortService
         return result.Books;
     }
 
-    // Copying a library into itself (or into a subfolder of itself) makes the source grow while it
-    // is being read, which never terminates cleanly.
-    private static bool PathsOverlap(string sourcePath, string destinationPath)
-    {
-        try
-        {
-            var source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourcePath));
-            var destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationPath));
-            var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-
-            return string.Equals(source, destination, comparison) ||
-                   destination.StartsWith(source + Path.DirectorySeparatorChar, comparison);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return false;
-        }
-    }
-
     /// <summary>
     /// How the file looked when it was read. Null when it cannot be inspected, which counts as
     /// "changed" — re-reading costs milliseconds, and sorting a stale library costs the user a
@@ -326,7 +259,7 @@ public class SortService
     /// Publishes a progress snapshot. Internal rather than private so the "a finished run stays
     /// finished" guarantee can be tested without racing the thread pool.
     /// </summary>
-    internal void SetProgress(SortProgressInfo progress)
+    internal void SetProgress(SortProgressResponse progress)
     {
         lock (_sortLock)
         {

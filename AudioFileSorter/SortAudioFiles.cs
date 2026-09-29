@@ -1,5 +1,5 @@
 using System.Buffers;
-using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -12,214 +12,95 @@ namespace AudioFileSorter;
 /// </summary>
 public class FileSorter
 {
-    private const int MaxReportedWarnings = 200;
     private const int CopyBufferSize = 81920;
     private const int ComparisonBufferSize = 131072;
     private const string PartialFileSuffix = ".oabo-partial";
-
-    private static readonly object ConsoleLock = new();
+    private const string NotFoundMessage = "No file for this book in the source folder";
 
     /// <summary>
     /// Sorts Open Audible books into the provided destination path.
     /// </summary>
     /// <param name="source">Source folder containing audio files.</param>
     /// <param name="destination">Destination folder to sort files into.</param>
-    /// <param name="openAudibles">List of audiobook metadata. Never modified.</param>
+    /// <param name="books">List of audiobook metadata. Never modified.</param>
     /// <param name="options">Per-run settings. Defaults to <see cref="SortOptions.Default"/>.</param>
-    /// <param name="progress">Optional progress reporter.</param>
+    /// <param name="progress">
+    /// Optional progress reporter, called once after planning and once per finished book. Reports
+    /// are made in order from the worker threads, so the handler should be quick.
+    /// </param>
     /// <param name="cancellationToken">Token used to abort the run.</param>
-    /// <exception cref="ArgumentException">A required path was not supplied.</exception>
-    /// <exception cref="DirectoryNotFoundException">The source folder does not exist.</exception>
-    /// <exception cref="IOException">The destination folder could not be created.</exception>
+    /// <exception cref="SortPathException">The paths cannot be used; see <see cref="SortPathValidator"/>.</exception>
     public async Task<SortSummary> SortAudioFiles(
-        string? source,
-        string? destination,
-        List<OpenAudible> openAudibles,
+        string source,
+        string destination,
+        IReadOnlyList<OpenAudible> books,
         SortOptions? options = null,
         IProgress<SortProgressInfo>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(openAudibles);
-
-        var comparisonMode = (options ?? SortOptions.Default).ComparisonMode;
+        ArgumentNullException.ThrowIfNull(books);
+        options ??= SortOptions.Default;
 
         // These used to be logged and swallowed, which left the UI waiting for a run that was
         // never going to report anything.
-        if (string.IsNullOrWhiteSpace(source))
+        var pathProblem = SortPathValidator.Validate(null, source, destination, options.CreateDestination);
+        if (pathProblem is not null)
         {
-            throw new ArgumentException("Source path is required.", nameof(source));
+            throw new SortPathException(pathProblem);
         }
 
-        if (string.IsNullOrWhiteSpace(destination))
-        {
-            throw new ArgumentException("Destination path is required.", nameof(destination));
-        }
+        var planned = new SortPlanner().Plan(books, source, Path.GetFullPath(destination));
+        var tally = new RunTally(books.Count, progress);
 
-        if (!Directory.Exists(source))
+        foreach (var item in planned.Where(item => item.HasWork && item.Warning is not null))
         {
-            throw new DirectoryNotFoundException($"Source folder not found: {source}");
-        }
-
-        try
-        {
-            Directory.CreateDirectory(destination);
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
-        {
-            throw new IOException($"Destination folder is not writable: {destination}. {ex.Message}", ex);
-        }
-
-        var totalBooks = openAudibles.Count;
-        var warnings = new ConcurrentQueue<string>();
-        var warningCount = 0;
-
-        if (totalBooks == 0)
-        {
-            progress?.Report(new SortProgressInfo { Percentage = 100, IsComplete = true });
-            WriteLine("No books to sort.");
-            return new SortSummary { Warnings = [] };
-        }
-
-        var planned = new SortPlanner().Plan(openAudibles, source, Path.GetFullPath(destination));
-        foreach (var item in planned)
-        {
-            if (item.Warning is not null)
-            {
-                RecordWarning(warnings, ref warningCount, item.Warning);
-            }
+            tally.AddProblem(new SortProblem(SortProblemKind.Warning, item.Title, item.Warning!));
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-
-        WriteLine($"Sorting {totalBooks} books using the {DescribeMode(comparisonMode)} update check.");
-
-        var progressCount = 0;
-        var copiedBooks = 0;
-        var updatedBooks = 0;
-        var skippedBooks = 0;
-        var missingBooks = 0;
-        var failedBooks = 0;
-        var maxLineLength = 0;
+        tally.ReportStart();
 
         var parallelOptions = new ParallelOptions
         {
-            MaxDegreeOfParallelism = GetMaxParallelism(),
+            MaxDegreeOfParallelism = options.MaxParallelism,
             CancellationToken = cancellationToken
         };
 
         await Parallel.ForEachAsync(planned, parallelOptions, async (item, ct) =>
         {
-            try
-            {
-                ct.ThrowIfCancellationRequested();
-                var outcome = await ProcessPlannedCopy(item, comparisonMode, ct);
-
-                switch (outcome)
-                {
-                    case CopyOutcome.Skipped:
-                        Interlocked.Increment(ref skippedBooks);
-                        break;
-                    case CopyOutcome.NotFound:
-                        Interlocked.Increment(ref missingBooks);
-                        break;
-                    default:
-                        Interlocked.Increment(ref copiedBooks);
-                        if (outcome == CopyOutcome.Updated)
-                        {
-                            Interlocked.Increment(ref updatedBooks);
-                        }
-                        break;
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Interlocked.Increment(ref failedBooks);
-                RecordWarning(warnings, ref warningCount, $"Error processing {item.Book.Filename ?? item.Label}: {ex.Message}");
-            }
-
-            var currentProgress = Interlocked.Increment(ref progressCount);
-
-            // Read the sub-counts before the total they are part of. A worker increments
-            // copiedBooks and only then updatedBooks, so reading them the other way round can
-            // pair an old copied count with a newer updated count and publish a snapshot
-            // claiming more books were updated than were copied.
-            var currentUpdated = Volatile.Read(ref updatedBooks);
-            var currentSkipped = Volatile.Read(ref skippedBooks);
-            var currentMissing = Volatile.Read(ref missingBooks);
-            var currentFailed = Volatile.Read(ref failedBooks);
-            var currentCopied = Volatile.Read(ref copiedBooks);
-
-            UpdateProgress(currentProgress, totalBooks, currentCopied, item.Label, ref maxLineLength);
-
-            progress?.Report(new SortProgressInfo
-            {
-                CurrentBook = currentProgress,
-                TotalBooks = totalBooks,
-                CopiedBooks = currentCopied,
-                UpdatedBooks = currentUpdated,
-                SkippedBooks = currentSkipped,
-                MissingBooks = currentMissing,
-                FailedBooks = currentFailed,
-                CurrentTitle = item.Label,
-                Percentage = CalculatePercentage(currentProgress, totalBooks),
-                WarningCount = Volatile.Read(ref warningCount)
-            });
+            var (outcome, problem) = await SortBookAsync(item, options.ComparisonMode, ct);
+            tally.Finish(item.Title, outcome, problem);
         });
 
-        var summary = new SortSummary
-        {
-            TotalBooks = totalBooks,
-            CopiedBooks = copiedBooks,
-            UpdatedBooks = updatedBooks,
-            SkippedBooks = skippedBooks,
-            MissingBooks = missingBooks,
-            FailedBooks = failedBooks,
-            Warnings = warnings.ToArray(),
-            WarningCount = warningCount
-        };
-
-        progress?.Report(new SortProgressInfo
-        {
-            CurrentBook = totalBooks,
-            TotalBooks = totalBooks,
-            CopiedBooks = summary.CopiedBooks,
-            UpdatedBooks = summary.UpdatedBooks,
-            SkippedBooks = summary.SkippedBooks,
-            MissingBooks = summary.MissingBooks,
-            FailedBooks = summary.FailedBooks,
-            Percentage = 100,
-            IsComplete = true,
-            WarningCount = summary.WarningCount
-        });
-
-        WriteLine(
-            $"Sorting complete. Copied {summary.CopiedBooks} (of which {summary.UpdatedBooks} updated), " +
-            $"skipped {summary.SkippedBooks}, not found {summary.MissingBooks}, " +
-            $"failed {summary.FailedBooks} of {totalBooks}.");
-        return summary;
+        return tally.ToSummary();
     }
 
-    /// <summary>What a single file, or a whole book, needed.</summary>
-    private enum CopyOutcome
+    /// <summary>Where one book ended up. Each maps to one bucket of <see cref="SortCounts"/>.</summary>
+    private enum BookOutcome
+    {
+        New,
+        Updated,
+        Moved,
+        UpToDate,
+        NotFound,
+        Failed
+    }
+
+    /// <summary>What one file needed.</summary>
+    private enum FileOutcome
     {
         /// <summary>Already up to date, so nothing was written.</summary>
-        Skipped = 0,
+        UpToDate,
 
         /// <summary>Written where nothing was before.</summary>
-        Created = 1,
+        Created,
 
         /// <summary>An existing, out-of-date file was replaced.</summary>
-        Updated = 2,
-
-        /// <summary>No file to copy: the book is in the export but not in the source folder.</summary>
-        NotFound = 3
+        Replaced
     }
 
-    private static async Task<CopyOutcome> ProcessPlannedCopy(
+    /// <summary>Sorts one book, turning anything that goes wrong into a problem for the report.</summary>
+    private static async Task<(BookOutcome Outcome, SortProblem? Problem)> SortBookAsync(
         PlannedCopy item,
         FileComparisonMode comparisonMode,
         CancellationToken cancellationToken)
@@ -227,47 +108,81 @@ public class FileSorter
         // Nothing to copy is not the same as nothing to do. A book listed in the export whose file
         // is not in the source folder has to be reported as missing, not as up to date — telling
         // someone their un-downloaded books are already organised is worse than saying nothing.
-        if (!item.HasWork)
+        if (item.IsMissingFromSource)
         {
-            return CopyOutcome.NotFound;
+            return (BookOutcome.NotFound, new SortProblem(SortProblemKind.NotFound, item.Title, NotFoundMessage));
         }
 
+        if (!item.HasWork)
+        {
+            // No warning means the same file was listed twice, and the first listing copies it.
+            return item.Warning is null
+                ? (BookOutcome.UpToDate, null)
+                : (BookOutcome.Failed, new SortProblem(SortProblemKind.Failed, item.Title, item.Warning));
+        }
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return (await ProcessPlannedCopy(item, comparisonMode, cancellationToken), null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return (BookOutcome.Failed, new SortProblem(SortProblemKind.Failed, item.Title, $"Could not copy the file: {ex.Message}"));
+        }
+    }
+
+    private static async Task<BookOutcome> ProcessPlannedCopy(
+        PlannedCopy item,
+        FileComparisonMode comparisonMode,
+        CancellationToken cancellationToken)
+    {
         Directory.CreateDirectory(item.TargetDirectory!);
 
-        AdoptLegacyFile(item.AudioLegacyPath, item.AudioDestination);
-        AdoptLegacyFile(item.PdfLegacyPath, item.PdfDestination);
+        // Both files, whatever happens to the first: '|' does not short-circuit.
+        var moved = AdoptLegacyFile(item.AudioLegacyPath, item.AudioDestination) |
+                    AdoptLegacyFile(item.PdfLegacyPath, item.PdfDestination);
 
         var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, cancellationToken);
         var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, cancellationToken);
 
-        // A book counts as updated when any of its files replaced an existing one; a book whose
-        // audio is new but whose PDF was already there is simply a copy.
-        if (audio == CopyOutcome.Updated || pdf == CopyOutcome.Updated)
+        // One bucket per book, in the order SortCounts documents: a moved file that then turned out
+        // to be stale is Updated, and a book whose audio is new but whose PDF was already there is New.
+        if (audio == FileOutcome.Replaced || pdf == FileOutcome.Replaced)
         {
-            return CopyOutcome.Updated;
+            return BookOutcome.Updated;
         }
 
-        return audio == CopyOutcome.Created || pdf == CopyOutcome.Created
-            ? CopyOutcome.Created
-            : CopyOutcome.Skipped;
+        if (audio == FileOutcome.Created || pdf == FileOutcome.Created)
+        {
+            return BookOutcome.New;
+        }
+
+        return moved ? BookOutcome.Moved : BookOutcome.UpToDate;
     }
 
     /// <summary>
-    /// Moves a book that an older version left loose in its author or series folder into the
-    /// book's own folder. It is a rename within the destination, so nothing is copied or lost, and
-    /// the update check that follows still replaces it if the source has changed since.
+    /// Moves a book that an older version filed elsewhere (see <see cref="PlannedCopy.AudioLegacyPath"/>)
+    /// into the book's own folder. It is a rename within the destination, so nothing is copied or
+    /// lost, and the update check that follows still replaces it if the source has changed since.
+    /// Returns whether a file was moved.
     /// </summary>
-    private static void AdoptLegacyFile(string? legacyPath, string? destinationFile)
+    private static bool AdoptLegacyFile(string? legacyPath, string? destinationFile)
     {
         if (legacyPath is null || destinationFile is null || File.Exists(destinationFile) || !File.Exists(legacyPath))
         {
-            return;
+            return false;
         }
 
         File.Move(legacyPath, destinationFile, overwrite: false);
+        return true;
     }
 
-    private static async Task<CopyOutcome> CopyIfNeededAsync(
+    private static async Task<FileOutcome> CopyIfNeededAsync(
         string? sourceFile,
         string? destinationFile,
         FileComparisonMode comparisonMode,
@@ -275,7 +190,7 @@ public class FileSorter
     {
         if (sourceFile is null || destinationFile is null)
         {
-            return CopyOutcome.Skipped;
+            return FileOutcome.UpToDate;
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -283,11 +198,11 @@ public class FileSorter
         var destinationExists = File.Exists(destinationFile);
         if (destinationExists && await IsDestinationUpToDateAsync(sourceFile, destinationFile, comparisonMode, cancellationToken))
         {
-            return CopyOutcome.Skipped;
+            return FileOutcome.UpToDate;
         }
 
         await CopyFileAtomicAsync(sourceFile, destinationFile, cancellationToken);
-        return destinationExists ? CopyOutcome.Updated : CopyOutcome.Created;
+        return destinationExists ? FileOutcome.Replaced : FileOutcome.Created;
     }
 
     /// <summary>
@@ -516,91 +431,86 @@ public class FileSorter
         yield return Math.Max(0, length - chunkSize);
     }
 
-    private static string DescribeMode(FileComparisonMode mode)
+    /// <summary>
+    /// The running totals of one sort. Workers finish books concurrently, so counting, recording
+    /// the problem and reporting happen under one lock: each report is a consistent snapshot (the
+    /// counts add up to the books finished), and reports arrive in the order the books finished,
+    /// so a slow report can never overwrite a newer one.
+    /// </summary>
+    private sealed class RunTally(int totalBooks, IProgress<SortProgressInfo>? progress)
     {
-        return mode == FileComparisonMode.Full ? "full (byte-for-byte)" : "quick (size and sampled contents)";
-    }
+        private readonly object _lock = new();
 
-    internal static double CalculatePercentage(int current, int total)
-    {
-        if (total <= 0)
+        // Immutable, so every snapshot can share it instead of copying up to 500 problems per book.
+        private ImmutableList<SortProblem> _problems = [];
+        private int _problemCount;
+        private SortCounts _counts = SortCounts.Empty;
+
+        public void AddProblem(SortProblem problem)
         {
-            return 100;
-        }
-
-        return Math.Round(Math.Clamp((double)current / total, 0, 1) * 100, 2);
-    }
-
-    private static int GetMaxParallelism()
-    {
-        var configured = Environment.GetEnvironmentVariable("OABO_MAX_PARALLELISM");
-        if (int.TryParse(configured, out var requested) && requested > 0)
-        {
-            return requested;
-        }
-
-        // Copying is bound by the slowest of the two volumes, and on a network share or a spinning
-        // disk more concurrency makes throughput worse, not better.
-        return Math.Clamp(Environment.ProcessorCount / 4, 1, 8);
-    }
-
-    private static void RecordWarning(ConcurrentQueue<string> warnings, ref int warningCount, string message)
-    {
-        var count = Interlocked.Increment(ref warningCount);
-        if (count <= MaxReportedWarnings)
-        {
-            warnings.Enqueue(message);
-            WriteLine($"Warning: {message}");
-        }
-        else if (count == MaxReportedWarnings + 1)
-        {
-            WriteLine($"Warning: more than {MaxReportedWarnings} warnings, further warnings are suppressed.");
-        }
-    }
-
-    private static void UpdateProgress(int currentProgress, int totalBooks, int copyBooks, string? title, ref int maxLineLength)
-    {
-        // When output is redirected (a service log, or the backend piped into the desktop app) the
-        // carriage-return trick just produces one enormous line, so log periodically instead.
-        if (Console.IsOutputRedirected)
-        {
-            if (currentProgress == totalBooks || currentProgress % 100 == 0)
+            lock (_lock)
             {
-                WriteLine($"{CalculatePercentage(currentProgress, totalBooks):0.##}% ({currentProgress}/{totalBooks}) transferred: {copyBooks}");
-            }
-
-            return;
-        }
-
-        var message = $"{CalculatePercentage(currentProgress, totalBooks):0.##}% ({currentProgress}/{totalBooks}) Transferred: {copyBooks} => {title}";
-
-        lock (ConsoleLock)
-        {
-            try
-            {
-                Console.Write("\r" + new string(' ', maxLineLength) + "\r");
-                Console.Write(message);
-                maxLineLength = Math.Max(maxLineLength, message.Length);
-            }
-            catch (IOException)
-            {
-                // The console went away (the desktop app closed the pipe). Never fail a sort for it.
+                RecordProblem(problem);
             }
         }
-    }
 
-    private static void WriteLine(string message)
-    {
-        lock (ConsoleLock)
+        /// <summary>Reports the run as started, so the total and any planning problems show at once.</summary>
+        public void ReportStart()
         {
-            try
+            lock (_lock)
             {
-                Console.WriteLine(Console.IsOutputRedirected ? message : $"\n{message}");
+                progress?.Report(Snapshot(currentTitle: null));
             }
-            catch (IOException)
+        }
+
+        public void Finish(string title, BookOutcome outcome, SortProblem? problem)
+        {
+            lock (_lock)
             {
-                // See UpdateProgress.
+                _counts = Add(_counts, outcome);
+                if (problem is not null)
+                {
+                    RecordProblem(problem);
+                }
+
+                progress?.Report(Snapshot(title));
             }
+        }
+
+        public SortSummary ToSummary()
+        {
+            lock (_lock)
+            {
+                return new SortSummary(totalBooks, _counts, _problems, _problemCount);
+            }
+        }
+
+        private void RecordProblem(SortProblem problem)
+        {
+            _problemCount++;
+            if (_problems.Count < SortSummary.MaxReportedProblems)
+            {
+                _problems = _problems.Add(problem);
+            }
+        }
+
+        private SortProgressInfo Snapshot(string? currentTitle)
+        {
+            return new SortProgressInfo(totalBooks, _counts.Total, currentTitle, _counts, _problems, _problemCount);
+        }
+
+        private static SortCounts Add(SortCounts counts, BookOutcome outcome)
+        {
+            return outcome switch
+            {
+                BookOutcome.New => counts with { New = counts.New + 1 },
+                BookOutcome.Updated => counts with { Updated = counts.Updated + 1 },
+                BookOutcome.Moved => counts with { Moved = counts.Moved + 1 },
+                BookOutcome.UpToDate => counts with { UpToDate = counts.UpToDate + 1 },
+                BookOutcome.NotFound => counts with { NotFound = counts.NotFound + 1 },
+                BookOutcome.Failed => counts with { Failed = counts.Failed + 1 },
+                _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null)
+            };
         }
     }
 }
