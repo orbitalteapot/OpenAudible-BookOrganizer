@@ -158,7 +158,8 @@ public class FileSorter
         // someone their un-downloaded books are already organised is worse than saying nothing.
         if (item.IsMissingFromSource)
         {
-            return (BookOutcome.NotFound, new SortProblem(SortProblemKind.NotFound, item.Title, NotFoundMessage));
+            // The warning says why, when there is a file but it cannot be the book yet.
+            return (BookOutcome.NotFound, new SortProblem(SortProblemKind.NotFound, item.Title, item.Warning ?? NotFoundMessage));
         }
 
         if (!item.HasWork)
@@ -275,6 +276,10 @@ public class FileSorter
     /// Copies through a temporary file in the destination folder and renames it into place, so an
     /// interrupted run (cancel, crash, full disk) can never leave a half written book behind that
     /// a later run would mistake for a complete one.
+    ///
+    /// The source is shared for writing, because OpenAudible may be working on it. A copy taken
+    /// while it changed is only part of a book, so it never replaces anything: the book is copied
+    /// again on the next sort, once the file has settled.
     /// </summary>
     private static async Task CopyFileAtomicAsync(string sourceFile, string destinationFile, CancellationToken cancellationToken)
     {
@@ -282,6 +287,8 @@ public class FileSorter
 
         try
         {
+            var before = FileStamp(sourceFile);
+            long copied;
             await using (var sourceStream = new FileStream(
                              sourceFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, CopyBufferSize,
                              FileOptions.Asynchronous | FileOptions.SequentialScan))
@@ -291,6 +298,14 @@ public class FileSorter
             {
                 await sourceStream.CopyToAsync(destinationStream, CopyBufferSize, cancellationToken);
                 await destinationStream.FlushAsync(cancellationToken);
+                copied = destinationStream.Length;
+            }
+
+            if (copied != before.Length || FileStamp(sourceFile) != before)
+            {
+                throw new IOException(
+                    "The file in the source folder changed while it was being copied, as it does while OpenAudible " +
+                    "is still writing it. It is copied again on the next sort.");
             }
 
             File.Move(partialFile, destinationFile, overwrite: true);
@@ -300,6 +315,13 @@ public class FileSorter
             TryDelete(partialFile);
             throw;
         }
+    }
+
+    /// <summary>A file's size and when it was last written, which change whenever anything writes to it.</summary>
+    private static (long Length, DateTime LastWriteUtc) FileStamp(string path)
+    {
+        var info = new FileInfo(path);
+        return (info.Length, info.LastWriteTimeUtc);
     }
 
     private static void TryDelete(string path)

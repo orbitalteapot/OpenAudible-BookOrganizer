@@ -1,7 +1,8 @@
 import { memo, useCallback, useMemo, useRef, useState } from 'react';
 import { BookOpen, FileUp, RefreshCw, Search } from 'lucide-react';
+import { isUnanswered } from '../api';
 import { choosePath } from '../desktop';
-import { useDebounced, useFocusFallback } from '../hooks';
+import { useDebounced, useFocusFallback, useLatest } from '../hooks';
 import { CSV_FIELD, describePath } from '../paths';
 import { compareBooks, filterBooks, SORT_LABELS } from '../sorting';
 import Button from './ui/Button';
@@ -77,10 +78,12 @@ function emptyStateText({ library, csvPath, isElectron }) {
 function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState({ field: 'title', dir: 'asc' });
-  // The last "Choose export…" refusal, when that is not about the export itself: saving a new export
-  // checks every folder, and an unplugged destination or a settings file that cannot be written would
-  // otherwise leave the click looking as if it did nothing.
+  // The last "Choose export…" refusal (`error`), when that is not about the export itself: saving a new
+  // export checks every folder, and an unplugged destination or a settings file that cannot be written
+  // would otherwise leave the click looking as if it did nothing. With the export it was for (`path`),
+  // and the settings on screen when it came back (`settingsThen`).
   const [refusal, setRefusal] = useState(null);
+  const latestSettings = useLatest(settings);
   const debouncedSearch = useDebounced(search);
 
   const { books } = library;
@@ -90,7 +93,16 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
   const csvStatus = describePath(CSV_FIELD, settings, fieldErrors.csvPath, isElectron);
   // A refusal about a folder is shown for as long as `fieldErrors` holds it, so it goes once the drive
   // is plugged back in, as it does on the Folders card, and stops hiding what is wrong with the export.
-  const refusalText = refusal?.field ? fieldErrors[refusal.field] : refusal?.message;
+  // Any other goes once the export turns out to be saved after all (a save that timed out may have
+  // been), or, when it got no answer, once the backend answers again.
+  const refusalMoot =
+    refusal &&
+    (settings.csvPath === refusal.path || (isUnanswered(refusal.error) && settings !== refusal.settingsThen));
+  const refusalText = refusalMoot
+    ? null
+    : refusal?.error.field
+      ? fieldErrors[refusal.error.field]
+      : refusal?.error.message;
   const error = refusalText
     ? `Couldn't use this export: ${refusalText}`
     : csvStatus.tone === 'critical'
@@ -112,8 +124,10 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
     }
     const refused = await update({ csvPath: path });
     // One about the export itself is already shown, as the Folders card shows it.
-    if (refused && refused.field !== CSV_FIELD.field) setRefusal(refused);
-  }, [csvPath, library, update]);
+    if (refused && refused.field !== CSV_FIELD.field) {
+      setRefusal({ error: refused, path, settingsThen: latestSettings.current });
+    }
+  }, [csvPath, library, update, latestSettings]);
 
   const handleSort = useCallback((field) => {
     setSort((prev) => (prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' }));

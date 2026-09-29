@@ -9,9 +9,10 @@ export const IDLE_POLL_MS = 3_000;
 // How long to keep the fast cadence after being told a run is about to start on its own.
 export const EXPECT_RUN_MS = 5_000;
 
-// A single failed poll is normal while the backend is busy copying; this many in a row
-// (about ten seconds while sorting) means it has gone.
-const FAILURES_BEFORE_ERROR = 25;
+// A failed poll or two is normal while the backend is busy copying; no answer for this long means it
+// has gone. Counted in time rather than in failures, because a poll that hangs takes as long as its
+// timeout to fail, not a moment. Longer while idle, where a container restarting is no news.
+export const LOST_CONTACT_MS = { running: 10_000, idle: 30_000 };
 
 export const isRunning = (status) => status?.state === 'running';
 
@@ -37,6 +38,7 @@ export default function useRunStatus() {
     let active = true;
     let timer = null;
     let failures = 0;
+    let lastAnswer = Date.now();
     let running = false;
     // Polls can overlap when one is asked for early. Only the newest applies its answer and
     // schedules the next, so there is only ever one timer and an older reply never wins.
@@ -49,13 +51,18 @@ export default function useRunStatus() {
         const next = await getRunStatus();
         if (!active || id !== latest) return;
         failures = 0;
+        lastAnswer = Date.now();
         running = isRunning(next);
         setStatus(next);
         setError(null);
       } catch (err) {
         if (!active || id !== latest) return;
         failures += 1;
-        if (failures >= FAILURES_BEFORE_ERROR) setError(unreachableMessage());
+        // Never on one failure alone: the first poll after a laptop wakes can fail, long after the last answer.
+        const silentFor = Date.now() - lastAnswer;
+        if (failures > 1 && silentFor >= (running ? LOST_CONTACT_MS.running : LOST_CONTACT_MS.idle)) {
+          setError(unreachableMessage());
+        }
       }
       const fast = running || Date.now() < fastUntil.current;
       timer = setTimeout(poll, fast ? RUNNING_POLL_MS : IDLE_POLL_MS);

@@ -187,13 +187,18 @@ describe('useSettings', () => {
       new ApiError('The organizer did not answer in time.', { code: 'timeout' })
     );
 
-    await act(() => result.current.update({ copySpeed: 'gentle' }));
+    let refused;
+    await act(async () => {
+      refused = await result.current.update({ copySpeed: 'gentle' });
+    });
 
+    expect(refused.code).toBe('timeout');
     expect(result.current.saving).toBe(false);
-    expect(result.current.error).toBe('The organizer did not answer in time.');
-    // The save went through in the end: the page shows what the backend holds.
+    // The save went through in the end: the page shows what the backend holds, and no longer that
+    // the backend did not answer.
     await waitFor(() => expect(result.current.settings.copySpeed).toBe('gentle'));
     expect(getSettings).toHaveBeenCalledTimes(1);
+    expect(result.current.error).toBeNull();
   });
 
   it('drops a lost-contact error once a refresh gets an answer, but not a refused save', async () => {

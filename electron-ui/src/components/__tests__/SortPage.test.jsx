@@ -1,6 +1,8 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, cancelSort, getRunStatus, getSettings, startSort, updateSettings } from '../../api';
+import { IDLE_POLL_MS, LOST_CONTACT_MS } from '../../hooks/useRunStatus';
+import { unreachableMessage } from '../../mode';
 import { idleStatus, runningStatus, settingsResponse } from '../../test/fixtures';
 import { renderApp } from '../../test/renderApp';
 
@@ -227,6 +229,60 @@ describe('SortPage', () => {
     const source = screen.getByLabelText('Source folder');
     await waitFor(() => expect(statusLine(source).textContent).toBe('The source folder was not found: /books/source'));
     expect(screen.getByText(/Couldn't start the sort/)).toBeTruthy();
+  });
+
+  it('drops a start that got no answer once the sort it started after all shows up', async () => {
+    await openSortPage();
+    let started = false;
+    vi.mocked(getRunStatus).mockImplementation(() => Promise.resolve(started ? runningStatus() : idleStatus()));
+    vi.mocked(startSort).mockRejectedValueOnce(
+      new ApiError('The organizer did not answer in time.', { code: 'timeout' })
+    );
+    // Stuck on the same share, the folders do not answer either.
+    vi.mocked(getSettings).mockImplementation(() => new Promise(() => {}));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start sorting' }));
+    expect(await screen.findByText(/Couldn't start the sort/)).toBeTruthy();
+
+    // The backend got through its check and started the run; the next poll finds it.
+    started = true;
+    expect(await within(progressCard()).findByText(/Sorting…/, {}, { timeout: IDLE_POLL_MS + 1_000 })).toBeTruthy();
+    expect(screen.queryByText(/Couldn't start the sort/)).toBeNull();
+  }, 10_000);
+
+  it('drops a start the organizer could not be reached for once it answers again', async () => {
+    await openSortPage();
+    const unreachable = () => new ApiError(unreachableMessage(), { code: 'unreachable' });
+    vi.mocked(startSort).mockRejectedValueOnce(unreachable());
+    vi.mocked(getSettings).mockRejectedValue(unreachable());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start sorting' }));
+    expect(await screen.findByText(/Couldn't start the sort/)).toBeTruthy();
+
+    // The container is back, and the window is looked at again.
+    vi.mocked(getSettings).mockResolvedValue(settingsResponse());
+    fireEvent.focus(window);
+
+    await waitFor(() => expect(screen.queryByText(/Couldn't start the sort/)).toBeNull());
+  });
+
+  it('says once, not twice, that the organizer cannot be reached', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await openSortPage();
+      const unreachable = () => new ApiError(unreachableMessage(), { code: 'unreachable' });
+      vi.mocked(updateSettings).mockRejectedValue(unreachable());
+      vi.mocked(getSettings).mockRejectedValue(unreachable());
+      vi.mocked(getRunStatus).mockRejectedValue(unreachable());
+
+      const speed = screen.getByRole('radiogroup', { name: 'Copy speed' });
+      fireEvent.click(within(speed).getByRole('radio', { name: 'Gentle' }));
+      await act(() => vi.advanceTimersByTimeAsync(LOST_CONTACT_MS.idle + IDLE_POLL_MS * 2));
+
+      expect(screen.getAllByText(unreachableMessage())).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('never offers to create a destination the server sets', async () => {

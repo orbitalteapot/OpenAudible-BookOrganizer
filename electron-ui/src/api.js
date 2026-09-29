@@ -35,6 +35,15 @@ export class ApiError extends Error {
 }
 
 /**
+ * Whether `error` is a request that got no answer at all: the organizer could not be reached, or did
+ * not answer in time. Such an error says nothing about the settings or the folders, and nothing once
+ * the organizer answers again; any other is its answer, true until something changes it.
+ */
+export function isUnanswered(error) {
+  return error?.code === 'unreachable' || error?.code === 'timeout';
+}
+
+/**
  * Answers a proxy gives for a server behind it that is not answering: nginx, Traefik and the NAS
  * proxies in front of a container send these while it restarts.
  */
@@ -79,8 +88,14 @@ async function readError(res) {
  */
 const REQUEST_TIMEOUT_MS = 60_000;
 
-async function request(path, { method = 'GET', body } = {}) {
-  const options = { method, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) };
+/**
+ * The run's progress only reads the organizer's memory, so it never needs long. Polls that hang for
+ * a minute each (a paused container, a dropped VPN) would take half an hour to add up to "lost contact".
+ */
+const PROGRESS_TIMEOUT_MS = 5_000;
+
+async function request(path, { method = 'GET', body, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
+  const options = { method, signal: AbortSignal.timeout(timeoutMs) };
   // Every change is sent as JSON, with or without a body: the desktop backend refuses anything else,
   // because a web site can only send JSON to it after a preflight the backend turns down.
   if (method !== 'GET') options.headers = { 'Content-Type': 'application/json' };
@@ -148,7 +163,7 @@ export function startSort({ comparisonMode, createDestination = false } = {}) {
 
 /** The current or most recent sort, however it was started. */
 export function getRunStatus() {
-  return request('/api/sort/progress');
+  return request('/api/sort/progress', { timeoutMs: PROGRESS_TIMEOUT_MS });
 }
 
 export function cancelSort() {

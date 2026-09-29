@@ -21,6 +21,18 @@ export function useIsElectron() {
 }
 
 /**
+ * A ref that always holds the latest committed `value`, for code that runs later (after a request
+ * comes back) and needs what is on screen then, not what was when it started.
+ */
+export function useLatest(value) {
+  const ref = useRef(value);
+  useEffect(() => {
+    ref.current = value;
+  });
+  return ref;
+}
+
+/**
  * Delays a rapidly changing value. Filtering a large library on every keystroke re-runs the whole
  * filter-and-sort pass; waiting for a pause in typing keeps the field responsive.
  */

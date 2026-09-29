@@ -2,7 +2,7 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, getRunStatus, startSort } from '../api';
 import { idleStatus, runningStatus } from '../test/fixtures';
-import useRunStatus, { EXPECT_RUN_MS, IDLE_POLL_MS, RUNNING_POLL_MS } from './useRunStatus';
+import useRunStatus, { EXPECT_RUN_MS, IDLE_POLL_MS, LOST_CONTACT_MS, RUNNING_POLL_MS } from './useRunStatus';
 
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -117,6 +117,25 @@ describe('useRunStatus', () => {
       "Can't reach the organizer server. Check that the container is running, then reload this page."
     );
     expect(result.current.error).not.toMatch(/backend/);
+  });
+
+  it('reports lost contact within seconds when polls hang instead of failing at once', async () => {
+    vi.mocked(getRunStatus).mockResolvedValueOnce(runningStatus());
+    const { result } = renderHook(() => useRunStatus());
+    await advance(0);
+    expect(result.current.status.state).toBe('running');
+
+    // A paused container or a dropped VPN: each poll fails only when its own timeout gives up.
+    vi.mocked(getRunStatus).mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          setTimeout(() => reject(new ApiError('The organizer did not answer in time.', { code: 'timeout' })), 5_000);
+        })
+    );
+    await advance(LOST_CONTACT_MS.running + 6_000);
+
+    expect(result.current.error).not.toBeNull();
+    expect(result.current.status).toBeNull();
   });
 
   it('passes any other refusal on to the page', async () => {

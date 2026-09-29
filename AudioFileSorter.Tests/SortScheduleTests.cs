@@ -266,6 +266,30 @@ public class SortScheduleTests
     }
 
     [Fact]
+    public async Task Stopping_a_scheduled_run_to_quit_the_desktop_app_is_tried_again()
+    {
+        using var workspace = new TempWorkspace();
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time);
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out _));
+        using var scheduler = backend.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the run to start");
+
+        // "Stop sorting and quit": the app asks before it closes, so the backend is not stopping yet.
+        Assert.True(backend.Sort.CancelSort(appClosing: true));
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastRun is not null, "the run to be recorded");
+        await scheduler.StopAsync(CancellationToken.None);
+
+        // Counted as done, the rest of the library would wait a whole interval.
+        var state = backend.Settings.Schedule;
+        Assert.Equal("Canceled because the app closed.", state.LastRun!.Error);
+        Assert.True(SortSchedule.LastAttemptFailed(state));
+        Assert.Null(state.LastSuccessUtc);
+    }
+
+    [Fact]
     public async Task A_schedule_turned_on_at_a_time_the_clock_has_since_gone_back_past_runs_once()
     {
         using var workspace = new TempWorkspace();

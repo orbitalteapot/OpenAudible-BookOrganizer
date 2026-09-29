@@ -26,6 +26,8 @@ const WINDOW_BACKGROUND = { dark: '#0c0e11', light: '#f7f8fa' };
 const CANCEL_WAIT_MS = 5_000;
 // Written once the "still running in the tray" notice has been shown, so it is shown only once.
 const TRAY_NOTICE_MARKER = 'tray-notice-shown';
+// A window that stops working again this soon after being reloaded is not reloaded again unasked.
+const RECRASH_MS = 30_000;
 
 let mainWindow = null;
 let tray = null;
@@ -39,6 +41,8 @@ let keepRunningThisSession = false;
 let hiddenInTray = false;
 // Someone asked for the window (a second launch, the Dock) before startup had created it.
 let showRequestedBeforeWindow = false;
+// When the window's page last stopped working.
+let lastPageCrash = 0;
 // The backend has answered once. Until then a failure is reported as "did not start", not "stopped".
 let backendReady = false;
 
@@ -87,6 +91,9 @@ function createWindow({ reveal }) {
 
   mainWindow.loadURL(appUrl());
   keepWindowOnTheApp(mainWindow.webContents);
+  mainWindow.webContents.on('render-process-gone', (_event, details) => onPageGone(details));
+  // The title bar shows Quit while closing the window keeps the app running; it asks once it loads.
+  mainWindow.webContents.on('did-finish-load', publishStaysInBackground);
 
   if (reveal) mainWindow.once('ready-to-show', () => mainWindow?.show());
   mainWindow.on('close', onWindowClose);
@@ -123,6 +130,37 @@ function keepWindowOnTheApp(webContents) {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
+}
+
+/**
+ * The window is frameless, so its title bar and buttons are part of the page: a page that crashed
+ * (out of memory, a GPU process failure) leaves a blank pane nobody can move, close or reload. It is
+ * loaded again at once; if it stops working again straight away, the user chooses what happens.
+ */
+async function onPageGone({ reason }) {
+  if (quitting || reason === 'clean-exit' || !hasWindow()) return;
+
+  console.error(`The window's page stopped working (${reason})`);
+  const again = Date.now() - lastPageCrash < RECRASH_MS;
+  lastPageCrash = Date.now();
+  if (again) {
+    const { response } = await showMessage({
+      type: 'error',
+      title: APP_NAME,
+      message: 'The Book Organizer window stopped working.',
+      detail: 'A sort that is running carries on. Reload the window to continue, or quit the app.',
+      buttons: ['Reload', 'Quit'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    if (response === 1) {
+      quitWhenSafe();
+      return;
+    }
+  }
+
+  if (hasWindow()) mainWindow.loadURL(appUrl());
 }
 
 /** The page the window shows: the Vite dev server in development, the built page otherwise. */
@@ -194,6 +232,33 @@ function updateTray() {
     tray.destroy();
     tray = null;
   }
+  publishStaysInBackground();
+}
+
+/**
+ * Tells the page whether closing the window keeps the app running, so its title bar can offer Quit.
+ * The tray is not enough: stock GNOME shows no tray icons at all, and without a Quit in the window an
+ * app told to keep running could then not be quit for the rest of the session.
+ */
+function publishStaysInBackground() {
+  if (hasWindow()) mainWindow.webContents.send('window:stays-in-background-changed', staysInBackground());
+}
+
+/**
+ * What the notice says about finding the app again. Linux desktops may show no tray icon (GNOME
+ * without an extension), so there it does not promise one.
+ */
+function trayNotice() {
+  if (process.platform === 'darwin') {
+    return 'Book Organizer is still running in the menu bar. Use its icon there to open it again or to quit.';
+  }
+  if (process.platform === 'win32') {
+    return 'Book Organizer is still running in the system tray. Use its icon there to open it again or to quit.';
+  }
+  return (
+    'Book Organizer is still running in the background. Open it again from your apps (or its tray icon, ' +
+    'if your desktop shows one) to bring the window back, and use Quit in its title bar to stop it.'
+  );
 }
 
 /** Tells the user, once ever, that closing the window did not quit the app. */
@@ -207,8 +272,7 @@ function announceTrayOnce() {
     // Worst case the notice shows again next time.
   }
 
-  const where = process.platform === 'darwin' ? 'menu bar' : 'system tray';
-  const body = `Book Organizer is still running in the ${where}. Use its icon there to open it again or to quit.`;
+  const body = trayNotice();
   if (process.platform === 'win32' && tray) {
     // Works without the app ID that Windows toast notifications need, so it also shows in development.
     tray.displayBalloon({ title: APP_NAME, content: body });
@@ -329,7 +393,9 @@ function registerIpcHandlers() {
   );
   ipcMain.handle('window:close', withWindow((window) => window.close()));
   ipcMain.handle('window:isMaximized', withWindow((window) => window.isMaximized()));
+  ipcMain.handle('window:staysInBackground', () => staysInBackground());
 
+  ipcMain.handle('app:quit', () => quitWhenSafe());
   ipcMain.handle('app:setBackgroundOptions', (_, options) => applyBackgroundOptions(options));
   ipcMain.handle('app:setTheme', (_, theme) => {
     if (!THEMES.has(theme)) return;

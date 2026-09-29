@@ -173,6 +173,25 @@ public class SortServiceTests
     }
 
     [Fact]
+    public async Task Closing_the_app_waits_for_a_sort_started_from_the_page_to_say_why_it_stopped()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200));
+
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, new SortOptions { MaxParallelism = 1 }, out _));
+        await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the first book");
+
+        // What the host does on docker stop: stopping cancels the run, then each hosted service is stopped.
+        backend.Lifetime.StopApplication();
+        await backend.Sort.StopAsync(CancellationToken.None);
+
+        // Nothing waited for it, so the process exited before the run said, or logged, why it ended.
+        var status = backend.Sort.GetStatus();
+        Assert.Equal(RunState.Finished, status.State);
+        Assert.Equal("Canceled because the app closed.", status.Error);
+    }
+
+    [Fact]
     public void CancelSort_returns_false_when_nothing_is_running()
     {
         using var workspace = new TempWorkspace();

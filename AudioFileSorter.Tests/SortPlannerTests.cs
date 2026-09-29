@@ -525,7 +525,7 @@ public class SortPlannerTests
     public void A_later_run_never_gives_a_missing_books_folder_to_another_book_of_the_same_title()
     {
         using var workspace = new TempWorkspace();
-        workspace.WriteSourceFile("second.m4b");
+        workspace.WriteSourceFile("second.m4b", "second-book");
         workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works", "Collected Works.m4b"), "first-book");
         var secondFile = workspace.WriteDestinationFile(
             Path.Combine("An Author", "Collected Works (2)", "Collected Works.m4b"), "second-book");
@@ -630,10 +630,10 @@ public class SortPlannerTests
     }
 
     [Fact]
-    public void Upgrade_moves_a_downloaded_edition_out_of_a_book_folder_an_undownloaded_one_now_holds()
+    public void Upgrade_leaves_a_downloaded_edition_in_the_book_folder_it_has_when_an_undownloaded_one_is_listed_first()
     {
-        // main gave "Book 1" to the only edition it had a file for; list order now gives it to the
-        // first edition, which is not downloaded. The file holds the second one's audio, so it is its.
+        // main gave "Book 1" to the only edition it had a file for; list order would now give it to
+        // the first edition, which is not downloaded. The file holds the second one's audio, so it is its.
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("hp1-dale.m4b", "dale-edition");
         var old = workspace.WriteDestinationFile(Path.Combine("An Author", "Harry Potter", "Book 1", "A Book.m4b"), "dale-edition");
@@ -644,10 +644,8 @@ public class SortPlannerTests
             TempWorkspace.Book(filename: "hp1-dale", seriesName: "Harry Potter", seriesSequence: "1"));
 
         Assert.True(planned[0].IsMissingFromSource);
-        Assert.Equal(
-            Path.Combine(workspace.Destination, "An Author", "Harry Potter", "Book 1 (2)", "A Book.m4b"),
-            planned[1].AudioDestination);
-        Assert.Equal(old, planned[1].AudioLegacyPath);
+        Assert.Equal(old, planned[1].AudioDestination);
+        Assert.Null(planned[1].AudioLegacyPath);
     }
 
     [Fact]

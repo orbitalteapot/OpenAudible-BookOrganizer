@@ -17,6 +17,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
   close: () => ipcRenderer.invoke('window:close'),
   isMaximized: () => ipcRenderer.invoke('window:isMaximized'),
 
+  /** Whether closing the window keeps the app running (in the tray, or in the background). */
+  staysInBackground: () => ipcRenderer.invoke('window:staysInBackground'),
+
+  /** Fires when that changes. Returns an unsubscribe. */
+  onStaysInBackgroundChanged: (handler) => {
+    const listener = (_event, stays) => handler(stays);
+    ipcRenderer.on('window:stays-in-background-changed', listener);
+    return () => ipcRenderer.removeListener('window:stays-in-background-changed', listener);
+  },
+
+  /** Quits the app, asking first when a sort is running, as closing the window does. */
+  quit: () => ipcRenderer.invoke('app:quit'),
+
   /** Fires when the window is maximised or restored, including by the OS. Returns an unsubscribe. */
   onMaximizedChanged: (handler) => {
     const listener = (_event, isMaximized) => handler(isMaximized);

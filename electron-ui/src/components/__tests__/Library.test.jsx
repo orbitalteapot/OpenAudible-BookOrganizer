@@ -1,6 +1,6 @@
 import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, getRunStatus, parseLibrary, updateSettings } from '../../api';
+import { ApiError, getRunStatus, getSettings, parseLibrary, updateSettings } from '../../api';
 import { RUNNING_POLL_MS } from '../../hooks/useRunStatus';
 import { runningStatus, settingsResponse } from '../../test/fixtures';
 import { renderApp } from '../../test/renderApp';
@@ -120,6 +120,23 @@ describe('Library', () => {
       // The drive is plugged back in: the refusal goes with the folder's own error, as on the Folders card.
       fireEvent.focus(window);
       await waitFor(() => expect(screen.queryByText(/Couldn't use this export/)).toBeNull());
+    });
+
+    it('drops "did not answer in time" once the export turns out to be saved after all', async () => {
+      renderApp({ library: { books: [book('We Are Legion')], skippedRows: 0, warnings: [] } });
+      await screen.findByText('1 audiobooks');
+      vi.mocked(window.electronAPI.openFile).mockResolvedValue('/books/new.csv');
+      vi.mocked(updateSettings).mockRejectedValueOnce(
+        new ApiError('The organizer did not answer in time.', { code: 'timeout' })
+      );
+      // It was saved: the refresh that follows the timeout says so, and the new export's books load.
+      vi.mocked(getSettings).mockResolvedValue(settingsResponse({ csvPath: '/books/new.csv' }));
+      vi.mocked(parseLibrary).mockResolvedValue({ books: [book('Heaven’s River')], skippedRows: 0, warnings: [] });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Choose export…' }));
+
+      expect(await screen.findByText('Heaven’s River')).toBeTruthy();
+      expect(screen.queryByText(/Couldn't use this export/)).toBeNull();
     });
 
     it('puts focus on the search field when books chosen from the empty page arrive', async () => {

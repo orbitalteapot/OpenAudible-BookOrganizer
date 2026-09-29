@@ -139,7 +139,9 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             logger.LogWarning(ex, "Could not save the settings to {Path}", _path);
-            error = ex.Message;
+
+            // The system's reason names the file; the person also needs to know which folder to fix.
+            error = $"{ex.Message.TrimEnd('.')}. Check that the folder {Path.GetDirectoryName(Path.GetFullPath(_path))} can be written.";
             return false;
         }
     }

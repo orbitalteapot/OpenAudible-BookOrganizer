@@ -151,13 +151,18 @@ async function start({ packaged, settingsPath, onUnexpectedExit }) {
   return baseUrl;
 }
 
-/** The backend's JSON answer, or null when it did not answer or refused. */
-async function request(pathname, method = 'GET') {
+/** The backend's JSON answer, or null when it did not answer or refused. `body` is sent as JSON. */
+async function request(pathname, method = 'GET', body = undefined) {
   if (!baseUrl) return null;
   try {
     // The backend only accepts changes sent as JSON (see LocalRequestGuard).
     const headers = method === 'GET' ? {} : { 'Content-Type': 'application/json' };
-    const res = await fetch(`${baseUrl}${pathname}`, { method, headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+    const res = await fetch(`${baseUrl}${pathname}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     return res.ok ? await res.json() : null;
   } catch {
     return null;
@@ -184,9 +189,13 @@ async function isSortRunning() {
   return status?.state === 'running';
 }
 
-/** Cancels the running sort and waits up to `timeoutMs` for it to wind down. */
+/**
+ * Cancels the running sort because the app is quitting, and waits up to `timeoutMs` for it to wind
+ * down. Said to be the app closing, not a person cancelling, so an automatic sort cut short this way
+ * is tried again at the next launch instead of counting as done for a whole interval.
+ */
 async function cancelSortAndWait(timeoutMs) {
-  await request('/api/sort/cancel', 'POST');
+  await request('/api/sort/cancel', 'POST', { reason: 'appClosing' });
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && (await isSortRunning())) {

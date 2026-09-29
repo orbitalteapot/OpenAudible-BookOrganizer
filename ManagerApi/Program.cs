@@ -45,6 +45,7 @@ builder.Services.AddSingleton(services => new SettingsStore(
     services.GetRequiredService<ILogger<SettingsStore>>()));
 builder.Services.AddSingleton<SettingsService>();
 builder.Services.AddSingleton<SortService>();
+builder.Services.AddHostedService(services => services.GetRequiredService<SortService>());
 builder.Services.AddSingleton<SortScheduler>();
 builder.Services.AddHostedService(services => services.GetRequiredService<SortScheduler>());
 builder.Services.AddHostedService<ParentProcessWatch>();
@@ -197,9 +198,10 @@ app.MapPost("/api/sort/start", (StartSortRequest? request, SortService sortServi
 
 app.MapGet("/api/sort/progress", (SortService sortService) => Results.Ok(sortService.GetStatus()));
 
-app.MapPost("/api/sort/cancel", (SortService sortService) =>
+app.MapPost("/api/sort/cancel", (CancelSortRequest? request, SortService sortService) =>
 {
-    return sortService.CancelSort()
+    var appClosing = string.Equals(request?.Reason, CancelSortRequest.AppClosing, StringComparison.Ordinal);
+    return sortService.CancelSort(appClosing)
         ? Results.Ok(new { message = "Sort cancellation requested" })
         : Results.BadRequest(new { error = "No sort is currently running" });
 });
@@ -222,6 +224,15 @@ static IResult CsvError(string message, string code)
 /// <param name="ComparisonMode">"quick" or "full" for this run only. Omitted means the saved setting.</param>
 /// <param name="CreateDestination">Create a missing destination folder; sent once the user has agreed to it.</param>
 record StartSortRequest(string? ComparisonMode = null, bool CreateDestination = false);
+
+/// <param name="Reason">
+/// <see cref="AppClosing"/> when the desktop app is quitting ("Stop sorting and quit"), which
+/// automatic sorting tries again soon; omitted when a person cancels.
+/// </param>
+record CancelSortRequest(string? Reason = null)
+{
+    public const string AppClosing = "appClosing";
+}
 
 /// <summary>Exposed so the integration tests can drive the real application host.</summary>
 public partial class Program;

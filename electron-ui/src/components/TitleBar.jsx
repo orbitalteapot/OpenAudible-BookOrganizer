@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Minus, Square, X, Copy } from 'lucide-react';
+import { Minus, Power, Square, X, Copy } from 'lucide-react';
 
 function WindowButton({ label, onClick, danger = false, children }) {
   return (
@@ -18,9 +18,20 @@ function WindowButton({ label, onClick, danger = false, children }) {
   );
 }
 
-/** The desktop window's own title bar, since the window is frameless. Not shown in a browser. */
+/**
+ * The desktop window's own title bar, since the window is frameless. Not shown in a browser.
+ *
+ * While closing the window keeps the app running, it also offers Quit: the tray icon that otherwise
+ * does is missing on desktops without a tray (stock GNOME), where the app could not be quit at all.
+ */
 export default function TitleBar() {
   const [isMaximized, setIsMaximized] = useState(false);
+  const [staysInBackground, setStaysInBackground] = useState(false);
+
+  useEffect(() => {
+    window.electronAPI?.staysInBackground?.().then((value) => setStaysInBackground(!!value));
+    return window.electronAPI?.onStaysInBackgroundChanged?.((value) => setStaysInBackground(!!value));
+  }, []);
 
   useEffect(() => {
     // Ask once on mount: the window can start maximised, and assuming otherwise shows the wrong
@@ -40,13 +51,22 @@ export default function TitleBar() {
       <span className="text-xs text-fg-subtle">OpenAudible Book Organizer</span>
 
       <div className="titlebar-no-drag flex items-center">
+        {staysInBackground && (
+          <WindowButton label="Quit Book Organizer" onClick={() => window.electronAPI?.quit?.()}>
+            <Power size={14} aria-hidden="true" />
+          </WindowButton>
+        )}
         <WindowButton label="Minimise" onClick={() => window.electronAPI?.minimize()}>
           <Minus size={14} aria-hidden="true" />
         </WindowButton>
         <WindowButton label={isMaximized ? 'Restore' : 'Maximise'} onClick={handleMaximize}>
           {isMaximized ? <Copy size={12} aria-hidden="true" /> : <Square size={12} aria-hidden="true" />}
         </WindowButton>
-        <WindowButton label="Close" onClick={() => window.electronAPI?.close()} danger>
+        <WindowButton
+          label={staysInBackground ? 'Close (keeps running in the background)' : 'Close'}
+          onClick={() => window.electronAPI?.close()}
+          danger
+        >
           <X size={14} aria-hidden="true" />
         </WindowButton>
       </div>

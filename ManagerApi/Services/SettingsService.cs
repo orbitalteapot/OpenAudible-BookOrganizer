@@ -41,7 +41,8 @@ public sealed class SettingsService
     /// <summary>
     /// Why the settings could not be saved last time, worded for the user, or null when they were.
     /// Automatic runs record their history without anyone watching, so this is how a read-only or
-    /// full disk reaches the page.
+    /// full disk reaches the page. It says what that means: a change is refused (see
+    /// <see cref="TryUpdate"/>), while the schedule's history is kept, but only until a restart.
     /// </summary>
     public string? SaveWarning
     {
@@ -51,7 +52,8 @@ public sealed class SettingsService
             {
                 return _saveProblem is null
                     ? null
-                    : $"The settings could not be saved, so changes will be forgotten when the app restarts: {_saveProblem}";
+                    : "The settings could not be saved, so changes to them are refused until they can be, and when " +
+                      $"automatic sorting last ran will be forgotten when the app restarts: {_saveProblem}";
             }
         }
     }
@@ -220,7 +222,11 @@ public sealed class SettingsService
     }
 
     /// <summary>
-    /// Copying a library into itself never ends, so that is refused whatever else is going on.
+    /// Copying a library into itself never ends, so a source or destination that makes them overlap
+    /// is refused whatever else is going on. Paths that already overlap are not checked again for
+    /// other changes: a server that sets them that way would otherwise refuse every change, even
+    /// turning off the automatic sorting that keeps failing because of them. Starting a sort, or
+    /// turning automatic sorting on, still refuses them (see <see cref="CheckForSort"/>).
     ///
     /// While automatic sorting is on, the paths must also work right now — including a destination
     /// that exists and can be written, because an unattended run never creates it. That is only
@@ -229,17 +235,19 @@ public sealed class SettingsService
     /// </summary>
     private SettingsError? CheckPaths(AppSettings current, AppSettings next)
     {
-        if (SortPathValidator.InspectDestination(next.SourcePath, next.DestinationPath) is
-            { Code: SortPathProblemCode.DestinationInsideSource } overlap)
+        var sourceChanged = !SettingText.Same(current.SourcePath, next.SourcePath);
+        var destinationChanged = !SettingText.Same(current.DestinationPath, next.DestinationPath);
+        if ((sourceChanged || destinationChanged) &&
+            SortPathValidator.InspectDestination(next.SourcePath, next.DestinationPath) is
+                { Code: SortPathProblemCode.DestinationInsideSource } overlap)
         {
-            return OverlapError(overlap, sourceChanged: !SettingText.Same(current.SourcePath, next.SourcePath),
-                destinationChanged: !SettingText.Same(current.DestinationPath, next.DestinationPath), next);
+            return OverlapError(overlap, sourceChanged, destinationChanged, next);
         }
 
         var pathsOrIntervalChanged =
             !SettingText.Same(current.CsvPath, next.CsvPath) ||
-            !SettingText.Same(current.SourcePath, next.SourcePath) ||
-            !SettingText.Same(current.DestinationPath, next.DestinationPath) ||
+            sourceChanged ||
+            destinationChanged ||
             current.ScheduleIntervalMinutes != next.ScheduleIntervalMinutes;
 
         if (next.ScheduleIntervalMinutes is null || !pathsOrIntervalChanged)

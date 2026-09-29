@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getSettings, updateSettings } from '../api';
+import { getSettings, isUnanswered, updateSettings } from '../api';
 import { isFoundAgain } from '../paths';
 
 // The desktop backend is started alongside the window and takes a few seconds to answer; a Docker
@@ -42,12 +42,14 @@ function withoutFound(fieldErrors, pathStatus) {
  * never land after a newer one and put an old value back.
  *
  * `fieldErrors` maps a setting ("destinationPath") to the message the backend refused it with, for
- * showing under that setting; `error` holds anything not about one setting.
+ * showing under that setting; `error` holds anything not about one setting, and `errorCode` its code
+ * ("unreachable" when the organizer did not answer).
  */
 export default function useSettings() {
   const [settings, setSettings] = useState(null);
   // Kept with its code so a refresh can tell "the backend did not answer" (moot once it answers
-  // again) from a save the backend refused (still true until a save succeeds).
+  // again, having saved the change or not: the page now shows which) from a save the backend
+  // refused (still true until a save succeeds).
   const [errorState, setErrorState] = useState(null);
   const [fieldErrorState, setFieldErrorState] = useState({});
   const [pending, setPending] = useState(0);
@@ -113,7 +115,7 @@ export default function useSettings() {
         const current = await getSettings();
         setSettings(current);
         setFieldErrorState((errors) => withoutFound(errors, current.pathStatus));
-        setErrorState((shown) => (shown?.code === 'unreachable' ? null : shown));
+        setErrorState((shown) => (isUnanswered(shown) ? null : shown));
         return true;
       } catch {
         // The settings on screen are still the last ones the backend confirmed.
@@ -161,6 +163,7 @@ export default function useSettings() {
   );
 
   const error = errorState?.message ?? null;
+  const errorCode = errorState?.code ?? null;
 
   const fieldErrors = useMemo(
     () => Object.fromEntries(Object.entries(fieldErrorState).map(([field, { message }]) => [field, message])),
@@ -168,7 +171,7 @@ export default function useSettings() {
   );
 
   return useMemo(
-    () => ({ settings, update, refresh, saving: pending > 0, error, fieldErrors }),
-    [settings, update, refresh, pending, error, fieldErrors]
+    () => ({ settings, update, refresh, saving: pending > 0, error, errorCode, fieldErrors }),
+    [settings, update, refresh, pending, error, errorCode, fieldErrors]
   );
 }

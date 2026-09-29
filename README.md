@@ -203,7 +203,8 @@ Andy Weir/
 
 Every book gets a folder of its own: a numbered series book goes in `Book N`, and any other book in
 a folder named after its title. Two books with the same number (two narrations of one book, say)
-get `Book 1` and `Book 1 (2)`, in the order of the export. That is the layout Audiobookshelf, Plex and similar servers expect —
+get `Book 1` and `Book 1 (2)`, in the order of the export the first time they are sorted; after that each
+keeps the folder that holds its audio, whatever the order. That is the layout Audiobookshelf, Plex and similar servers expect —
 a loose audio file in an author folder makes them treat that whole folder as one book and miss every
 series inside it. A companion PDF is copied next to its audiobook when the export mentions one and
 the file is present.
@@ -218,6 +219,14 @@ folder is moved, and only within the destination folder. A file with the book's 
 different audio may be the only copy of another book with the same title (one you have returned, or
 not downloaded again), so it is left where it is and the problems list names it: delete it yourself
 if it is an old copy of that book.
+
+The same care is taken with book folders. A book's folder that holds different audio is updated only
+when no other book in the export could own it. When another book with the same title or series number
+is not in the source folder, or has no folder of its own yet, that audio may be its only copy: the book
+is copied into the next `(2)` folder instead, and the problems list names the folder left alone.
+A file in the source folder that is empty, as it is while OpenAudible downloads or converts a book, is
+counted as **Not found** and never replaces the copy in your library; nor does a file that changes
+while it is being copied.
 
 Names come from your metadata, cleaned up so the result is portable:
 
@@ -253,7 +262,9 @@ as soon as you open the app again. Two switches appear on the card once automati
 - **Keep running in the background when the window is closed.** Closing the window leaves the app
   running in the system tray (the menu bar on macOS), still sorting on schedule. The first time, a
   notification says so. Click the tray icon, or choose **Open Book Organizer** from its menu, to
-  bring the window back; choose **Quit** there to stop the app.
+  bring the window back; choose **Quit** there to stop the app. While closing the window keeps the
+  app running, its title bar also has a **Quit** button (the power symbol), for desktops that show
+  no tray icons.
 - **Start when I sign in.** The app starts with your computer, hidden in the tray, ready for the
   next sort.
 
@@ -262,7 +273,8 @@ Both are off until you turn them on.
 If you close the window while a sort is running and background mode is off, the app asks first:
 **Keep running in the background** (it finishes, then waits in the tray), **Stop sorting and quit**,
 or **Cancel**. Choosing **Quit** from the tray during a sort asks the same question. Stopping a sort this way is as safe as
-pressing Cancel.
+pressing Cancel, and an automatic sort stopped this way is not counted as done: it runs again the
+next time you open the app.
 
 For sorting around the clock on a machine that is always on, run the
 [Docker image](#docker-web-app) and set `SORT_INTERVAL`.
@@ -283,7 +295,7 @@ operating system's setting and changes with it.
 | **Start sorting** is greyed out: *"A sort is already running."* | A sort — possibly an automatic one — is still going. Follow it in the Progress card, or cancel it there. |
 | **Automatic sorting** is greyed out | Choose all three paths first; the card says which are missing. |
 | *"The Book Organizer backend could not be started"* | The part of the app that does the copying did not start. The message says why; restart the app, and reinstall it if that keeps happening. |
-| No tray icon on Linux | Some desktops, including GNOME, only show tray icons with an extension such as *AppIndicator and KStatusNotifierItem Support*. Without one, leave background mode off. |
+| No tray icon on Linux | Some desktops, including GNOME, only show tray icons with an extension such as *AppIndicator and KStatusNotifierItem Support*. Without one, the app still keeps running when its window is closed in background mode: open Book Organizer again to bring the window back, and use **Quit** in its title bar to stop it. |
 | Some books land under **Unknown** | Those rows have no author in the CSV. Fix them in OpenAudible and re-export. |
 | A row is missing from the library | The CSV row could not be read. The Library page says how many rows it skipped, and why, above the table. |
 
@@ -432,7 +444,7 @@ page, the problems list for every run, and any ignored setting as a warning at t
 | *"Cannot write to the destination folder"* | The container's user cannot write to the mounted folder. Check the host folder's permissions. |
 | Sorted books cannot be renamed or deleted over SMB or by another app | The container ran as root, so it owns what it sorted. Run it as your own user (see above) and, once, `chown -R` the destination folder on the host back to you. |
 | A warning at the top of the page, such as ``SORT_INTERVAL="6x" was ignored`` | The value could not be read. Use something like `6h`, `12h` or `1d`, or `off`. |
-| A warning at the top of the page: *"The settings could not be saved…"* | The `./data` folder is mounted read-only, or its disk is full. The Sort page's choices and when automatic sorting last ran are forgotten on every restart until `settings.json` can be written. |
+| A warning at the top of the page: *"The settings could not be saved…"* | The container's user cannot write to the `./data` folder: it is mounted read-only, Docker created it as root while the container runs with `--user`, or its disk is full. Until `settings.json` can be written there, every change on the Sort page is refused with this reason (automatic sorting cannot be turned on or off), and when automatic sorting last ran is forgotten on every restart. Make `./data` writable by the container's user, for example `sudo chown -R 1000:1000 ./data` for `--user 1000:1000`. |
 | A warning at the top of the page: *"The saved settings could not be read…"* | `settings.json` was not valid JSON (a hand edit, say). The container started with the default settings and kept the old file beside it as `settings.json.unreadable-<date>`, so nothing in it is lost. |
 | `docker pull` fails | Check the image name has no hyphen between "book" and "organizer", and that you are logged in to GHCR if the package is private. |
 

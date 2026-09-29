@@ -7,8 +7,10 @@ namespace ManagerApi.Services;
 /// Owns the single sort run the backend allows at a time, plus the library it works from. It is
 /// the only judge of whether a sort is running: the page and the schedule both start runs here, and
 /// both read the same <see cref="RunStatus"/>.
+///
+/// Hosted only so the app waits for the run it is closing (see <see cref="StopAsync"/>).
 /// </summary>
-public sealed class SortService
+public sealed class SortService : IHostedService
 {
     private const string AppClosedMessage = "Canceled because the app closed.";
 
@@ -125,7 +127,11 @@ public sealed class SortService
         }
     }
 
-    public bool CancelSort()
+    /// <param name="appClosing">
+    /// The desktop app is quitting, which is not a person changing their mind: the run ends as one
+    /// the app's closing cut short, so automatic sorting tries it again instead of counting it as done.
+    /// </param>
+    public bool CancelSort(bool appClosing = false)
     {
         lock (_lock)
         {
@@ -135,8 +141,32 @@ public sealed class SortService
             }
 
             // Under the lock: the run disposes its token source once it is no longer the active one.
+            _active.AppClosing |= appClosing;
             _active.Cancellation.Cancel();
             return true;
+        }
+    }
+
+    /// <summary>Nothing to start: runs are started on request.</summary>
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>
+    /// Waits, within the host's shutdown timeout, for the run the closing app has cancelled to wind
+    /// down. The scheduler waits for the runs it starts, but nothing waited for one started from the
+    /// page, so the process could exit before that run recorded and logged why it stopped, or deleted
+    /// its partly copied file.
+    /// </summary>
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        Task? run;
+        lock (_lock)
+        {
+            run = _active?.Completion;
+        }
+
+        if (run is not null)
+        {
+            await run.WaitAsync(cancellationToken).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
         }
     }
 
@@ -168,7 +198,7 @@ public sealed class SortService
         {
             // An app that is closing is not a person changing their mind: saying so lets the
             // schedule try again, and tells the user why the run stopped.
-            var reason = _appStopping.IsCancellationRequested ? AppClosedMessage : null;
+            var reason = _appStopping.IsCancellationRequested || IsClosingApp(run) ? AppClosedMessage : null;
             final = Finish(run, status => status.Canceled(reason, UtcNow()));
         }
         catch (SortPathException ex)
@@ -193,6 +223,14 @@ public sealed class SortService
 
         _logger.LogInformation("{Summary}", RunSummary.Describe(final));
         return final;
+    }
+
+    private bool IsClosingApp(ActiveRun run)
+    {
+        lock (_lock)
+        {
+            return run.AppClosing;
+        }
     }
 
     /// <summary>
@@ -294,6 +332,9 @@ public sealed class SortService
     {
         public CancellationTokenSource Cancellation { get; } = cancellation;
         public Task<RunStatus> Completion { get; set; } = null!;
+
+        /// <summary>Cancelled because the desktop app is quitting; see <see cref="CancelSort"/>.</summary>
+        public bool AppClosing { get; set; }
     }
 
     /// <summary>

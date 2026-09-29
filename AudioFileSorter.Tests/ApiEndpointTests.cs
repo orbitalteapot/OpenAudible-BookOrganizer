@@ -194,6 +194,22 @@ public class ApiEndpointTests
     }
 
     [Fact]
+    public async Task A_cancel_sent_by_the_quitting_desktop_app_says_the_app_closed()
+    {
+        using var workspace = new TempWorkspace();
+        await using var app = new ApiFactory(Locked(workspace, workspace.WriteLargeLibrary(400)));
+        using var client = app.CreateClient();
+        await ExpectStatus(await client.PutAsJsonAsync("/api/settings", new { copySpeed = "gentle" }), HttpStatusCode.OK);
+        await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.Accepted);
+
+        await ExpectStatus(await client.PostAsJsonAsync("/api/sort/cancel", new { reason = "appClosing" }), HttpStatusCode.OK);
+
+        var finished = await WaitForFinish(client);
+        Assert.True(finished.GetProperty("isCanceled").GetBoolean());
+        Assert.Equal("Canceled because the app closed.", finished.GetProperty("error").GetString());
+    }
+
+    [Fact]
     public async Task A_missing_destination_is_reported_and_only_created_once_confirmed()
     {
         using var workspace = new TempWorkspace();

@@ -237,6 +237,12 @@ public class SettingsServiceTests
 
         Assert.StartsWith("Could not save the settings: ", error!.Message);
         Assert.Equal(CopySpeed.Normal, backend.Settings.Effective.CopySpeed);
+
+        // The page's warning says so, and which folder has to be fixed; it used to promise that
+        // changes were kept until a restart.
+        var warning = Assert.Single(SettingsResponse.From(backend.Settings).ServerWarnings);
+        Assert.Contains("changes to them are refused", warning);
+        Assert.Contains($"Check that the folder {Path.Combine(workspace.Root, "not-a-folder")} can be written", warning);
     }
 
     [Fact]
@@ -424,6 +430,41 @@ public class SettingsServiceTests
         Assert.Equal("sourcePath", error!.Field);
         Assert.Contains(workspace.Root, error.Message);
         Assert.Equal(workspace.Destination, backend.Settings.Effective.DestinationPath);
+    }
+
+    [Fact]
+    public void Overlapping_server_paths_do_not_block_other_changes_or_turning_automatic_sorting_off()
+    {
+        using var workspace = new TempWorkspace();
+        var settingsPath = Path.Combine(workspace.Root, "settings.json");
+        var csv = workspace.WriteCsv();
+        using (var before = new TestBackend(new ServerConfig { SettingsPath = settingsPath }))
+        {
+            Assert.True(before.Settings.TryUpdate(new AppSettingsPatch
+            {
+                CsvPath = csv,
+                SourcePath = workspace.Source,
+                DestinationPath = workspace.Destination,
+                ScheduleIntervalMinutes = 360
+            }, out var saveError), saveError?.Message);
+        }
+
+        // The container's variables were changed since, so that they overlap.
+        using var backend = new TestBackend(new ServerConfig
+        {
+            CsvPath = csv,
+            SourcePath = workspace.Source,
+            DestinationPath = Path.Combine(workspace.Source, "Organized"),
+            SettingsPath = settingsPath
+        });
+
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out var error), error?.Message);
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { ScheduleIntervalMinutes = null }, out error), error?.Message);
+        Assert.Null(backend.Settings.Effective.ScheduleIntervalMinutes);
+
+        // Turning it on again would only fail every 15 minutes.
+        Assert.False(backend.Settings.TryUpdate(new AppSettingsPatch { ScheduleIntervalMinutes = 360 }, out error));
+        Assert.Equal("destinationPath", error!.Field);
     }
 
     [Fact]
