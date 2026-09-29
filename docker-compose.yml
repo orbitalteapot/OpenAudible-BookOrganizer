@@ -27,7 +27,9 @@ services:
     ports:
       - "5123:5123"
     volumes:
-      # Place your OpenAudible CSV export (books.csv) in a local ./data folder
+      # Place your OpenAudible CSV export (books.csv) in a local ./data folder. The choices made on
+      # the Sort page, and when automatic sorting last ran, are kept here too (settings.json), so
+      # they survive a restart or a new image.
       - ./data:/data
       # Replace the left-hand side with your actual audiobook source directory
       - /path/to/your/audiobooks:/source

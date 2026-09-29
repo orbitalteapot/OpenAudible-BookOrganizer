@@ -17,7 +17,9 @@ browser interface for a NAS or home server.
 - Copies each book into its own folder under `Author / Series / Book`, the layout Audiobookshelf and Plex expect
 - Brings companion PDFs along with the audiobook
 - Replaces books you have re-downloaded, so an organised library stays current
-- Can re-sort on a schedule, so new downloads are filed without you lifting a finger
+- Can re-sort on a schedule, so new downloads are filed without you lifting a finger — on the
+  desktop it can keep doing that from the system tray after you close the window
+- Tells you, book by book, which ones it could not find or could not copy, and why
 - Never moves or deletes anything in your source folder — it only ever copies out of it
 
 ---
@@ -71,11 +73,12 @@ which book.
 
 ![Exporting from OpenAudible](images/export.png)
 
-Re-export whenever you buy or download more books, then reload it in the app.
+Re-export whenever you buy or download more books. Saving over the same file is easiest: the app
+remembers where it is.
 
 ## 3. Load your library
 
-Open the app, stay on the **Library** page and click **Load CSV export**. Pick the CSV you just
+Open the app, stay on the **Library** page and click **Choose export…**. Pick the CSV you just
 exported.
 
 Your books appear in a table you can search and sort. Click any column heading to sort by it;
@@ -84,36 +87,77 @@ so a series reads in order rather than alphabetically.
 
 ![Searching the library](images/app-library-search.png)
 
+The app remembers the export, so from then on the library loads by itself when you open the app.
+After re-exporting, click **Reload** to read the file again; **Choose export…** switches to a
+different file. The Library and Sort pages always use the same export.
+
+If some rows of the export could not be read, a note above the table says how many were skipped;
+open it to see which rows and why.
+
 Loading the CSV only reads it. Nothing is copied until you say so.
 
 ## 4. Sort your books
 
-Go to the **Sort** page and fill in three paths:
+Go to the **Sort** page. The **Folders** card holds three paths; click **Browse** next to each:
 
 | Field | What to choose |
 | --- | --- |
-| **OpenAudible CSV export** | The CSV file from step 2. |
+| **OpenAudible CSV export** | The CSV file from step 2 — already filled in if you chose it on the Library page. |
 | **Source folder** | Where OpenAudible put your downloaded books. |
 | **Destination folder** | Where you want the organised library. Must not be inside the source folder. |
 
 ![The Sort page](images/app-sort.png)
 
-Then click **Start sorting**. Progress appears on the right as it works, and you can cancel at any
-point — books already copied are complete files, and re-running picks up where you left off.
+Each path is saved as soon as you pick it, so you only do this once. Under each one the app says
+whether it can see it: **Found**, **Not found** or **Not set**. A path the app refuses — a
+destination inside the source folder, say — is explained right there, and the row keeps the path
+that was saved before.
+
+The **Options** card has two settings, both remembered between runs:
+
+| Option | Choices |
+| --- | --- |
+| **Update check** | **Quick** or **Verify contents** — how closely a book is compared with the copy already at the destination. See [Keeping books up to date](#keeping-books-up-to-date). |
+| **Copy speed** | **Normal** copies several books at once. **Gentle** copies one book at a time: use it for network drives and USB disks, which get slower, not faster, when several copies compete. |
+
+**How books are organised**, folded away under the options, shows the folder layout the sort will
+produce.
+
+Then click **Start sorting**. If the button is greyed out, the line underneath says why — usually
+a path that has not been chosen yet.
+
+If the destination folder does not exist, the app asks before doing anything: *"The destination
+folder doesn't exist. Is the drive connected?"* The likeliest reason is an external drive or a
+network share that is not plugged in, and sorting onto your internal disk instead would quietly
+fill it. Connect the drive and start again, or click **Create folder and sort** if a new folder is
+what you want.
+
+Progress appears in the **Progress** card as it works, with the book being copied, and you can
+cancel at any point — books already copied are complete files, and re-running picks up where you
+left off. A small **Sorting…** badge in the sidebar shows the progress from any page; click it to
+come back.
 
 ![A finished sort](images/app-sort-complete.png)
 
-When it finishes you get five numbers:
+Every book lands in exactly one of six counters, so they add up to the books processed:
 
 | Counter | Meaning |
 | --- | --- |
-| **Copied** | Books written to the destination, whether new or replaced. |
-| **Updated** | Of those, the ones that replaced an out-of-date copy. |
-| **Skipped** | Already at the destination and up to date, so nothing was written. |
+| **New** | Not in your library yet; copied in. |
+| **Updated** | Replaced an out-of-date copy at the destination. |
+| **Moved** | Left loose by an older version of this app, and moved into its own folder (see [below](#how-your-books-get-organised)). |
+| **Up to date** | Already at the destination and unchanged, so nothing was written. |
 | **Not found** | Listed in the export, but no matching file in the source folder — usually books you have not downloaded. |
-| **Failed** | Could not be processed. Details are in the backend log. |
+| **Failed** | Could not be copied. The problems list says why. |
 
-Running a sort again after adding books is cheap: everything already in place is skipped.
+When anything needs your attention, a **Problems** list appears under the counters. Open it to see
+each book by title, grouped into *Could not be copied*, *No file in the source folder* and
+*Warnings*, with the reason in plain words — a full disk, a folder you do not have permission to
+write to, a file another program has open. Up to 500 books are listed; beyond that it says how many
+more there were.
+
+Running a sort again after adding books is cheap: everything already in place is up to date and
+left alone.
 
 ## Keeping books up to date
 
@@ -164,7 +208,11 @@ the file is present.
 
 Libraries sorted by an older version, which left standalone books loose in the author folder, are
 tidied up on the next sort: each loose file is moved into its new book folder rather than copied a
-second time.
+second time, and counted as **Moved**. The same happens to a book whose metadata has changed shape
+since it was filed — one that has since been given a series, or a number within its series — so it
+is not left behind as a second copy. This always happens: a loose file next to a book folder is
+exactly what breaks Audiobookshelf. Only files the sort can match to a book in the export are
+moved, and only within the destination folder.
 
 Names come from your metadata, cleaned up so the result is portable:
 
@@ -179,26 +227,60 @@ Names come from your metadata, cleaned up so the result is portable:
 ## Sorting automatically
 
 Pick an interval under **Automatic sorting** on the Sort page — every 6 or 12 hours, daily or
-weekly — and the organiser re-sorts on its own with the paths and update check shown above it. Only
-new and changed books are copied, so a run over an unchanged library takes seconds. The card shows
-when the next run is due and how the last one went.
+weekly — and the organiser re-sorts on its own, with the folders and options shown above it. The
+first sort starts as soon as you turn it on, and the card says so. Only new and changed books are
+copied, so a run over an unchanged library takes seconds.
 
-In the desktop app, automatic sorts run while the app is open. If one was due while it was closed,
-it runs as soon as you open the app again. The folders are remembered too, so you do not have to
-pick them again.
+The card shows when the next sort is due and how the last one went, in the same words as a sort you
+start yourself. An automatic sort shows up in the Progress card while it runs, with its progress,
+its problems list and a Cancel button, just like one you started.
 
-For sorting around the clock without the app open, run the [Docker image](#docker-web-app) and set
-`SORT_INTERVAL`.
+Automatic sorts never create a missing destination folder. If the drive is not connected, or the
+folder cannot be written to, the card says *"Retrying at …"* with the reason, and the sort is tried
+again 15 minutes later until it works. If the schedule cannot run at all — the export has gone
+missing, say — the card says *"Automatic sorting can't run"* and why.
+
+### Keeping it running on the desktop
+
+By default, automatic sorts run while the app is open; if one was due while it was closed, it runs
+as soon as you open the app again. Two switches appear on the card once automatic sorting is on:
+
+- **Keep running in the background when the window is closed.** Closing the window leaves the app
+  running in the system tray (the menu bar on macOS), still sorting on schedule. The first time, a
+  notification says so. Click the tray icon, or choose **Open Book Organizer** from its menu, to
+  bring the window back; choose **Quit** there to stop the app.
+- **Start when I sign in.** The app starts with your computer, hidden in the tray, ready for the
+  next sort.
+
+Both are off until you turn them on.
+
+If you close the window while a sort is running and background mode is off, the app asks first:
+**Keep running in the background** (it finishes, then waits in the tray), **Stop sorting and quit**,
+or **Cancel**. Choosing **Quit** from the tray during a sort asks the same question. Stopping a sort this way is as safe as
+pressing Cancel.
+
+For sorting around the clock on a machine that is always on, run the
+[Docker image](#docker-web-app) and set `SORT_INTERVAL`.
+
+## Appearance
+
+The switch at the bottom of the sidebar picks **System**, **Light** or **Dark**. System follows your
+operating system's setting and changes with it.
 
 ## If something goes wrong
 
 | Symptom | Likely cause |
 | --- | --- |
 | Books show as **Not found** and nothing is copied | The source folder does not contain the files named in the CSV. Check the source path, and re-export the CSV if you have moved files since. |
-| The app window opens but stays empty | Port `5123` is in use by something else. The app runs its backend there. Close the other program and restart the app. |
-| "Sort already in progress" | A run is still going. Wait for it, or cancel it. |
+| Books show as **Failed** | Open **Problems** under the counters: each book is listed with the reason, such as a full disk or a folder you cannot write to. |
+| *"The destination folder doesn't exist. Is the drive connected?"* | The drive or network share holding your library is not connected. Connect it and start again. |
+| The destination says **Can't write to this folder** | You do not have permission to write there, or the drive is read-only. Pick another folder, or fix the permissions. |
+| **Start sorting** is greyed out: *"A sort is already running."* | A sort — possibly an automatic one — is still going. Follow it in the Progress card, or cancel it there. |
+| **Automatic sorting** is greyed out | Choose all three paths first; the card says which are missing. |
+| *"The Book Organizer backend could not be started"* | The part of the app that does the copying did not start. The message says why; restart the app, and reinstall it if that keeps happening. |
+| No tray icon on Linux | Some desktops, including GNOME, only show tray icons with an extension such as *AppIndicator and KStatusNotifierItem Support*. Without one, leave background mode off. |
 | Some books land under **Unknown** | Those rows have no author in the CSV. Fix them in OpenAudible and re-export. |
-| A row is missing from the library | The CSV row could not be read. The app reports how many rows it skipped when loading. |
+| A row is missing from the library | The CSV row could not be read. The Library page says how many rows it skipped, and why, above the table. |
 
 ---
 
@@ -207,6 +289,8 @@ For sorting around the clock without the app open, run the [Docker image](#docke
 The container runs the same organiser with a browser interface instead of a desktop window, which
 suits a NAS or home server. Unlike the desktop app, its paths are fixed by the container's
 environment rather than chosen in the browser — the web page is a control panel for the container.
+The Sort page shows each path with whether the container can see it, and tells you which variable
+to change when it cannot.
 
 ## The image
 
@@ -252,7 +336,7 @@ docker run -d \
   ghcr.io/orbitalteapot/openaudible-bookorganizer:latest
 ```
 
-Or with the [docker-compose.yml](docker-compose.yml) in this repository:
+Or with Docker Compose:
 
 ```yaml
 services:
@@ -276,8 +360,13 @@ services:
 docker compose up -d
 ```
 
-Then open <http://localhost:5123>, load the library, and start a sort — the same two pages as the
-desktop app, minus the file pickers.
+The [docker-compose.yml](docker-compose.yml) in this repository is the same service, built from
+source rather than pulled, with every setting explained in its comments.
+
+Then open <http://localhost:5123>. The library loads by itself, and the Sort page works as it does
+on the desktop, minus the file pickers and the tray. The update check, copy speed and automatic
+sorting chosen there are saved in the mounted data folder (`/data/settings.json`), so they survive
+a restart or an image update.
 
 ## Configuration
 
@@ -285,19 +374,22 @@ desktop app, minus the file pickers.
 | --- | --- | --- | --- |
 | `CSV_PATH` | yes | — | The OpenAudible CSV export, inside the container. |
 | `SOURCE_PATH` | yes | — | Mounted folder holding your downloaded audiobooks. |
-| `DESTINATION_PATH` | yes | — | Mounted folder to write the organised library into. |
-| `COMPARISON_MODE` | no | `quick` | Default update check: `quick` or `full`. The Sort page can override it per run. |
-| `SORT_INTERVAL` | no | off | Sort automatically, e.g. `6h`, `12h`, `1d` or `30m` (at least 15 minutes). When set, the schedule is fixed; leave it unset to choose one on the Sort page instead. |
-| `OABO_SETTINGS_PATH` | no | `/data/settings.json` | Where a schedule set on the Sort page, and the time of the last automatic sort, are saved. |
-| `OABO_MAX_PARALLELISM` | no | cores ÷ 4, max 8 | How many books are copied at once. Set `1` or `2` for a network share or a spinning disk, where more concurrency is slower, not faster. |
+| `DESTINATION_PATH` | yes | — | Mounted folder to write the organised library into. It must already exist: automatic sorts never create it, so an unmounted drive is reported rather than filled in. |
+| `COMPARISON_MODE` | no | `quick` | Update check used until one is chosen on the Sort page: `quick` or `full`. Once chosen there, the page's choice is saved and wins. |
+| `SORT_INTERVAL` | no | off | Sort automatically, e.g. `6h`, `12h`, `1d` or `30m` (at least 15 minutes; a bare number is hours). A valid value fixes the schedule, and the Sort page shows it without letting it be changed. Leave it unset, or set `off`, to choose automatic sorting on the Sort page instead. A value that cannot be read is ignored, and the Sort page says so. |
+| `OABO_MAX_PARALLELISM` | no | cores ÷ 4, max 8 | How many books are copied at once at the **Normal** copy speed. The Sort page's **Gentle** copy speed always copies one at a time, which is the better choice for a network share or a spinning disk. |
+| `OABO_SETTINGS_PATH` | no | `/data/settings.json` | Where the choices made on the Sort page, and the history of automatic sorts, are saved. |
 | `ASPNETCORE_URLS` | no | `http://0.0.0.0:5123` | Change the port the container listens on. |
+
+Setting any of the three paths fixes all three: the container mounts its volumes where its
+variables say, and a path chosen in the browser would point somewhere the container cannot see.
 
 ## Updating your library
 
-Replace `books.csv` in the mounted data folder with a fresh export, reload the library in the
-browser, then start a sort. With `SORT_INTERVAL` set, or a schedule chosen on the Sort page, the next
-automatic sort picks the new export up by itself — point OpenAudible's export at that file and there
-is nothing left to do by hand.
+Replace `books.csv` in the mounted data folder with a fresh export, click **Reload** on the Library
+page, then start a sort. With automatic sorting on — from `SORT_INTERVAL` or chosen on the Sort
+page — the next automatic sort picks the new export up by itself: point OpenAudible's export at that
+file and there is nothing left to do by hand.
 
 ## Checking it works
 
@@ -307,17 +399,26 @@ curl http://localhost:5123/api/health        # {"status":"ok"}
 docker logs -f openaudible-bookorganizer     # startup, configured paths, sort results
 ```
 
-The log lines at startup show which paths the container resolved, which is the quickest way to
-spot a mount that is not where you thought it was.
+The first lines of the log show what the container resolved: the address it listens on, each of
+the three paths with whether it was found or is missing, the update check and copy speed, whether
+the schedule comes from `SORT_INTERVAL` or the Sort page, and any variable that was ignored. That is
+the quickest way to spot a mount that is not where you thought it was. After that, every sort logs
+one line with its outcome, such as `Scheduled sort finished: 3 new, 120 up to date.`
+
+The same information is on the Sort page, so you rarely need the log: each path's status, the
+problems list for every run, and any ignored setting as a warning on the Automatic sorting card.
 
 ## Docker troubleshooting
 
 | Symptom | Likely cause |
 | --- | --- |
 | Page does not load | Port `5123` is not published, or is taken on the host. |
-| "CSV file not found" | `CSV_PATH` does not match where the file is mounted. |
+| A path says *"not found inside the container"* | The variable does not match where the volume is mounted. The startup log lists what the container sees. |
 | Everything is **Not found** | `SOURCE_PATH` is mounted somewhere other than where the books are. |
-| "The destination folder cannot be the source folder or live inside it" | Copying a folder into itself never terminates cleanly, so it is refused. Mount them separately. |
+| *"The destination folder cannot be the source folder or a folder inside it."* | Copying a folder into itself never terminates cleanly, so it is refused. Mount them separately. |
+| *"The destination folder does not exist. Is the drive connected?"* | The volume behind `DESTINATION_PATH` is not mounted, or the host folder is missing. Automatic sorts retry every 15 minutes until it is back. |
+| *"Cannot write to the destination folder"* | The container's user cannot write to the mounted folder. Check the host folder's permissions. |
+| A warning on the Automatic sorting card, such as ``SORT_INTERVAL="6x" was ignored`` | The value could not be read. Use something like `6h`, `12h` or `1d`, or `off`. |
 | `docker pull` fails | Check the image name has no hyphen between "book" and "organizer", and that you are logged in to GHCR if the package is private. |
 
 The image is published to GitHub Packages, not attached to release assets:
@@ -335,25 +436,43 @@ The image is published to GitHub Packages, not attached to release assets:
 ### Run in development
 
 ```sh
-# Terminal 1 — the C# backend
-dotnet run --project ManagerApi
-
-# Terminal 2 — the Electron app
 cd electron-ui
 npm install
 npm run dev
 ```
 
+This starts the Vite dev server and the Electron window, and Electron starts the C# backend itself
+(`dotnet run`) on a free port, just as the installed app does.
+
+To run the backend yourself instead — under a debugger, say — start it first and point the app at
+it with `OABO_BACKEND_URL`:
+
+```sh
+# Terminal 1 — the C# backend, on http://127.0.0.1:5123
+dotnet run --project ManagerApi
+
+# Terminal 2 — the Electron app, using that backend
+cd electron-ui
+OABO_BACKEND_URL=http://127.0.0.1:5123 npm run dev
+```
+
+A backend started by hand keeps its settings in memory unless `OABO_SETTINGS_PATH` names a file,
+and takes the same environment variables as the [Docker image](#configuration). With it running,
+<http://localhost:5173> in a browser shows the web version of the interface.
+
 ### Run the tests
 
 ```sh
-dotnet test OpenAudibleBookManager.sln     # sorting engine
-npm --prefix electron-ui test              # library search and ordering
+dotnet test OpenAudibleBookManager.sln     # sorting engine and backend
+npm --prefix electron-ui test              # interface
 ```
 
 The backend suite covers path sanitisation, author and series folder resolution, planning
-determinism, atomic and repeatable copying, both update checks, cancellation and CSV import
-robustness. The frontend suite covers searching, and the ordering rules behind each column.
+determinism, finding and moving books left by older versions, atomic and repeatable copying, both
+update checks, cancellation, CSV import robustness, path validation, the saved settings, the
+schedule's timing and retries, and the HTTP endpoints. The frontend suite covers searching and the
+ordering rules behind each column, how a run is put into words, saving settings, following a
+running sort, and the Library, Sort and Automatic sorting screens.
 
 ### Build installers
 
@@ -373,8 +492,11 @@ binary first, which is why the installers are large and why users need no runtim
 | Project | Role |
 | --- | --- |
 | `AudioFileSorter` | The organiser: reads the CSV, decides where every book goes, copies it there. |
-| `ManagerApi` | ASP.NET Core host exposing that over HTTP, and serving the web UI in Docker. |
+| `ManagerApi` | ASP.NET Core host exposing that over HTTP, keeping the settings and the schedule, and serving the web UI in Docker. |
 | `electron-ui` | React interface, running either in an Electron window or in a browser. |
 
-The desktop app is the same web interface in an Electron window, with the backend started as a
-child process on port 5123 and native file pickers wired in.
+The desktop app is the same web interface in an Electron window, with native file pickers and the
+tray wired in. Electron starts the backend as a child process listening only on `127.0.0.1`, on a
+free port it picks at launch, with its settings in the app's user data folder; the backend is the
+one place that knows the settings and whether a sort is running, so the window, the tray and the
+schedule always agree.
