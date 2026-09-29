@@ -391,15 +391,6 @@ if (!app.requestSingleInstanceLock()) {
   // macOS: clicking the Dock icon brings back a window that was closed to the menu bar.
   app.on('activate', () => showWindow());
 
-  // Ctrl+C in the launching terminal or a service manager stopping the app: never hold that up with
-  // a prompt. The signal usually reaches the backend too, and it is already cancelling its run.
-  for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => {
-      quitting = true;
-      app.quit();
-    });
-  }
-
   app.whenReady().then(async () => {
     registerIpcHandlers();
     nativeTheme.on('updated', syncWindowBackground);
@@ -407,6 +398,16 @@ if (!app.requestSingleInstanceLock()) {
     powerMonitor.on('shutdown', () => {
       quitting = true;
     });
+    // Ctrl+C in the launching terminal or a service manager stopping the app: never hold that up
+    // with a prompt. The signal usually reaches the backend too, and it is already cancelling its
+    // run. Registered once ready, because Electron replaces earlier handlers with its own during
+    // startup, and that one quits through before-quit's prompt.
+    for (const signal of ['SIGINT', 'SIGTERM']) {
+      process.on(signal, () => {
+        quitting = true;
+        app.quit();
+      });
+    }
 
     await backend.start({
       packaged: app.isPackaged,
