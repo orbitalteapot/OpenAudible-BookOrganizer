@@ -39,7 +39,7 @@ export default function App() {
     fieldErrors: settingsState.fieldErrors,
     runFinishedUtc,
   });
-  const library = useLibrary(settings?.csvPath);
+  const library = useLibrary(settings?.csvPath, settings?.pathStatus?.csv === 'ok');
 
   // A run can create the destination, and whatever it found out about the folders is worth
   // showing, so the path statuses are asked for again once it ends.

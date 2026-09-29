@@ -40,4 +40,28 @@ describe('useLibrary', () => {
     expect(result.current.books).toHaveLength(1);
     expect(result.current.loaded).toBe(true);
   });
+
+  it('reads the export again once it turns up after a failed read', async () => {
+    vi.mocked(parseLibrary).mockRejectedValueOnce(new ApiError('The library export was not found', { status: 404 }));
+    const { result, rerender } = renderHook(({ found }) => useLibrary('/a.csv', found), {
+      initialProps: { found: false },
+    });
+    await waitFor(() => expect(result.current.error).toBe('The library export was not found'));
+
+    vi.mocked(parseLibrary).mockResolvedValueOnce({ books: [book] });
+    rerender({ found: true });
+    await waitFor(() => expect(result.current.books).toHaveLength(1));
+    expect(result.current.error).toBeNull();
+    expect(parseLibrary).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not read a found export twice on launch', async () => {
+    vi.mocked(parseLibrary).mockResolvedValue({ books: [book] });
+    const { result, rerender } = renderHook(({ path, found }) => useLibrary(path, found), {
+      initialProps: { path: undefined, found: false },
+    });
+    rerender({ path: '/a.csv', found: true });
+    await waitFor(() => expect(result.current.books).toHaveLength(1));
+    expect(parseLibrary).toHaveBeenCalledTimes(1);
+  });
 });

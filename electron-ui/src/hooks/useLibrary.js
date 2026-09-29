@@ -10,17 +10,24 @@ const EMPTY = { books: [], skippedRows: 0, warnings: [] };
  *
  * `loaded` is set once the current export has been read, to tell "nothing read yet" from "read,
  * but empty".
+ *
+ * `csvFound` is whether the backend last saw the export on disk. A read that failed is tried again
+ * when it turns true, so an export on a drive plugged in, or a volume mounted, after the app started
+ * loads without the user having to find Reload.
  */
-export default function useLibrary(csvPath) {
+export default function useLibrary(csvPath, csvFound) {
   const [library, setLibrary] = useState(EMPTY);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const latest = useRef(0);
+  // Read in the effect below, which must run only when the export turns up, not after every failure.
+  const lastReadFailed = useRef(false);
 
   const reload = useCallback(async () => {
     // Choosing a second export while the first is still being read must not end on the first.
     const id = ++latest.current;
+    lastReadFailed.current = false;
     setLoading(true);
     setError(null);
 
@@ -34,7 +41,10 @@ export default function useLibrary(csvPath) {
       });
       setLoaded(true);
     } catch (err) {
-      if (id === latest.current) setError(err.message);
+      if (id === latest.current) {
+        lastReadFailed.current = true;
+        setError(err.message);
+      }
     } finally {
       if (id === latest.current) setLoading(false);
     }
@@ -47,6 +57,10 @@ export default function useLibrary(csvPath) {
     setLoaded(false);
     if (csvPath) reload();
   }, [csvPath, reload]);
+
+  useEffect(() => {
+    if (csvFound && lastReadFailed.current) reload();
+  }, [csvFound, reload]);
 
   return useMemo(() => ({ ...library, loaded, loading, error, reload }), [library, loaded, loading, error, reload]);
 }
