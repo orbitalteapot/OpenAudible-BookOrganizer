@@ -109,7 +109,7 @@ export default function ScheduleCard({ scheduleState, settingsState, runStatus, 
 
   const hint = schedule.locked
     ? `${formatInterval(schedule.intervalMinutes)}. Set by the server's SORT_INTERVAL setting.`
-    : blocked ?? (isOn ? 'Uses the folders and options above.' : 'The first sort starts as soon as you turn this on.');
+    : blocked ?? (isOn ? 'Uses the same folders and options as Start sorting.' : 'The first sort starts as soon as you turn this on.');
 
   const select = async (value) => {
     const minutes = value === OFF ? null : Number(value);
