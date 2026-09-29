@@ -50,8 +50,11 @@ function RunResult({ summary: { headline, details, tone } }) {
  * `lostContact` is set when the backend stopped answering.
  */
 export default function ProgressCard({ status, cancel, lostContact }) {
-  const [cancelError, setCancelError] = useState(null);
+  // Remembered with the run it belongs to: the card stays mounted between runs, and a failed Cancel
+  // on one run says nothing about the next.
+  const [cancelFailure, setCancelFailure] = useState(null);
   const [canceling, setCanceling] = useState(false);
+  const cancelError = cancelFailure?.run === status?.startedUtc ? cancelFailure.message : null;
 
   if (!status || status.state === 'idle') {
     return (
@@ -70,11 +73,11 @@ export default function ProgressCard({ status, cancel, lostContact }) {
 
   const handleCancel = async () => {
     setCanceling(true);
-    setCancelError(null);
+    setCancelFailure(null);
     try {
       await cancel();
     } catch (err) {
-      setCancelError(err.message);
+      setCancelFailure({ run: status.startedUtc, message: err.message });
     } finally {
       setCanceling(false);
     }
