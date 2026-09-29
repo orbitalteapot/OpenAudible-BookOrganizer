@@ -24,8 +24,8 @@ public static partial class SortSchedule
     ///
     /// Due straight away when it has not been tried since it was turned on, so turning it on and
     /// opening the app after a missed run both sort now. After a success, one interval after that
-    /// run started. After a failure, <see cref="RetryDelay"/> after it, but never later than the
-    /// interval would have been.
+    /// run started. After a failure, <see cref="RetryDelay"/> after it, but never later than a regular
+    /// run still due after that failure.
     ///
     /// A time in the future counts as now (see <see cref="ClampToNow"/>).
     /// </summary>
@@ -49,8 +49,11 @@ public static partial class SortSchedule
             return normalDue;
         }
 
+        // The regular slot only brings a retry forward while it is still ahead of the failed attempt.
+        // Once that attempt was the regular run (or came later), the slot is used up; taking it would
+        // make the retry due at once, again and again, for as long as the drive stays unplugged.
         var retryDue = lastAttempt.Value + RetryDelay;
-        return retryDue < normalDue ? retryDue : normalDue;
+        return normalDue > lastAttempt.Value && normalDue < retryDue ? normalDue : retryDue;
     }
 
     /// <summary>

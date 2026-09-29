@@ -80,6 +80,16 @@ public class SortScheduleTests
         Assert.Equal(Now.AddMinutes(5), SortSchedule.NextRunUtc(360, state, Now));
     }
 
+    [Theory]
+    [InlineData(1440)]
+    [InlineData(3 * 1440)]
+    public void A_failed_regular_run_is_retried_fifteen_minutes_later_not_at_once(int minutesSinceSuccess)
+    {
+        var state = Succeeded(Now.AddMinutes(-minutesSinceSuccess)) with { LastAttemptUtc = Now };
+
+        Assert.Equal(Now.AddMinutes(15), SortSchedule.NextRunUtc(1440, state, Now));
+    }
+
     [Fact]
     public void A_last_run_in_the_future_after_the_clock_was_set_back_counts_as_now()
     {
@@ -159,6 +169,36 @@ public class SortScheduleTests
 
         Assert.InRange(backend.Settings.Schedule.LastAttemptUtc!.Value, Now.AddMinutes(15), Now.AddMinutes(17));
         Assert.False(Directory.Exists(unplugged));
+    }
+
+    [Fact]
+    public async Task A_failed_regular_run_is_tried_once_until_fifteen_minutes_pass()
+    {
+        using var workspace = new TempWorkspace();
+        var unplugged = Path.Combine(workspace.Root, "unplugged");
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(
+            workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), 1440, destination: unplugged, time: time);
+        backend.Settings.UpdateSchedule(_ => Succeeded(Now.AddDays(-1)));
+        using var scheduler = backend.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastAttemptUtc == Now, "the regular run");
+
+        // Lets the scheduler start its wait first: a wait worked out before the jump but started after
+        // it would end up to five minutes late.
+        await Task.Delay(200);
+
+        // Due again at once, the failed run was repeated in a tight loop, so the clock moving on
+        // moved the last attempt with it.
+        await AdvanceAndSettle(time, TimeSpan.FromMinutes(14));
+        Assert.Equal(Now, backend.Settings.Schedule.LastAttemptUtc);
+        Assert.Equal(Now.AddMinutes(15), scheduler.GetStatus().NextRunUtc);
+
+        await AdvanceUntil(time, () => backend.Settings.Schedule.LastAttemptUtc > Now, "the retry");
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.InRange(backend.Settings.Schedule.LastAttemptUtc!.Value, Now.AddMinutes(15), Now.AddMinutes(17));
     }
 
     [Fact]
