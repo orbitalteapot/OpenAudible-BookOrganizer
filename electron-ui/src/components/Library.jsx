@@ -77,10 +77,10 @@ function emptyStateText({ library, csvPath, isElectron }) {
 function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState({ field: 'title', dir: 'asc' });
-  // Why the last "Choose export…" was refused, when that is not about the export itself: saving a
-  // new export checks every folder, and an unplugged destination or a settings file that cannot be
-  // written would otherwise leave the click looking as if it did nothing.
-  const [chooseError, setChooseError] = useState(null);
+  // The last "Choose export…" refusal, when that is not about the export itself: saving a new export
+  // checks every folder, and an unplugged destination or a settings file that cannot be written would
+  // otherwise leave the click looking as if it did nothing.
+  const [refusal, setRefusal] = useState(null);
   const debouncedSearch = useDebounced(search);
 
   const { books } = library;
@@ -88,8 +88,11 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
   // An export the backend cannot see is explained the way the Folders card does, which in the browser
   // names the container's mapping and CSV_PATH; any other failure to read it is the backend's own words.
   const csvStatus = describePath(CSV_FIELD, settings, fieldErrors.csvPath, isElectron);
-  const error = chooseError
-    ? `Couldn't use this export: ${chooseError}`
+  // A refusal about a folder is shown for as long as `fieldErrors` holds it, so it goes once the drive
+  // is plugged back in, as it does on the Folders card, and stops hiding what is wrong with the export.
+  const refusalText = refusal?.field ? fieldErrors[refusal.field] : refusal?.message;
+  const error = refusalText
+    ? `Couldn't use this export: ${refusalText}`
     : csvStatus.tone === 'critical'
       ? csvStatus.text
       : library.error;
@@ -101,15 +104,15 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
   const handleChoose = useCallback(async () => {
     const path = await choosePath(CSV_FIELD, csvPath);
     if (!path) return;
-    setChooseError(null);
+    setRefusal(null);
     // A different export is loaded as soon as the saved path changes; the same one is just re-read.
     if (path === csvPath) {
       library.reload();
       return;
     }
-    const refusal = await update({ csvPath: path });
+    const refused = await update({ csvPath: path });
     // One about the export itself is already shown, as the Folders card shows it.
-    if (refusal && refusal.field !== CSV_FIELD.field) setChooseError(refusal.message);
+    if (refused && refused.field !== CSV_FIELD.field) setRefusal(refused);
   }, [csvPath, library, update]);
 
   const handleSort = useCallback((field) => {

@@ -86,6 +86,10 @@ describe('Library', () => {
       expect(window.electronAPI.openFile).toHaveBeenCalledWith(
         expect.objectContaining({ title: 'Choose the CSV export', defaultPath: '/books/library.csv' })
       );
+
+      // The drive is plugged back in: the refusal goes with the folder's own error, as on the Folders card.
+      fireEvent.focus(window);
+      await waitFor(() => expect(screen.queryByText(/Couldn't use this export/)).toBeNull());
     });
 
     it('puts focus on the search field when books chosen from the empty page arrive', async () => {
