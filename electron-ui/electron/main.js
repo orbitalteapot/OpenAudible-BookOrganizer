@@ -34,6 +34,8 @@ let keepRunningInBackground = false;
 let keepRunningThisSession = false;
 // The window was hidden on purpose (closed to the tray, or started at sign-in).
 let hiddenInTray = false;
+// Someone asked for the window (a second launch, the Dock) before startup had created it.
+let showRequestedBeforeWindow = false;
 
 function isDev() {
   return !app.isPackaged;
@@ -112,6 +114,8 @@ function showWindow() {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
+  } else {
+    showRequestedBeforeWindow = true;
   }
   updateTray();
 }
@@ -353,8 +357,8 @@ if (!app.requestSingleInstanceLock()) {
     if (backendReady) await applySavedBackgroundOptions();
 
     // Started at sign-in: wait in the tray. If the backend failed, show the window anyway so the
-    // error is not lost.
-    const startHidden = backendReady && launchedAtLogin();
+    // error is not lost, and show it if the user opened the app while the backend was starting.
+    const startHidden = backendReady && launchedAtLogin() && !showRequestedBeforeWindow;
     createWindow({ reveal: !startHidden });
 
     if (startHidden) {
