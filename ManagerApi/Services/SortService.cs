@@ -100,6 +100,36 @@ public class SortService
         }
     }
 
+    /// <summary>
+    /// Checks the three paths a sort needs. Returns a message for the user, or null when the sort
+    /// can go ahead. Creates the destination folder if it is missing.
+    /// </summary>
+    public static string? ValidatePaths(string csvPath, string sourcePath, string destinationPath)
+    {
+        if (!File.Exists(csvPath))
+        {
+            return $"CSV file not found: {csvPath}";
+        }
+
+        if (!Directory.Exists(sourcePath))
+        {
+            return $"Source folder not found: {sourcePath}";
+        }
+
+        try
+        {
+            Directory.CreateDirectory(destinationPath);
+        }
+        catch (Exception ex)
+        {
+            return $"Destination folder is not writable: {ex.Message}";
+        }
+
+        return PathsOverlap(sourcePath, destinationPath)
+            ? "The destination folder cannot be the source folder or live inside it."
+            : null;
+    }
+
     /// <summary>Starts a sort with the default settings.</summary>
     public bool TryStartSort(string csvPath, string sourcePath, string destinationPath, out Task sortTask)
     {
@@ -262,6 +292,25 @@ public class SortService
         }
 
         return result.Books;
+    }
+
+    // Copying a library into itself (or into a subfolder of itself) makes the source grow while it
+    // is being read, which never terminates cleanly.
+    private static bool PathsOverlap(string sourcePath, string destinationPath)
+    {
+        try
+        {
+            var source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourcePath));
+            var destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationPath));
+            var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+
+            return string.Equals(source, destination, comparison) ||
+                   destination.StartsWith(source + Path.DirectorySeparatorChar, comparison);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
     }
 
     /// <summary>

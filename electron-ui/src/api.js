@@ -103,3 +103,20 @@ export function cancelSort() {
 export function getAppConfig() {
   return requestJson('/api/config', undefined, 'Failed to load app configuration');
 }
+
+export function getSchedule() {
+  return requestJson('/api/schedule', undefined, 'Failed to load the schedule');
+}
+
+/** @param schedule { intervalMinutes: number | null, csvPath, sourcePath, destinationPath, comparisonMode } */
+export function saveSchedule(schedule) {
+  return requestJson(
+    '/api/schedule',
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(schedule),
+    },
+    'Failed to save the schedule'
+  );
+}

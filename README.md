@@ -14,9 +14,10 @@ browser interface for a NAS or home server.
 ## What it does
 
 - Reads an OpenAudible CSV export and shows your library, searchable and sortable
-- Copies each book into `Author / Series / Book` folders
+- Copies each book into its own folder under `Author / Series / Book`, the layout Audiobookshelf and Plex expect
 - Brings companion PDFs along with the audiobook
 - Replaces books you have re-downloaded, so an organised library stays current
+- Can re-sort on a schedule, so new downloads are filed without you lifting a finger
 - Never moves or deletes anything in your source folder — it only ever copies out of it
 
 ---
@@ -148,12 +149,22 @@ Terry Mancour/
       Spellmonger.pdf
     Book 2/
       Warmage.m4b
+  The Wolf Queen/
+    The Wolf Queen.m4b
 Andy Weir/
-  Project Hail Mary.m4b
+  Project Hail Mary/
+    Project Hail Mary.m4b
 ```
 
-A book with no series goes directly in the author's folder. A companion PDF is copied next to its
-audiobook when the export mentions one and the file is present.
+Every book gets a folder of its own: a numbered series book goes in `Book N`, and any other book in
+a folder named after its title. That is the layout Audiobookshelf, Plex and similar servers expect —
+a loose audio file in an author folder makes them treat that whole folder as one book and miss every
+series inside it. A companion PDF is copied next to its audiobook when the export mentions one and
+the file is present.
+
+Libraries sorted by an older version, which left standalone books loose in the author folder, are
+tidied up on the next sort: each loose file is moved into its new book folder rather than copied a
+second time.
 
 Names come from your metadata, cleaned up so the result is portable:
 
@@ -164,6 +175,20 @@ Names come from your metadata, cleaned up so the result is portable:
   existing folder that means the same thing is reused rather than duplicated.
 - If two different books would end up with the same file name, the second gets a `(2)` suffix
   instead of overwriting the first.
+
+## Sorting automatically
+
+Pick an interval under **Automatic sorting** on the Sort page — every 6 or 12 hours, daily or
+weekly — and the organiser re-sorts on its own with the paths and update check shown above it. Only
+new and changed books are copied, so a run over an unchanged library takes seconds. The card shows
+when the next run is due and how the last one went.
+
+In the desktop app, automatic sorts run while the app is open. If one was due while it was closed,
+it runs as soon as you open the app again. The folders are remembered too, so you do not have to
+pick them again.
+
+For sorting around the clock without the app open, run the [Docker image](#docker-web-app) and set
+`SORT_INTERVAL`.
 
 ## If something goes wrong
 
@@ -218,6 +243,7 @@ docker run -d \
   -e CSV_PATH=/data/books.csv \
   -e SOURCE_PATH=/source \
   -e DESTINATION_PATH=/destination \
+  -e SORT_INTERVAL=6h \
   -p 5123:5123 \
   -v ./data:/data \
   -v /path/to/your/audiobooks:/source \
@@ -236,6 +262,7 @@ services:
       CSV_PATH: /data/books.csv
       SOURCE_PATH: /source
       DESTINATION_PATH: /destination
+      SORT_INTERVAL: 6h
     ports:
       - "5123:5123"
     volumes:
@@ -260,13 +287,17 @@ desktop app, minus the file pickers.
 | `SOURCE_PATH` | yes | — | Mounted folder holding your downloaded audiobooks. |
 | `DESTINATION_PATH` | yes | — | Mounted folder to write the organised library into. |
 | `COMPARISON_MODE` | no | `quick` | Default update check: `quick` or `full`. The Sort page can override it per run. |
+| `SORT_INTERVAL` | no | off | Sort automatically, e.g. `6h`, `12h`, `1d` or `30m` (at least 15 minutes). When set, the schedule is fixed; leave it unset to choose one on the Sort page instead. |
+| `OABO_SETTINGS_PATH` | no | `/data/settings.json` | Where a schedule set on the Sort page, and the time of the last automatic sort, are saved. |
 | `OABO_MAX_PARALLELISM` | no | cores ÷ 4, max 8 | How many books are copied at once. Set `1` or `2` for a network share or a spinning disk, where more concurrency is slower, not faster. |
 | `ASPNETCORE_URLS` | no | `http://0.0.0.0:5123` | Change the port the container listens on. |
 
 ## Updating your library
 
 Replace `books.csv` in the mounted data folder with a fresh export, reload the library in the
-browser, then start a sort.
+browser, then start a sort. With `SORT_INTERVAL` set, or a schedule chosen on the Sort page, the next
+automatic sort picks the new export up by itself — point OpenAudible's export at that file and there
+is nothing left to do by hand.
 
 ## Checking it works
 

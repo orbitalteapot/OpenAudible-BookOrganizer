@@ -22,7 +22,7 @@ public class SortServiceTests
         Assert.Null(progress.Error);
         Assert.Equal(1, progress.CopiedBooks);
         Assert.False(service.IsSorting);
-        Assert.Equal(["Tolkien/The Hobbit.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["Tolkien/The Hobbit/The Hobbit.m4b"], workspace.DestinationFiles());
     }
 
     [Fact]
@@ -35,7 +35,7 @@ public class SortServiceTests
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
 
         workspace.WriteSourceFile("the-hobbit.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("Tolkien", "The Hobbit.m4b"), original);
+        var destination = workspace.WriteDestinationFile(Path.Combine("Tolkien", "The Hobbit", "The Hobbit.m4b"), original);
         var csvPath = WriteCsv(workspace, "The Hobbit,Tolkien,the-hobbit");
 
         var quickService = new SortService();
@@ -237,7 +237,7 @@ public class SortServiceTests
         Assert.True(service.TryStartSort(requestedCsv, workspace.Source, workspace.Destination, out var sortTask));
         await sortTask;
 
-        Assert.Equal(["Author/Book Two.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["Author/Book Two/Book Two.m4b"], workspace.DestinationFiles());
     }
 
     [Fact]
@@ -259,7 +259,7 @@ public class SortServiceTests
         Assert.True(service.TryStartSort(csv, workspace.Source, workspace.Destination, out var sortTask));
         await sortTask;
 
-        Assert.Equal(["Author/Book One.m4b", "Author/Book Two.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["Author/Book One/Book One.m4b", "Author/Book Two/Book Two.m4b"], workspace.DestinationFiles());
     }
 
     [Fact]
@@ -300,7 +300,7 @@ public class SortServiceTests
         Assert.True(service.TryStartSort(csv, workspace.Source, workspace.Destination, out var sortTask));
         await sortTask;
 
-        Assert.Equal(["Author/Book Two.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["Author/Book Two/Book Two.m4b"], workspace.DestinationFiles());
     }
 
     /// <summary>

@@ -56,3 +56,13 @@ export function formatDuration(raw) {
 
   return `${hours}h ${minutes}m`;
 }
+
+/** "Every 6 hours", "Every day", "Every 45 minutes" — for a schedule interval in minutes. */
+export function formatInterval(minutes) {
+  if (!minutes) return 'Off';
+
+  const [amount, unit] =
+    minutes % 1440 === 0 ? [minutes / 1440, 'day'] : minutes % 60 === 0 ? [minutes / 60, 'hour'] : [minutes, 'minute'];
+
+  return amount === 1 ? `Every ${unit}` : `Every ${amount} ${unit}s`;
+}

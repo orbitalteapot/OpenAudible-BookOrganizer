@@ -16,8 +16,18 @@ public sealed record PlannedCopy
 
     public string? AudioSource { get; init; }
     public string? AudioDestination { get; init; }
+
+    /// <summary>
+    /// A copy of the audio an older version left loose in the author or series folder, to be moved
+    /// to <see cref="AudioDestination"/> before the update check. Null when there is none.
+    /// </summary>
+    public string? AudioLegacyPath { get; init; }
+
     public string? PdfSource { get; init; }
     public string? PdfDestination { get; init; }
+
+    /// <summary>As <see cref="AudioLegacyPath"/>, for the PDF.</summary>
+    public string? PdfLegacyPath { get; init; }
 
     /// <summary>Why this book is being skipped, or an issue worth surfacing. Null when all is well.</summary>
     public string? Warning { get; init; }

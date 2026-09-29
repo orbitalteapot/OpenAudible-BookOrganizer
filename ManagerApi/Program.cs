@@ -26,6 +26,31 @@ if (!SortOptions.TryParseComparisonMode(configuredComparisonMode, out var defaul
     defaultComparisonMode = SortOptions.Default.ComparisonMode;
 }
 
+// SORT_INTERVAL ("6h", "1d", ...) sorts on a timer using the three paths above. Setting it fixes
+// the schedule for the container; leaving it unset lets the Sort page set one instead.
+var configuredInterval = Environment.GetEnvironmentVariable("SORT_INTERVAL");
+SortSchedule? serverSchedule = null;
+if (!string.IsNullOrWhiteSpace(configuredInterval))
+{
+    if (SortSchedule.TryParseInterval(configuredInterval, out var intervalMinutes))
+    {
+        serverSchedule = new SortSchedule
+        {
+            IntervalMinutes = intervalMinutes,
+            CsvPath = csvPath,
+            SourcePath = sourcePath,
+            DestinationPath = destinationPath,
+            ComparisonMode = defaultComparisonMode
+        };
+    }
+    else
+    {
+        Console.Error.WriteLine(
+            $"Ignoring SORT_INTERVAL=\"{configuredInterval}\": expected something like \"6h\", \"1d\" or \"off\", " +
+            $"at least {SortSchedule.MinimumIntervalMinutes} minutes. Automatic sorting is off.");
+    }
+}
+
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -37,6 +62,12 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.AddSingleton<SortService>();
+builder.Services.AddSingleton(services => new SortScheduler(
+    services.GetRequiredService<SortService>(),
+    Environment.GetEnvironmentVariable("OABO_SETTINGS_PATH"),
+    serverSchedule,
+    services.GetRequiredService<ILogger<SortScheduler>>()));
+builder.Services.AddHostedService(services => services.GetRequiredService<SortScheduler>());
 
 builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://0.0.0.0:5123");
 
@@ -140,31 +171,10 @@ app.MapPost("/api/sort/start", (SortRequest? request, SortService sortService) =
 
     // Validate before starting so the user gets a real error instead of a run that reports
     // failure seconds later, or worse, never reports at all.
-    if (!File.Exists(request.CsvPath))
+    var pathError = SortService.ValidatePaths(request.CsvPath, request.SourcePath, request.DestinationPath);
+    if (pathError is not null)
     {
-        return Results.BadRequest(new { error = $"CSV file not found: {request.CsvPath}" });
-    }
-
-    if (!Directory.Exists(request.SourcePath))
-    {
-        return Results.BadRequest(new { error = $"Source folder not found: {request.SourcePath}" });
-    }
-
-    try
-    {
-        Directory.CreateDirectory(request.DestinationPath);
-    }
-    catch (Exception ex)
-    {
-        return Results.BadRequest(new { error = $"Destination folder is not writable: {ex.Message}" });
-    }
-
-    if (PathsOverlap(request.SourcePath, request.DestinationPath))
-    {
-        return Results.BadRequest(new
-        {
-            error = "The destination folder cannot be the source folder or live inside it."
-        });
+        return Results.BadRequest(new { error = pathError });
     }
 
     // Checking IsSorting separately would leave a window where two requests both start a run.
@@ -194,6 +204,60 @@ app.MapPost("/api/sort/cancel", (SortService sortService) =>
         : Results.BadRequest(new { error = "No sort is currently running" });
 });
 
+app.MapGet("/api/schedule", (SortScheduler scheduler) => Results.Ok(ToScheduleResponse(scheduler)));
+
+app.MapPut("/api/schedule", (ScheduleRequest? request, SortScheduler scheduler) =>
+{
+    if (request is null)
+    {
+        return Results.BadRequest(new { error = "A schedule is required" });
+    }
+
+    if (scheduler.IsManagedByServer)
+    {
+        return Results.Conflict(new { error = "Automatic sorting is set by the server's SORT_INTERVAL setting." });
+    }
+
+    if (request.IntervalMinutes is < SortSchedule.MinimumIntervalMinutes)
+    {
+        return Results.BadRequest(new { error = $"Sort at most every {SortSchedule.MinimumIntervalMinutes} minutes." });
+    }
+
+    if (!SortOptions.TryParseComparisonMode(request.ComparisonMode, out var comparisonMode))
+    {
+        return Results.BadRequest(new { error = $"Unknown comparison mode \"{request.ComparisonMode}\". Use \"quick\" or \"full\"." });
+    }
+
+    // Turning automatic sorting on with paths that cannot work should fail now, while the user is
+    // looking, not silently at three in the morning.
+    if (request.IntervalMinutes is not null)
+    {
+        if (string.IsNullOrWhiteSpace(request.CsvPath) ||
+            string.IsNullOrWhiteSpace(request.SourcePath) ||
+            string.IsNullOrWhiteSpace(request.DestinationPath))
+        {
+            return Results.BadRequest(new { error = "Choose all three paths before turning on automatic sorting" });
+        }
+
+        var pathError = SortService.ValidatePaths(request.CsvPath, request.SourcePath, request.DestinationPath);
+        if (pathError is not null)
+        {
+            return Results.BadRequest(new { error = pathError });
+        }
+    }
+
+    scheduler.Update(new SortSchedule
+    {
+        IntervalMinutes = request.IntervalMinutes,
+        CsvPath = request.CsvPath,
+        SourcePath = request.SourcePath,
+        DestinationPath = request.DestinationPath,
+        ComparisonMode = comparisonMode
+    });
+
+    return Results.Ok(ToScheduleResponse(scheduler));
+});
+
 if (servesWebUi)
 {
     app.MapFallbackToFile("index.html");
@@ -201,29 +265,35 @@ if (servesWebUi)
 
 app.Run();
 
-// Copying a library into itself (or into a subfolder of itself) makes the source grow while it is
-// being read, which never terminates cleanly.
-static bool PathsOverlap(string sourcePath, string destinationPath)
+static object ToScheduleResponse(SortScheduler scheduler)
 {
-    try
+    var schedule = scheduler.Current;
+    return new
     {
-        var source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourcePath));
-        var destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationPath));
-        var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-
-        return string.Equals(source, destination, comparison) ||
-               destination.StartsWith(source + Path.DirectorySeparatorChar, comparison);
-    }
-    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-    {
-        return false;
-    }
+        intervalMinutes = schedule.IntervalMinutes,
+        csvPath = schedule.CsvPath,
+        sourcePath = schedule.SourcePath,
+        destinationPath = schedule.DestinationPath,
+        comparisonMode = SortOptions.ToWireValue(schedule.ComparisonMode),
+        lastRunUtc = schedule.LastRunUtc,
+        lastResult = schedule.LastResult,
+        nextRunUtc = schedule.NextRunUtc(DateTime.UtcNow),
+        managedByServer = scheduler.IsManagedByServer
+    };
 }
 
 record ParseRequest(string CsvPath);
 
 /// <param name="ComparisonMode">"quick" or "full". Omitted means the server default.</param>
 record SortRequest(string CsvPath, string SourcePath, string DestinationPath, string? ComparisonMode = null);
+
+/// <param name="IntervalMinutes">Minutes between automatic sorts. Null turns them off.</param>
+record ScheduleRequest(
+    int? IntervalMinutes,
+    string? CsvPath,
+    string? SourcePath,
+    string? DestinationPath,
+    string? ComparisonMode = null);
 
 /// <summary>Exposed so the integration tests can drive the real application host.</summary>
 public partial class Program;

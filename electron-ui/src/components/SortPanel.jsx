@@ -9,6 +9,7 @@ import {
   Square,
 } from 'lucide-react';
 import { useIsElectron, useSortRun } from '../hooks';
+import ScheduleCard from './ScheduleCard';
 import Button from './ui/Button';
 import { Field, PathInput } from './ui/Field';
 import SegmentedControl from './ui/SegmentedControl';
@@ -112,6 +113,8 @@ function SortPanel({ config, setConfig, run, setRun }) {
         </Card>
 
         <ProgressCard sorting={sorting} progress={progress} />
+
+        <ScheduleCard config={config} setConfig={setConfig} isElectron={isElectron} />
       </div>
 
       {/*

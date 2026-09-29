@@ -12,10 +12,10 @@ public class FileSorterTests
 
         var summary = await Sort(workspace, TempWorkspace.Book());
 
-        Assert.Equal(["An Author/A Book.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
         Assert.Equal(1, summary.CopiedBooks);
         Assert.Equal(0, summary.FailedBooks);
-        Assert.Equal("audio-bytes", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book.m4b")));
+        Assert.Equal("audio-bytes", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public class FileSorterTests
 
         await Sort(workspace, TempWorkspace.Book());
 
-        Assert.Equal(["An Author/A Book.m4b", "An Author/A Book.pdf"], workspace.DestinationFiles());
+        Assert.Equal(["An Author/A Book/A Book.m4b", "An Author/A Book/A Book.pdf"], workspace.DestinationFiles());
     }
 
     [Fact]
@@ -81,12 +81,12 @@ public class FileSorterTests
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "new-audio");
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "old-audio!");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "old-audio!");
 
         var summary = await Sort(workspace, TempWorkspace.Book());
 
         Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal("new-audio", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book.m4b")));
+        Assert.Equal("new-audio", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
     }
 
     [Fact]
@@ -170,6 +170,43 @@ public class FileSorterTests
     }
 
     [Fact]
+    public async Task Sort_moves_a_loose_book_from_an_older_version_into_its_own_folder()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        workspace.WriteSourceFile("a-book.pdf", "pdf");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.pdf"), "pdf");
+        workspace.WriteSourceFile("series-book.m4b", "series");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "The Series", "Book 1", "Series Book.m4b"), "series");
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(),
+            TempWorkspace.Book(title: "Series Book", filename: "series-book", seriesName: "The Series", seriesSequence: "1"));
+
+        Assert.Equal(
+            ["An Author/A Book/A Book.m4b", "An Author/A Book/A Book.pdf", "An Author/The Series/Book 1/Series Book.m4b"],
+            workspace.DestinationFiles());
+        Assert.Equal(0, summary.CopiedBooks);
+        Assert.Equal(2, summary.SkippedBooks);
+    }
+
+    [Fact]
+    public async Task Sort_updates_a_moved_loose_book_whose_source_has_changed()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "new-audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "old-audio!");
+
+        var summary = await Sort(workspace, TempWorkspace.Book());
+
+        Assert.Equal(["An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
+        Assert.Equal("new-audio", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
+        Assert.Equal(1, summary.UpdatedBooks);
+    }
+
+    [Fact]
     public async Task Sort_keeps_going_when_one_book_cannot_be_written()
     {
         using var workspace = new TempWorkspace();
@@ -177,7 +214,7 @@ public class FileSorterTests
         workspace.WriteSourceFile("blocked.m4b");
 
         // A folder sitting where the file should go makes the copy fail for that book only.
-        Directory.CreateDirectory(Path.Combine(workspace.Destination, "An Author", "Blocked Book.m4b"));
+        Directory.CreateDirectory(Path.Combine(workspace.Destination, "An Author", "Blocked Book", "Blocked Book.m4b"));
 
         var summary = await Sort(
             workspace,
@@ -187,7 +224,7 @@ public class FileSorterTests
         Assert.Equal(2, summary.TotalBooks);
         Assert.Equal(1, summary.CopiedBooks);
         Assert.Equal(1, summary.FailedBooks);
-        Assert.Contains("An Author/Good Book.m4b", workspace.DestinationFiles());
+        Assert.Contains("An Author/Good Book/Good Book.m4b", workspace.DestinationFiles());
         Assert.Contains(summary.Warnings, warning => warning.Contains("blocked", StringComparison.OrdinalIgnoreCase));
     }
 
@@ -196,7 +233,7 @@ public class FileSorterTests
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("blocked.m4b");
-        Directory.CreateDirectory(Path.Combine(workspace.Destination, "An Author", "Blocked Book.m4b"));
+        Directory.CreateDirectory(Path.Combine(workspace.Destination, "An Author", "Blocked Book", "Blocked Book.m4b"));
 
         await Sort(workspace, TempWorkspace.Book(title: "Blocked Book", filename: "blocked"));
 
@@ -280,7 +317,7 @@ public class FileSorterTests
 
         await new FileSorter().SortAudioFiles(workspace.Source, destination, [TempWorkspace.Book()]);
 
-        Assert.True(File.Exists(Path.Combine(destination, "An Author", "A Book.m4b")));
+        Assert.True(File.Exists(Path.Combine(destination, "An Author", "A Book", "A Book.m4b")));
     }
 
     [Fact]

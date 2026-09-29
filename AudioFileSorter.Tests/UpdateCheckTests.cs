@@ -15,7 +15,7 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "the-re-recorded-and-longer-edition");
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "old");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "old");
 
         var summary = await Sort(workspace, mode, TempWorkspace.Book());
 
@@ -23,7 +23,7 @@ public class UpdateCheckTests
         Assert.Equal(1, summary.UpdatedBooks);
         Assert.Equal(
             "the-re-recorded-and-longer-edition",
-            File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book.m4b")));
+            File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
     }
 
     [Theory]
@@ -34,7 +34,7 @@ public class UpdateCheckTests
         using var workspace = new TempWorkspace();
         var content = new string('x', 300_000);
         workspace.WriteSourceFile("a-book.m4b", content);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), content);
+        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), content);
         var writtenAt = File.GetLastWriteTimeUtc(destination);
 
         var summary = await Sort(workspace, mode, TempWorkspace.Book());
@@ -56,7 +56,7 @@ public class UpdateCheckTests
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
+        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
 
@@ -79,7 +79,7 @@ public class UpdateCheckTests
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditInWindow(window);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
+        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
 
@@ -94,7 +94,7 @@ public class UpdateCheckTests
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
+        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
@@ -111,8 +111,8 @@ public class UpdateCheckTests
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
         workspace.WriteSourceFile("a-book.m4b", "audio");
         workspace.WriteSourceFile("a-book.pdf", edited);
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "audio");
-        var destinationPdf = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.pdf"), original);
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "audio");
+        var destinationPdf = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.pdf"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
@@ -138,7 +138,7 @@ public class UpdateCheckTests
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
+        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), original);
 
         var summary = await new FileSorter().SortAudioFiles(
             workspace.Source, workspace.Destination, [TempWorkspace.Book()]);
@@ -153,7 +153,7 @@ public class UpdateCheckTests
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
         workspace.WriteSourceFile("a-book.m4b", edited);
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), original);
 
         var reports = new List<SortProgressInfo>();
         await new FileSorter().SortAudioFiles(
@@ -291,7 +291,7 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", new string('y', 100_000));
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), new string('y', 40_000));
+        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), new string('y', 40_000));
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 

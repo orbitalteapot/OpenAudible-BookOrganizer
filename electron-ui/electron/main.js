@@ -62,6 +62,11 @@ async function isBackendReachable() {
   }
 }
 
+/** Where the backend saves the automatic-sort schedule, so it survives closing the app. */
+function backendEnv() {
+  return { ...process.env, OABO_SETTINGS_PATH: path.join(app.getPath('userData'), 'settings.json') };
+}
+
 async function startBackend() {
   // Someone may already be running the backend by hand (the documented dev workflow), in which
   // case starting a second one would just fail on the port and confuse the logs.
@@ -75,7 +80,7 @@ async function startBackend() {
     backendProcess = spawn(
       'dotnet',
       ['run', '--project', path.join(__dirname, '../../ManagerApi/ManagerApi.csproj')],
-      { stdio: 'pipe' }
+      { stdio: 'pipe', env: backendEnv() }
     );
   } else {
     const exe = getBackendExecutable();
@@ -94,7 +99,7 @@ async function startBackend() {
       }
     }
 
-    backendProcess = spawn(exe, [], { stdio: 'pipe', env: { ...process.env } });
+    backendProcess = spawn(exe, [], { stdio: 'pipe', env: backendEnv() });
   }
 
   attachProcessLogging(backendProcess);

@@ -27,6 +27,8 @@ WORKDIR /app
 COPY --from=backend-build /app/publish ./
 
 ENV ASPNETCORE_URLS=http://0.0.0.0:5123
+# Keeps a schedule set from the Sort page, and when the last one ran, across container restarts.
+ENV OABO_SETTINGS_PATH=/data/settings.json
 EXPOSE 5123
 
 VOLUME ["/data", "/source", "/destination"]

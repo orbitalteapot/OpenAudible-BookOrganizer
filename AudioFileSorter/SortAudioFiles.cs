@@ -8,7 +8,7 @@ using AudioFileSorter.Model;
 namespace AudioFileSorter;
 
 /// <summary>
-/// Copies an OpenAudible library into an Author / Series / Book folder structure.
+/// Copies an OpenAudible library into an Author / Series / Book folder structure, one folder per book.
 /// </summary>
 public class FileSorter
 {
@@ -234,6 +234,9 @@ public class FileSorter
 
         Directory.CreateDirectory(item.TargetDirectory!);
 
+        AdoptLegacyFile(item.AudioLegacyPath, item.AudioDestination);
+        AdoptLegacyFile(item.PdfLegacyPath, item.PdfDestination);
+
         var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, cancellationToken);
         var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, cancellationToken);
 
@@ -247,6 +250,21 @@ public class FileSorter
         return audio == CopyOutcome.Created || pdf == CopyOutcome.Created
             ? CopyOutcome.Created
             : CopyOutcome.Skipped;
+    }
+
+    /// <summary>
+    /// Moves a book that an older version left loose in its author or series folder into the
+    /// book's own folder. It is a rename within the destination, so nothing is copied or lost, and
+    /// the update check that follows still replaces it if the source has changed since.
+    /// </summary>
+    private static void AdoptLegacyFile(string? legacyPath, string? destinationFile)
+    {
+        if (legacyPath is null || destinationFile is null || File.Exists(destinationFile) || !File.Exists(legacyPath))
+        {
+            return;
+        }
+
+        File.Move(legacyPath, destinationFile, overwrite: false);
     }
 
     private static async Task<CopyOutcome> CopyIfNeededAsync(
