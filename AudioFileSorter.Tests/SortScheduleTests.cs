@@ -1,11 +1,13 @@
 using AudioFileSorter.Model;
 using ManagerApi.Services;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 
 namespace AudioFileSorter.Tests;
 
 public class SortScheduleTests
 {
+    private static readonly DateTime Now = new(2026, 3, 1, 12, 0, 0, DateTimeKind.Utc);
+
     [Theory]
     [InlineData(null, null)]
     [InlineData("", null)]
@@ -34,123 +36,221 @@ public class SortScheduleTests
     }
 
     [Fact]
-    public void A_schedule_without_all_three_paths_never_runs()
+    public void Automatic_sorting_that_is_off_is_never_due()
     {
-        var schedule = new SortSchedule { IntervalMinutes = 60, CsvPath = "books.csv", SourcePath = "source" };
-
-        Assert.Null(schedule.NextRunUtc(DateTime.UtcNow));
+        Assert.Null(SortSchedule.NextRunUtc(null, new ScheduleState(), Now));
     }
 
     [Fact]
     public void A_schedule_that_has_never_run_is_due_now()
     {
-        var now = DateTime.UtcNow;
-
-        Assert.Equal(now, Complete(lastRunUtc: null).NextRunUtc(now));
+        Assert.Equal(Now, SortSchedule.NextRunUtc(360, new ScheduleState(), Now));
     }
 
     [Fact]
-    public void A_schedule_is_due_one_interval_after_its_last_run()
+    public void A_schedule_turned_on_since_its_last_attempt_is_due_now()
     {
-        var lastRun = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var state = Succeeded(Now.AddHours(-1)) with { EnabledAtUtc = Now.AddMinutes(-1) };
 
-        Assert.Equal(lastRun.AddHours(6), Complete(lastRun).NextRunUtc(lastRun.AddMinutes(1)));
+        Assert.Equal(Now, SortSchedule.NextRunUtc(360, state, Now));
     }
 
     [Fact]
-    public void Scheduler_saves_the_schedule_and_reads_it_back_after_a_restart()
+    public void After_a_success_the_next_run_is_one_interval_after_it_started()
     {
-        using var workspace = new TempWorkspace();
-        var settingsPath = Path.Combine(workspace.Root, "settings.json");
-        var schedule = Runnable(workspace);
+        var lastRun = Now.AddHours(-1);
 
-        Assert.True(CreateScheduler(settingsPath).TryUpdate(schedule, out var error), error);
-        var restarted = CreateScheduler(settingsPath);
-
-        Assert.Equal(schedule.IntervalMinutes, restarted.Current.IntervalMinutes);
-        Assert.Equal(schedule.CsvPath, restarted.Current.CsvPath);
+        Assert.Equal(lastRun.AddHours(6), SortSchedule.NextRunUtc(360, Succeeded(lastRun), Now));
     }
 
     [Fact]
-    public void Scheduler_refuses_changes_to_a_schedule_the_server_sets()
+    public void After_a_failure_the_next_run_is_a_retry_fifteen_minutes_later()
     {
-        var scheduler = CreateScheduler(null, serverSchedule: Complete(null));
+        var state = Succeeded(Now.AddHours(-3)) with { LastAttemptUtc = Now.AddMinutes(-1) };
 
-        Assert.True(scheduler.IsManagedByServer);
-        Assert.False(scheduler.TryUpdate(new SortSchedule(), out var error));
-        Assert.Contains("SORT_INTERVAL", error);
+        Assert.True(SortSchedule.LastAttemptFailed(state));
+        Assert.Equal(Now.AddMinutes(14), SortSchedule.NextRunUtc(360, state, Now));
     }
 
     [Fact]
-    public void Scheduler_refuses_to_turn_on_with_paths_that_cannot_work()
+    public void A_retry_never_comes_later_than_the_regular_run_would_have()
     {
-        using var workspace = new TempWorkspace();
+        var state = Succeeded(Now.AddMinutes(-355)) with { LastAttemptUtc = Now };
 
-        Assert.False(CreateScheduler(null).TryUpdate(Runnable(workspace) with { CsvPath = "missing.csv" }, out var error));
-        Assert.Contains("library export was not found", error);
+        Assert.Equal(Now.AddMinutes(5), SortSchedule.NextRunUtc(360, state, Now));
     }
 
     [Fact]
-    public void Scheduler_refuses_an_interval_below_the_minimum()
+    public void A_last_run_in_the_future_after_the_clock_was_set_back_counts_as_now()
     {
-        using var workspace = new TempWorkspace();
+        var state = Succeeded(Now.AddDays(2));
 
-        Assert.False(CreateScheduler(null).TryUpdate(Runnable(workspace) with { IntervalMinutes = 5 }, out _));
+        Assert.Equal(Now.AddHours(6), SortSchedule.NextRunUtc(360, state, Now));
     }
 
     [Fact]
-    public void Scheduler_can_always_be_turned_off()
-    {
-        Assert.True(CreateScheduler(null).TryUpdate(new SortSchedule(), out var error), error);
-    }
-
-    [Fact]
-    public async Task Scheduler_sorts_when_due_and_records_the_result()
+    public async Task The_first_run_starts_as_soon_as_the_scheduler_does()
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("the-hobbit.m4b");
-        using var scheduler = CreateScheduler(null, serverSchedule: Runnable(workspace));
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), 60, time: time);
+        using var scheduler = backend.CreateScheduler();
 
         await scheduler.StartAsync(CancellationToken.None);
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (scheduler.Current.LastRunUtc is null && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(20);
-        }
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastRun is not null, "the first run");
         await scheduler.StopAsync(CancellationToken.None);
 
+        var state = backend.Settings.Schedule;
+        Assert.Equal(Now, state.LastAttemptUtc);
+        Assert.Equal(Now, state.LastSuccessUtc);
+        Assert.Equal(RunTrigger.Scheduled, state.LastRun!.Trigger);
+        Assert.Equal(1, state.LastRun.Counts.New);
         Assert.Equal(["Tolkien/The Hobbit/The Hobbit.m4b"], workspace.DestinationFiles());
-        Assert.StartsWith("Done: 1 copied", scheduler.Current.LastResult);
     }
 
-    private static SortScheduler CreateScheduler(string? settingsPath, SortSchedule? serverSchedule = null)
+    [Fact]
+    public async Task The_next_run_comes_one_interval_after_the_last()
     {
-        var logger = NullLogger<SortScheduler>.Instance;
-        return new SortScheduler(
-            new SortService(), new SortScheduleStore(settingsPath, logger), serverSchedule, logger, SortOptions.DefaultParallelism);
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), 60, time: time);
+        using var scheduler = backend.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastAttemptUtc == Now, "the first run");
+
+        await AdvanceAndSettle(time, TimeSpan.FromMinutes(59));
+        Assert.Equal(Now, backend.Settings.Schedule.LastAttemptUtc);
+
+        await AdvanceUntil(time, () => backend.Settings.Schedule.LastAttemptUtc > Now, "the second run");
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.InRange(backend.Settings.Schedule.LastAttemptUtc!.Value, Now.AddMinutes(60), Now.AddMinutes(62));
+        Assert.Equal(1, backend.Settings.Schedule.LastRun!.Counts.UpToDate);
     }
 
-    /// <summary>A schedule whose paths exist, with one book in the export.</summary>
-    private static SortSchedule Runnable(TempWorkspace workspace)
+    [Fact]
+    public async Task A_failed_run_is_retried_after_fifteen_minutes_and_never_creates_the_destination()
     {
-        var csvPath = Path.Combine(workspace.Root, "books.csv");
-        File.WriteAllText(csvPath, "Title,Author,File name\nThe Hobbit,Tolkien,the-hobbit\n");
+        using var workspace = new TempWorkspace();
+        var unplugged = Path.Combine(workspace.Root, "unplugged");
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(
+            workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), 360, destination: unplugged, time: time);
+        using var scheduler = backend.CreateScheduler();
 
-        return new SortSchedule
+        await scheduler.StartAsync(CancellationToken.None);
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastAttemptUtc == Now, "the first attempt");
+
+        var status = scheduler.GetStatus();
+        Assert.Equal("destinationMissing", status.LastRun!.ErrorCode);
+        Assert.True(status.Retrying);
+        Assert.Equal(Now.AddMinutes(15), status.NextRunUtc);
+        Assert.Null(backend.Settings.Schedule.LastSuccessUtc);
+        Assert.False(Directory.Exists(unplugged));
+
+        await AdvanceAndSettle(time, TimeSpan.FromMinutes(14));
+        Assert.Equal(Now, backend.Settings.Schedule.LastAttemptUtc);
+
+        await AdvanceUntil(time, () => backend.Settings.Schedule.LastAttemptUtc > Now, "the retry");
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.InRange(backend.Settings.Schedule.LastAttemptUtc!.Value, Now.AddMinutes(15), Now.AddMinutes(17));
+        Assert.False(Directory.Exists(unplugged));
+    }
+
+    [Fact]
+    public async Task Turning_automatic_sorting_on_wakes_the_scheduler_and_sorts_at_once()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        var time = new FakeTimeProvider(Now);
+        using var backend = new TestBackend(new ServerConfig(), time);
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch
         {
-            IntervalMinutes = 60,
-            CsvPath = csvPath,
+            CsvPath = workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"),
             SourcePath = workspace.Source,
             DestinationPath = workspace.Destination
-        };
+        }, out _));
+        using var scheduler = backend.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await Task.Delay(100);
+        Assert.Null(backend.Settings.Schedule.LastAttemptUtc);
+
+        // No time passes on the fake clock: only the change can end the scheduler's wait.
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { ScheduleIntervalMinutes = 1440 }, out var error), error?.Message);
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastRun is not null, "the run the change starts");
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Equal(Now, backend.Settings.Schedule.EnabledAtUtc);
+        Assert.Equal(["Tolkien/The Hobbit/The Hobbit.m4b"], workspace.DestinationFiles());
     }
 
-    private static SortSchedule Complete(DateTime? lastRunUtc) => new()
+    [Fact]
+    public async Task Closing_the_app_cancels_a_scheduled_run_and_it_is_tried_again()
     {
-        IntervalMinutes = 360,
-        CsvPath = "books.csv",
-        SourcePath = "source",
-        DestinationPath = "destination",
-        LastRunUtc = lastRunUtc
+        using var workspace = new TempWorkspace();
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time);
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out _));
+        using var scheduler = backend.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the run to start");
+
+        backend.Lifetime.StopApplication();
+        await scheduler.StopAsync(CancellationToken.None);
+
+        var state = backend.Settings.Schedule;
+        Assert.True(state.LastRun!.IsCanceled);
+        Assert.Equal("Canceled because the app closed.", state.LastRun.Error);
+        Assert.True(SortSchedule.LastAttemptFailed(state));
+        Assert.False(backend.Sort.IsSorting);
+    }
+
+    [Fact]
+    public void The_schedule_says_why_it_cannot_run_naming_the_server_setting()
+    {
+        using var workspace = new TempWorkspace();
+        var config = new ServerConfig { SourcePath = workspace.Source, DestinationPath = workspace.Destination, ScheduleIntervalMinutes = 360 };
+        using var backend = new TestBackend(config);
+        using var scheduler = backend.CreateScheduler();
+
+        var status = scheduler.GetStatus();
+
+        Assert.True(status.Locked);
+        Assert.Equal(360, status.IntervalMinutes);
+        Assert.Equal("CSV_PATH is not set.", status.BlockedReason);
+    }
+
+    private static ScheduleState Succeeded(DateTime startedUtc) => new()
+    {
+        LastAttemptUtc = startedUtc,
+        LastSuccessUtc = startedUtc
     };
+
+    /// <summary>Moves the fake clock on and gives the scheduler a moment to react to it.</summary>
+    private static async Task AdvanceAndSettle(FakeTimeProvider time, TimeSpan by)
+    {
+        time.Advance(by);
+        await Task.Delay(200);
+    }
+
+    /// <summary>
+    /// Moves the fake clock a minute at a time until <paramref name="condition"/> holds. Stepping
+    /// rather than jumping keeps the test independent of whether the scheduler had started its
+    /// next wait before the clock moved.
+    /// </summary>
+    private static async Task AdvanceUntil(FakeTimeProvider time, Func<bool> condition, string what)
+    {
+        for (var step = 0; step < 10 && !condition(); step++)
+        {
+            await AdvanceAndSettle(time, TimeSpan.FromMinutes(1));
+        }
+
+        await TestBackend.WaitUntil(condition, what);
+    }
 }

@@ -1,0 +1,287 @@
+using System.Text.Json.Nodes;
+using AudioFileSorter.Model;
+using ManagerApi.Services;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+
+namespace AudioFileSorter.Tests;
+
+public class SettingsServiceTests
+{
+    [Fact]
+    public void Settings_are_saved_and_read_back_after_a_restart()
+    {
+        using var workspace = new TempWorkspace();
+        var config = new ServerConfig { SettingsPath = Path.Combine(workspace.Root, "settings.json") };
+
+        using (var first = new TestBackend(config))
+        {
+            Assert.True(first.Settings.TryUpdate(new AppSettingsPatch
+            {
+                SourcePath = workspace.Source,
+                ComparisonMode = "full",
+                CopySpeed = "gentle",
+                KeepRunningInBackground = true
+            }, out var error), error?.Message);
+        }
+
+        using var restarted = new TestBackend(config);
+        var settings = restarted.Settings.Effective;
+
+        Assert.Equal(workspace.Source, settings.SourcePath);
+        Assert.Equal(FileComparisonMode.Full, settings.ComparisonMode);
+        Assert.Equal(CopySpeed.Gentle, settings.CopySpeed);
+        Assert.True(settings.KeepRunningInBackground);
+        Assert.False(File.Exists(config.SettingsPath + ".tmp"));
+    }
+
+    [Fact]
+    public void The_settings_file_is_versioned_and_spells_choices_as_words()
+    {
+        using var workspace = new TempWorkspace();
+        var config = new ServerConfig { SettingsPath = Path.Combine(workspace.Root, "settings.json") };
+        using var backend = new TestBackend(config);
+
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out _));
+
+        var file = JsonNode.Parse(File.ReadAllText(config.SettingsPath!))!;
+        Assert.Equal(1, file["version"]!.GetValue<int>());
+        Assert.Equal("gentle", file["settings"]!["copySpeed"]!.GetValue<string>());
+        Assert.Equal("quick", file["settings"]!["comparisonMode"]!.GetValue<string>());
+        Assert.NotNull(file["schedule"]);
+    }
+
+    [Fact]
+    public void A_value_in_the_file_that_makes_no_sense_falls_back_on_its_own()
+    {
+        using var workspace = new TempWorkspace();
+        var path = Path.Combine(workspace.Root, "settings.json");
+        File.WriteAllText(path, """
+            { "version": 1,
+              "settings": { "sourcePath": "/books", "comparisonMode": "thorough", "copySpeed": "gentle", "scheduleIntervalMinutes": 5 },
+              "schedule": { "lastAttemptUtc": "2026-01-01T00:00:00Z" } }
+            """);
+
+        var state = new SettingsStore(path, NullLogger<SettingsStore>.Instance)
+            .Load(new AppSettings { ComparisonMode = FileComparisonMode.Full });
+
+        Assert.Equal("/books", state.Settings.SourcePath);
+        Assert.Equal(FileComparisonMode.Full, state.Settings.ComparisonMode);
+        Assert.Equal(CopySpeed.Gentle, state.Settings.CopySpeed);
+        Assert.Null(state.Settings.ScheduleIntervalMinutes);
+        Assert.Equal(new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc), state.Schedule.LastAttemptUtc);
+    }
+
+    [Fact]
+    public void An_unreadable_file_starts_from_the_defaults()
+    {
+        using var workspace = new TempWorkspace();
+        var path = Path.Combine(workspace.Root, "settings.json");
+        File.WriteAllText(path, "{ not json");
+
+        var state = new SettingsStore(path, NullLogger<SettingsStore>.Instance).Load(new AppSettings());
+
+        Assert.Equal(new AppSettings(), state.Settings);
+        Assert.Equal(new ScheduleState(), state.Schedule);
+    }
+
+    [Fact]
+    public void Comparison_mode_from_the_environment_is_only_the_first_run_default()
+    {
+        using var backend = new TestBackend(new ServerConfig { DefaultComparisonMode = FileComparisonMode.Full });
+
+        Assert.Equal(FileComparisonMode.Full, backend.Settings.Effective.ComparisonMode);
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { ComparisonMode = "quick" }, out _));
+        Assert.Equal(FileComparisonMode.Quick, backend.Settings.Effective.ComparisonMode);
+    }
+
+    [Fact]
+    public void Paths_and_interval_from_the_environment_are_in_force_but_never_saved()
+    {
+        using var workspace = new TempWorkspace();
+        var config = new ServerConfig
+        {
+            CsvPath = "/data/books.csv",
+            SourcePath = "/source",
+            DestinationPath = "/destination",
+            ScheduleIntervalMinutes = 360,
+            SettingsPath = Path.Combine(workspace.Root, "settings.json")
+        };
+        using var backend = new TestBackend(config);
+
+        Assert.Equal("/source", backend.Settings.Effective.SourcePath);
+        Assert.Equal(360, backend.Settings.Effective.ScheduleIntervalMinutes);
+
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out _));
+        backend.Settings.UpdateSchedule(state => state with { LastAttemptUtc = DateTime.UtcNow });
+
+        var saved = JsonNode.Parse(File.ReadAllText(config.SettingsPath))!["settings"]!;
+        Assert.Null(saved["sourcePath"]);
+        Assert.Null(saved["scheduleIntervalMinutes"]);
+        Assert.Equal("gentle", saved["copySpeed"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void A_locked_path_cannot_be_changed_but_may_be_sent_unchanged()
+    {
+        var config = new ServerConfig { CsvPath = "/data/books.csv", SourcePath = "/source", DestinationPath = "/destination" };
+        using var backend = new TestBackend(config);
+
+        Assert.False(backend.Settings.TryUpdate(new AppSettingsPatch { SourcePath = "/elsewhere" }, out var error));
+        Assert.Equal("sourcePath", error!.Field);
+        Assert.Contains("SOURCE_PATH", error.Message);
+
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { SourcePath = "/source", CopySpeed = "gentle" }, out _));
+    }
+
+    [Fact]
+    public void Turning_automatic_sorting_on_records_when_and_raises_a_change()
+    {
+        using var workspace = new TempWorkspace();
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 3, 1, 12, 0, 0, TimeSpan.Zero));
+        using var backend = new TestBackend(new ServerConfig(), time);
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch
+        {
+            CsvPath = workspace.WriteCsv(),
+            SourcePath = workspace.Source,
+            DestinationPath = workspace.Destination
+        }, out _));
+
+        var changes = 0;
+        backend.Settings.Changed += (_, _) => changes++;
+
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { ScheduleIntervalMinutes = 360 }, out var error), error?.Message);
+        Assert.Equal(time.GetUtcNow().UtcDateTime, backend.Settings.Schedule.EnabledAtUtc);
+        Assert.Equal(1, changes);
+
+        // Changing the interval of a schedule that is already on is not turning it on.
+        time.Advance(TimeSpan.FromHours(1));
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { ScheduleIntervalMinutes = 720 }, out _));
+        Assert.Equal(time.GetUtcNow().UtcDateTime.AddHours(-1), backend.Settings.Schedule.EnabledAtUtc);
+    }
+
+    [Fact]
+    public void Automatic_sorting_cannot_be_turned_on_with_a_destination_that_is_not_there()
+    {
+        using var workspace = new TempWorkspace();
+        var unplugged = Path.Combine(workspace.Root, "unplugged");
+        using var backend = new TestBackend(new ServerConfig());
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch
+        {
+            CsvPath = workspace.WriteCsv(),
+            SourcePath = workspace.Source,
+            DestinationPath = unplugged
+        }, out _));
+
+        Assert.False(backend.Settings.TryUpdate(new AppSettingsPatch { ScheduleIntervalMinutes = 360 }, out var error));
+
+        Assert.Equal("destinationPath", error!.Field);
+        Assert.Null(backend.Settings.Effective.ScheduleIntervalMinutes);
+        Assert.False(Directory.Exists(unplugged));
+    }
+
+    [Fact]
+    public void A_destination_inside_the_source_is_refused_even_with_automatic_sorting_off()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = new TestBackend(new ServerConfig());
+
+        Assert.False(backend.Settings.TryUpdate(new AppSettingsPatch
+        {
+            SourcePath = workspace.Source,
+            DestinationPath = Path.Combine(workspace.Source, "sorted")
+        }, out var error));
+
+        Assert.Equal("destinationPath", error!.Field);
+        Assert.Null(backend.Settings.Effective.SourcePath);
+    }
+
+    [Fact]
+    public void Unrelated_changes_are_saved_while_the_drive_is_unplugged()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = new TestBackend(new ServerConfig());
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch
+        {
+            CsvPath = workspace.WriteCsv(),
+            SourcePath = workspace.Source,
+            DestinationPath = workspace.Destination,
+            ScheduleIntervalMinutes = 360
+        }, out var error), error?.Message);
+
+        Directory.Delete(workspace.Destination);
+
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out error), error?.Message);
+    }
+
+    [Fact]
+    public void Blank_paths_clear_and_omitted_ones_stay()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = new TestBackend(new ServerConfig());
+        Assert.True(backend.Settings.TryUpdate(
+            new AppSettingsPatch { SourcePath = workspace.Source, DestinationPath = workspace.Destination }, out _));
+
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { SourcePath = "" }, out _));
+
+        Assert.Null(backend.Settings.Effective.SourcePath);
+        Assert.Equal(workspace.Destination, backend.Settings.Effective.DestinationPath);
+    }
+
+    [Theory]
+    [InlineData(5)]
+    [InlineData(0)]
+    public void An_interval_below_the_minimum_is_refused(int minutes)
+    {
+        using var backend = new TestBackend(new ServerConfig());
+
+        Assert.False(backend.Settings.TryUpdate(new AppSettingsPatch { ScheduleIntervalMinutes = minutes }, out var error));
+        Assert.Equal("scheduleIntervalMinutes", error!.Field);
+    }
+
+    [Fact]
+    public void Server_config_listens_on_loopback_unless_told_otherwise()
+    {
+        Assert.Equal("http://127.0.0.1:5123", ServerConfig.FromEnvironment(_ => null).BindUrl);
+        Assert.Equal(
+            "http://0.0.0.0:5123",
+            ServerConfig.FromEnvironment(Env(("ASPNETCORE_URLS", "http://0.0.0.0:5123"))).BindUrl);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("off")]
+    [InlineData(" ")]
+    public void Sort_interval_off_or_unset_leaves_the_schedule_to_the_page(string? value)
+    {
+        var config = ServerConfig.FromEnvironment(Env(("SORT_INTERVAL", value)));
+
+        Assert.False(config.ScheduleLocked);
+        Assert.Empty(config.Warnings);
+    }
+
+    [Fact]
+    public void An_unreadable_sort_interval_is_ignored_with_a_warning_and_does_not_lock()
+    {
+        var config = ServerConfig.FromEnvironment(Env(("SORT_INTERVAL", "6x")));
+
+        Assert.False(config.ScheduleLocked);
+        Assert.Contains(config.Warnings, warning => warning.StartsWith("SORT_INTERVAL=\"6x\" was ignored"));
+    }
+
+    [Fact]
+    public void Any_path_variable_locks_the_paths_and_parallelism_is_read_once()
+    {
+        var config = ServerConfig.FromEnvironment(Env(("DESTINATION_PATH", "/destination"), ("OABO_MAX_PARALLELISM", "3")));
+
+        Assert.True(config.PathsLocked);
+        Assert.Null(config.CsvPath);
+        Assert.Equal(3, config.NormalParallelism);
+    }
+
+    private static Func<string, string?> Env(params (string Name, string? Value)[] variables)
+    {
+        var map = variables.ToDictionary(v => v.Name, v => v.Value);
+        return name => map.GetValueOrDefault(name);
+    }
+}

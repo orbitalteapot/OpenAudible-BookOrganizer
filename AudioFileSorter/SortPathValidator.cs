@@ -30,7 +30,8 @@ public static class SortPathValidator
                ?? ValidateDestination(sourcePath!, destinationPath, createDestination);
     }
 
-    private static SortPathProblem? ValidateCsv(string csvPath)
+    /// <summary>Checks the library export on its own: set, and a file that exists.</summary>
+    public static SortPathProblem? ValidateCsv(string? csvPath)
     {
         if (string.IsNullOrWhiteSpace(csvPath))
         {
@@ -42,7 +43,8 @@ public static class SortPathValidator
             : new SortPathProblem(SortPathField.Csv, SortPathProblemCode.NotFound, $"The library export was not found: {csvPath}");
     }
 
-    private static SortPathProblem? ValidateSource(string? sourcePath)
+    /// <summary>Checks the source folder on its own: set, and a folder that exists.</summary>
+    public static SortPathProblem? ValidateSource(string? sourcePath)
     {
         if (string.IsNullOrWhiteSpace(sourcePath))
         {
@@ -54,32 +56,43 @@ public static class SortPathValidator
             : new SortPathProblem(SortPathField.Source, SortPathProblemCode.NotFound, $"The source folder was not found: {sourcePath}");
     }
 
-    private static SortPathProblem? ValidateDestination(string sourcePath, string? destinationPath, bool createDestination)
+    /// <summary>
+    /// The destination checks that only look: set, not the source or inside it, and present.
+    /// Never creates or writes anything, so it is safe to run whenever a page asks for the status.
+    /// Whether the folder can actually be written is only known by writing to it, which
+    /// <see cref="Validate"/> does.
+    /// </summary>
+    /// <param name="sourcePath">The source folder, or null to skip the overlap check.</param>
+    public static SortPathProblem? InspectDestination(string? sourcePath, string? destinationPath)
     {
         if (string.IsNullOrWhiteSpace(destinationPath))
         {
             return Destination(SortPathProblemCode.NotSet, "No destination folder is set.");
         }
 
-        if (PathsOverlap(sourcePath, destinationPath))
+        if (!string.IsNullOrWhiteSpace(sourcePath) && PathsOverlap(sourcePath, destinationPath))
         {
             return Destination(
                 SortPathProblemCode.DestinationInsideSource,
                 "The destination folder cannot be the source folder or a folder inside it.");
         }
 
-        if (!Directory.Exists(destinationPath))
-        {
-            if (!createDestination)
-            {
-                return Destination(
-                    SortPathProblemCode.DestinationMissing,
-                    "The destination folder does not exist. Is the drive connected?");
-            }
+        return Directory.Exists(destinationPath)
+            ? null
+            : Destination(
+                SortPathProblemCode.DestinationMissing,
+                "The destination folder does not exist. Is the drive connected?");
+    }
 
+    private static SortPathProblem? ValidateDestination(string sourcePath, string? destinationPath, bool createDestination)
+    {
+        var problem = InspectDestination(sourcePath, destinationPath);
+        if (problem is { Code: SortPathProblemCode.DestinationMissing } && createDestination)
+        {
             try
             {
-                Directory.CreateDirectory(destinationPath);
+                Directory.CreateDirectory(destinationPath!);
+                problem = null;
             }
             catch (Exception ex) when (IsFileSystemError(ex))
             {
@@ -87,7 +100,7 @@ public static class SortPathValidator
             }
         }
 
-        return ProbeWritable(destinationPath);
+        return problem ?? ProbeWritable(destinationPath!);
     }
 
     /// <summary>

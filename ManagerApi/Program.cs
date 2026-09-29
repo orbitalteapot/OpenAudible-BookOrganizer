@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using AudioFileSorter;
 using AudioFileSorter.Model;
 using ManagerApi.Services;
 
@@ -12,76 +15,39 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     ContentRootPath = AppContext.BaseDirectory
 });
 
-var csvPath = Environment.GetEnvironmentVariable("CSV_PATH") ?? string.Empty;
-var sourcePath = Environment.GetEnvironmentVariable("SOURCE_PATH") ?? string.Empty;
-var destinationPath = Environment.GetEnvironmentVariable("DESTINATION_PATH") ?? string.Empty;
-
-// COMPARISON_MODE is the server-wide default: a container can be set up to verify contents on
-// every run, and a request that names a mode explicitly still wins.
-var configuredComparisonMode = Environment.GetEnvironmentVariable("COMPARISON_MODE");
-if (!SortOptions.TryParseComparisonMode(configuredComparisonMode, out var defaultComparisonMode))
-{
-    Console.Error.WriteLine(
-        $"Ignoring COMPARISON_MODE=\"{configuredComparisonMode}\": expected \"quick\" or \"full\". Using \"quick\".");
-    defaultComparisonMode = SortOptions.Default.ComparisonMode;
-}
-
-// OABO_MAX_PARALLELISM overrides how many books are copied at once, for a NAS or a USB disk that
-// slows down under several concurrent copies.
-var maxParallelism =
-    int.TryParse(Environment.GetEnvironmentVariable("OABO_MAX_PARALLELISM"), out var requestedParallelism) && requestedParallelism > 0
-        ? requestedParallelism
-        : SortOptions.DefaultParallelism;
-
-// SORT_INTERVAL ("6h", "1d", ...) sorts on a timer using the three paths above. Setting it fixes
-// the schedule for the container; leaving it unset lets the Sort page set one instead.
-var configuredInterval = Environment.GetEnvironmentVariable("SORT_INTERVAL");
-SortSchedule? serverSchedule = null;
-if (!string.IsNullOrWhiteSpace(configuredInterval))
-{
-    if (SortSchedule.TryParseInterval(configuredInterval, out var intervalMinutes))
-    {
-        serverSchedule = new SortSchedule
-        {
-            IntervalMinutes = intervalMinutes,
-            CsvPath = csvPath,
-            SourcePath = sourcePath,
-            DestinationPath = destinationPath,
-            ComparisonMode = defaultComparisonMode
-        };
-    }
-    else
-    {
-        Console.Error.WriteLine(
-            $"Ignoring SORT_INTERVAL=\"{configuredInterval}\": expected something like \"6h\", \"1d\" or \"off\", " +
-            $"at least {SortSchedule.MinimumIntervalMinutes} minutes. Automatic sorting is off.");
-    }
-}
+// Read once, here. Everything else takes it from the container, so a test can swap in its own.
+var serverConfig = ServerConfig.FromEnvironment();
 
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins("http://localhost:5173")
+        policy.WithOrigins("http://localhost:5173", "http://127.0.0.1:5173")
               .AllowAnyMethod()
               .AllowAnyHeader();
     });
 });
 
+// Enums go over the wire as the page spells them: "running", "scheduled", "notFound".
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
+
+builder.Services.AddSingleton(serverConfig);
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(services => new SettingsStore(
+    services.GetRequiredService<ServerConfig>().SettingsPath,
+    services.GetRequiredService<ILogger<SettingsStore>>()));
+builder.Services.AddSingleton<SettingsService>();
 builder.Services.AddSingleton<SortService>();
-builder.Services.AddSingleton(services =>
-{
-    var logger = services.GetRequiredService<ILogger<SortScheduler>>();
-    var store = new SortScheduleStore(Environment.GetEnvironmentVariable("OABO_SETTINGS_PATH"), logger);
-    return new SortScheduler(services.GetRequiredService<SortService>(), store, serverSchedule, logger, maxParallelism);
-});
+builder.Services.AddSingleton<SortScheduler>();
 builder.Services.AddHostedService(services => services.GetRequiredService<SortScheduler>());
 
-builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://0.0.0.0:5123");
+builder.WebHost.UseUrls(serverConfig.BindUrl);
 
 var app = builder.Build();
 
 var logger = app.Logger;
+app.Services.GetRequiredService<ServerConfig>().Log(logger);
 
 app.UseCors();
 
@@ -102,28 +68,25 @@ else
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 
-app.MapGet("/api/config", () => Results.Ok(new
-{
-    csvPath,
-    sourcePath,
-    destinationPath,
-    webMode = true,
-    comparisonMode = SortOptions.ToWireValue(defaultComparisonMode),
-    csvExists = !string.IsNullOrWhiteSpace(csvPath) && File.Exists(csvPath),
-    sourceExists = !string.IsNullOrWhiteSpace(sourcePath) && Directory.Exists(sourcePath),
-    destinationExists = !string.IsNullOrWhiteSpace(destinationPath) && Directory.Exists(destinationPath)
-}));
+app.MapGet("/api/settings", (SettingsService settings) => Results.Ok(SettingsResponse.From(settings)));
 
-app.MapPost("/api/books/parse", async (ParseRequest? request, SortService sortService, CancellationToken cancellationToken) =>
+app.MapPut("/api/settings", (AppSettingsPatch? patch, SettingsService settings) =>
 {
-    if (request is null || string.IsNullOrWhiteSpace(request.CsvPath))
+    if (patch is null)
     {
-        return Results.BadRequest(new { error = "CSV path is required" });
+        return Results.BadRequest(new { error = "Send the settings to change.", field = (string?)null });
     }
 
+    return settings.TryUpdate(patch, out var error)
+        ? Results.Ok(SettingsResponse.From(settings))
+        : Results.BadRequest(new { error = error!.Message, field = error.Field });
+});
+
+app.MapPost("/api/books/parse", async (SortService sortService, CancellationToken cancellationToken) =>
+{
     try
     {
-        var result = await sortService.ParseBooks(request.CsvPath, cancellationToken);
+        var result = await sortService.ParseBooks(cancellationToken);
 
         foreach (var warning in result.Warnings)
         {
@@ -137,10 +100,17 @@ app.MapPost("/api/books/parse", async (ParseRequest? request, SortService sortSe
             warnings = result.Warnings
         });
     }
-    catch (Exception ex) when (ex is FileNotFoundException or ArgumentException or InvalidDataException or InvalidOperationException)
+    catch (SortPathException ex)
     {
-        logger.LogWarning(ex, "Failed to parse {CsvPath}", request.CsvPath);
-        return Results.BadRequest(new { error = ex.Message });
+        return Results.BadRequest(RunErrors.Body(ex));
+    }
+    catch (FileNotFoundException ex)
+    {
+        return CsvError(ex.Message, RunErrors.CsvNotFound);
+    }
+    catch (InvalidDataException ex)
+    {
+        return CsvError(ex.Message, RunErrors.CsvInvalid);
     }
     catch (OperationCanceledException)
     {
@@ -148,63 +118,48 @@ app.MapPost("/api/books/parse", async (ParseRequest? request, SortService sortSe
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Unexpected error parsing {CsvPath}", request.CsvPath);
-        return Results.BadRequest(new { error = $"Could not read the CSV file: {ex.Message}" });
+        logger.LogError(ex, "Unexpected error reading the library export");
+        return CsvError($"Could not read the CSV file: {ex.Message}", RunErrors.CsvInvalid);
     }
 });
 
 app.MapGet("/api/books", (SortService sortService) => Results.Ok(sortService.GetBooks()));
 
-app.MapPost("/api/sort/start", (SortRequest? request, SortService sortService) =>
+app.MapPost("/api/sort/start", (StartSortRequest? request, SortService sortService, SettingsService settings) =>
 {
-    if (request is null ||
-        string.IsNullOrWhiteSpace(request.CsvPath) ||
-        string.IsNullOrWhiteSpace(request.SourcePath) ||
-        string.IsNullOrWhiteSpace(request.DestinationPath))
+    // An omitted mode means the saved one, so a run started from anywhere does what the page shows.
+    FileComparisonMode? comparisonMode = null;
+    if (!string.IsNullOrWhiteSpace(request?.ComparisonMode))
     {
-        return Results.BadRequest(new { error = "All paths are required" });
-    }
-
-    // An omitted mode means "whatever this server is configured for", so a container started with
-    // COMPARISON_MODE=full verifies contents even for callers that never heard of the setting.
-    var comparisonMode = defaultComparisonMode;
-    if (!string.IsNullOrWhiteSpace(request.ComparisonMode) &&
-        !SortOptions.TryParseComparisonMode(request.ComparisonMode, out comparisonMode))
-    {
-        return Results.BadRequest(new
+        if (!SortOptions.TryParseComparisonMode(request.ComparisonMode, out var requested))
         {
-            error = $"Unknown comparison mode \"{request.ComparisonMode}\". Use \"quick\" or \"full\"."
-        });
+            return Results.BadRequest(new
+            {
+                error = $"Unknown update check \"{request.ComparisonMode}\". Use \"quick\" or \"full\".",
+                code = RunErrors.InvalidComparisonMode,
+                field = "comparisonMode"
+            });
+        }
+
+        comparisonMode = requested;
     }
 
-    // Validate before starting so the user gets a real error instead of a run that reports
-    // failure seconds later, or worse, never reports at all.
-    // A person pressed Start, so a missing destination is created as it always has been here.
-    var pathError = SortService.ValidatePaths(request.CsvPath, request.SourcePath, request.DestinationPath, createDestination: true);
-    if (pathError is not null)
+    // A person pressed Start, so a missing destination is created — but only once they have been
+    // asked: the page sends createDestination after "The destination folder doesn't exist" is confirmed.
+    var options = settings.SortOptionsFor(request?.CreateDestination ?? false, comparisonMode);
+    try
     {
-        return Results.BadRequest(new { error = pathError });
+        return sortService.TryStartSort(RunTrigger.Manual, options, out _)
+            ? Results.Accepted(value: sortService.GetStatus())
+            : Results.Conflict(new { error = "A sort is already running.", code = RunErrors.AlreadyRunning });
     }
-
-    // Checking IsSorting separately would leave a window where two requests both start a run.
-    var options = new SortOptions { ComparisonMode = comparisonMode, MaxParallelism = maxParallelism, CreateDestination = true };
-    if (!sortService.TryStartSort(request.CsvPath, request.SourcePath, request.DestinationPath, options, out var sortTask))
+    catch (SortPathException ex)
     {
-        return Results.Conflict(new { error = "Sort already in progress" });
+        return Results.BadRequest(RunErrors.Body(ex));
     }
-
-    _ = sortTask.ContinueWith(
-        t => logger.LogError(t.Exception, "Sort task faulted"),
-        TaskContinuationOptions.OnlyOnFaulted);
-
-    return Results.Ok(new
-    {
-        message = "Sort started",
-        comparisonMode = SortOptions.ToWireValue(comparisonMode)
-    });
 });
 
-app.MapGet("/api/sort/progress", (SortService sortService) => Results.Ok(sortService.GetProgress()));
+app.MapGet("/api/sort/progress", (SortService sortService) => Results.Ok(sortService.GetStatus()));
 
 app.MapPost("/api/sort/cancel", (SortService sortService) =>
 {
@@ -213,36 +168,7 @@ app.MapPost("/api/sort/cancel", (SortService sortService) =>
         : Results.BadRequest(new { error = "No sort is currently running" });
 });
 
-app.MapGet("/api/schedule", (SortScheduler scheduler) => Results.Ok(ToScheduleResponse(scheduler)));
-
-app.MapPut("/api/schedule", (ScheduleRequest? request, SortScheduler scheduler) =>
-{
-    if (request is null)
-    {
-        return Results.BadRequest(new { error = "A schedule is required" });
-    }
-
-    if (!SortOptions.TryParseComparisonMode(request.ComparisonMode, out var comparisonMode))
-    {
-        return Results.BadRequest(new { error = $"Unknown comparison mode \"{request.ComparisonMode}\". Use \"quick\" or \"full\"." });
-    }
-
-    var schedule = new SortSchedule
-    {
-        IntervalMinutes = request.IntervalMinutes,
-        CsvPath = request.CsvPath,
-        SourcePath = request.SourcePath,
-        DestinationPath = request.DestinationPath,
-        ComparisonMode = comparisonMode
-    };
-
-    if (!scheduler.TryUpdate(schedule, out var error))
-    {
-        return Results.BadRequest(new { error });
-    }
-
-    return Results.Ok(ToScheduleResponse(scheduler));
-});
+app.MapGet("/api/schedule", (SortScheduler scheduler) => Results.Ok(scheduler.GetStatus()));
 
 if (servesWebUi)
 {
@@ -251,35 +177,14 @@ if (servesWebUi)
 
 app.Run();
 
-static object ToScheduleResponse(SortScheduler scheduler)
+static IResult CsvError(string message, string code)
 {
-    var schedule = scheduler.Current;
-    return new
-    {
-        intervalMinutes = schedule.IntervalMinutes,
-        csvPath = schedule.CsvPath,
-        sourcePath = schedule.SourcePath,
-        destinationPath = schedule.DestinationPath,
-        comparisonMode = SortOptions.ToWireValue(schedule.ComparisonMode),
-        lastRunUtc = schedule.LastRunUtc,
-        lastResult = schedule.LastResult,
-        nextRunUtc = schedule.NextRunUtc(DateTime.UtcNow),
-        managedByServer = scheduler.IsManagedByServer
-    };
+    return Results.BadRequest(new { error = message, code, field = RunErrors.CsvPathField });
 }
 
-record ParseRequest(string CsvPath);
-
-/// <param name="ComparisonMode">"quick" or "full". Omitted means the server default.</param>
-record SortRequest(string CsvPath, string SourcePath, string DestinationPath, string? ComparisonMode = null);
-
-/// <param name="IntervalMinutes">Minutes between automatic sorts. Null turns them off.</param>
-record ScheduleRequest(
-    int? IntervalMinutes,
-    string? CsvPath,
-    string? SourcePath,
-    string? DestinationPath,
-    string? ComparisonMode = null);
+/// <param name="ComparisonMode">"quick" or "full" for this run only. Omitted means the saved setting.</param>
+/// <param name="CreateDestination">Create a missing destination folder; sent once the user has agreed to it.</param>
+record StartSortRequest(string? ComparisonMode = null, bool CreateDestination = false);
 
 /// <summary>Exposed so the integration tests can drive the real application host.</summary>
 public partial class Program;

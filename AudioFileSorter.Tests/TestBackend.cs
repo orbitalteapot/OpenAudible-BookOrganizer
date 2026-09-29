@@ -1,0 +1,88 @@
+using ManagerApi.Services;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace AudioFileSorter.Tests;
+
+/// <summary>
+/// The backend's services wired together the way Program.cs wires them, without a web host, so
+/// the service and scheduler tests can control the clock and the app's shutdown.
+/// </summary>
+public sealed class TestBackend : IDisposable
+{
+    public TestBackend(ServerConfig config, TimeProvider? time = null)
+    {
+        Time = time ?? TimeProvider.System;
+        Settings = new SettingsService(
+            config, new SettingsStore(config.SettingsPath, NullLogger<SettingsStore>.Instance), Time);
+        Sort = new SortService(Settings, Time, Lifetime, NullLogger<SortService>.Instance);
+    }
+
+    public TimeProvider Time { get; }
+    public TestLifetime Lifetime { get; } = new();
+    public SettingsService Settings { get; }
+    public SortService Sort { get; }
+
+    /// <summary>A backend whose three paths are fixed, as a container's would be.</summary>
+    public static TestBackend LockedTo(
+        TempWorkspace workspace, string csvPath, int? intervalMinutes = null, string? destination = null, TimeProvider? time = null)
+    {
+        return new TestBackend(
+            new ServerConfig
+            {
+                CsvPath = csvPath,
+                SourcePath = workspace.Source,
+                DestinationPath = destination ?? workspace.Destination,
+                ScheduleIntervalMinutes = intervalMinutes
+            },
+            time);
+    }
+
+    public SortScheduler CreateScheduler()
+    {
+        return new SortScheduler(Sort, Settings, Time, NullLogger<SortScheduler>.Instance);
+    }
+
+    public void Dispose()
+    {
+        // Leaves no run copying into a workspace that is about to be deleted.
+        Sort.CancelSort();
+        Lifetime.Dispose();
+    }
+
+    /// <summary>Polls until <paramref name="condition"/> holds, failing the test after a few seconds.</summary>
+    public static async Task WaitUntil(Func<bool> condition, string what, int seconds = 15)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(seconds);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                Assert.Fail($"Timed out waiting for {what}.");
+            }
+
+            await Task.Delay(10);
+        }
+    }
+}
+
+/// <summary>An app lifetime a test can stop, to see what the backend does when the app closes.</summary>
+public sealed class TestLifetime : IHostApplicationLifetime, IDisposable
+{
+    private readonly CancellationTokenSource _started = new();
+    private readonly CancellationTokenSource _stopping = new();
+    private readonly CancellationTokenSource _stopped = new();
+
+    public CancellationToken ApplicationStarted => _started.Token;
+    public CancellationToken ApplicationStopping => _stopping.Token;
+    public CancellationToken ApplicationStopped => _stopped.Token;
+
+    public void StopApplication() => _stopping.Cancel();
+
+    public void Dispose()
+    {
+        _started.Dispose();
+        _stopping.Dispose();
+        _stopped.Dispose();
+    }
+}

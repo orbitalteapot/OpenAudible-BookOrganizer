@@ -1,0 +1,295 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using ManagerApi.Services;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace AudioFileSorter.Tests;
+
+/// <summary>
+/// Drives the real application host. Each test hands the app its own <see cref="ServerConfig"/>
+/// instead of setting environment variables, so tests running side by side cannot see each other's.
+/// </summary>
+public class ApiEndpointTests
+{
+    [Fact]
+    public async Task Settings_show_locked_paths_and_whether_each_can_be_found()
+    {
+        using var workspace = new TempWorkspace();
+        var config = new ServerConfig
+        {
+            CsvPath = Path.Combine(workspace.Root, "missing.csv"),
+            SourcePath = workspace.Source,
+            DestinationPath = workspace.Destination
+        };
+        await using var app = new ApiFactory(config);
+        using var client = app.CreateClient();
+
+        var settings = await client.GetFromJsonAsync<JsonElement>("/api/settings");
+
+        Assert.Equal(config.SourcePath, settings.GetProperty("sourcePath").GetString());
+        Assert.True(settings.GetProperty("locks").GetProperty("paths").GetBoolean());
+        Assert.False(settings.GetProperty("locks").GetProperty("schedule").GetBoolean());
+        Assert.Equal("notFound", settings.GetProperty("pathStatus").GetProperty("csv").GetString());
+        Assert.Equal("ok", settings.GetProperty("pathStatus").GetProperty("source").GetString());
+        Assert.Equal("quick", settings.GetProperty("comparisonMode").GetString());
+        Assert.Equal("normal", settings.GetProperty("copySpeed").GetString());
+    }
+
+    [Fact]
+    public async Task A_locked_path_cannot_be_changed_from_the_page()
+    {
+        using var workspace = new TempWorkspace();
+        await using var app = new ApiFactory(new ServerConfig { CsvPath = "/data/books.csv" });
+        using var client = app.CreateClient();
+
+        var response = await client.PutAsJsonAsync("/api/settings", new { csvPath = "/elsewhere.csv" });
+
+        var body = await ExpectStatus(response, HttpStatusCode.BadRequest);
+        Assert.Equal("csvPath", body.GetProperty("field").GetString());
+        Assert.Contains("CSV_PATH", body.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task Saving_settings_returns_what_is_now_in_force()
+    {
+        using var workspace = new TempWorkspace();
+        await using var app = new ApiFactory(new ServerConfig());
+        using var client = app.CreateClient();
+
+        var response = await client.PutAsJsonAsync("/api/settings", new
+        {
+            sourcePath = workspace.Source,
+            destinationPath = Path.Combine(workspace.Root, "not-yet"),
+            copySpeed = "gentle"
+        });
+
+        var body = await ExpectStatus(response, HttpStatusCode.OK);
+        Assert.Equal(workspace.Source, body.GetProperty("sourcePath").GetString());
+        Assert.Equal("gentle", body.GetProperty("copySpeed").GetString());
+        Assert.Equal("notFound", body.GetProperty("pathStatus").GetProperty("destination").GetString());
+        Assert.Equal("notSet", body.GetProperty("pathStatus").GetProperty("csv").GetString());
+
+        var reloaded = await client.GetFromJsonAsync<JsonElement>("/api/settings");
+        Assert.Equal("gentle", reloaded.GetProperty("copySpeed").GetString());
+    }
+
+    [Fact]
+    public async Task An_interval_below_the_minimum_is_refused()
+    {
+        await using var app = new ApiFactory(new ServerConfig());
+        using var client = app.CreateClient();
+
+        var response = await client.PutAsJsonAsync("/api/settings", new { scheduleIntervalMinutes = 5 });
+
+        var body = await ExpectStatus(response, HttpStatusCode.BadRequest);
+        Assert.Equal("scheduleIntervalMinutes", body.GetProperty("field").GetString());
+    }
+
+    [Fact]
+    public async Task Automatic_sorting_needs_paths_that_work_before_it_can_be_turned_on()
+    {
+        await using var app = new ApiFactory(new ServerConfig());
+        using var client = app.CreateClient();
+
+        var response = await client.PutAsJsonAsync("/api/settings", new { scheduleIntervalMinutes = 360 });
+
+        var body = await ExpectStatus(response, HttpStatusCode.BadRequest);
+        Assert.Equal("csvPath", body.GetProperty("field").GetString());
+    }
+
+    [Fact]
+    public async Task Sort_interval_off_leaves_automatic_sorting_to_the_page()
+    {
+        using var workspace = new TempWorkspace();
+        var config = ServerConfig.FromEnvironment(name => name == "SORT_INTERVAL" ? "off" : null);
+        await using var app = new ApiFactory(config);
+        using var client = app.CreateClient();
+
+        var settings = await client.GetFromJsonAsync<JsonElement>("/api/settings");
+        Assert.False(settings.GetProperty("locks").GetProperty("schedule").GetBoolean());
+
+        var response = await client.PutAsJsonAsync("/api/settings", new
+        {
+            csvPath = workspace.WriteCsv(),
+            sourcePath = workspace.Source,
+            destinationPath = workspace.Destination,
+            scheduleIntervalMinutes = 720
+        });
+        await ExpectStatus(response, HttpStatusCode.OK);
+
+        var schedule = await client.GetFromJsonAsync<JsonElement>("/api/schedule");
+        Assert.Equal(720, schedule.GetProperty("intervalMinutes").GetInt32());
+        Assert.False(schedule.GetProperty("locked").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, schedule.GetProperty("blockedReason").ValueKind);
+    }
+
+    [Fact]
+    public async Task An_unreadable_sort_interval_is_shown_as_a_server_warning()
+    {
+        var config = ServerConfig.FromEnvironment(name => name == "SORT_INTERVAL" ? "6x" : null);
+        await using var app = new ApiFactory(config);
+        using var client = app.CreateClient();
+
+        var settings = await client.GetFromJsonAsync<JsonElement>("/api/settings");
+
+        Assert.False(settings.GetProperty("locks").GetProperty("schedule").GetBoolean());
+        var warning = Assert.Single(settings.GetProperty("serverWarnings").EnumerateArray());
+        Assert.StartsWith("SORT_INTERVAL=\"6x\" was ignored", warning.GetString());
+    }
+
+    [Fact]
+    public async Task A_started_sort_is_running_and_then_finished()
+    {
+        using var workspace = new TempWorkspace();
+        await using var app = new ApiFactory(Locked(workspace, workspace.WriteLargeLibrary(20, 10_000)));
+        using var client = app.CreateClient();
+
+        // No body at all: every field of a start request is optional.
+        var response = await client.PostAsync("/api/sort/start", null);
+
+        var started = await ExpectStatus(response, HttpStatusCode.Accepted);
+        Assert.Equal("running", started.GetProperty("state").GetString());
+        Assert.Equal("manual", started.GetProperty("trigger").GetString());
+
+        var finished = await WaitForFinish(client);
+        Assert.Equal(20, finished.GetProperty("counts").GetProperty("new").GetInt32());
+        Assert.Equal(0, finished.GetProperty("counts").GetProperty("upToDate").GetInt32());
+        Assert.Equal(100, finished.GetProperty("percentage").GetDouble());
+        Assert.False(finished.GetProperty("isCanceled").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, finished.GetProperty("error").ValueKind);
+    }
+
+    [Fact]
+    public async Task Starting_while_a_sort_runs_is_a_conflict_and_cancel_stops_it()
+    {
+        using var workspace = new TempWorkspace();
+        await using var app = new ApiFactory(Locked(workspace, workspace.WriteLargeLibrary(400)));
+        using var client = app.CreateClient();
+
+        // One book at a time, so the run is still going when the next requests arrive.
+        await ExpectStatus(await client.PutAsJsonAsync("/api/settings", new { copySpeed = "gentle" }), HttpStatusCode.OK);
+        await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.Accepted);
+
+        var second = await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.Conflict);
+        Assert.Equal("alreadyRunning", second.GetProperty("code").GetString());
+
+        await ExpectStatus(await client.PostAsync("/api/sort/cancel", null), HttpStatusCode.OK);
+
+        var finished = await WaitForFinish(client);
+        Assert.True(finished.GetProperty("isCanceled").GetBoolean());
+        await ExpectStatus(await client.PostAsync("/api/sort/cancel", null), HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task A_missing_destination_is_reported_and_only_created_once_confirmed()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        var missing = Path.Combine(workspace.Root, "new-destination");
+        await using var app = new ApiFactory(Locked(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), missing));
+        using var client = app.CreateClient();
+
+        var refused = await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.BadRequest);
+        Assert.Equal("destinationMissing", refused.GetProperty("code").GetString());
+        Assert.Equal("destinationPath", refused.GetProperty("field").GetString());
+        Assert.False(Directory.Exists(missing));
+
+        await ExpectStatus(
+            await client.PostAsJsonAsync("/api/sort/start", new { createDestination = true }), HttpStatusCode.Accepted);
+
+        var finished = await WaitForFinish(client);
+        Assert.Equal(1, finished.GetProperty("counts").GetProperty("new").GetInt32());
+        Assert.True(Directory.Exists(missing));
+    }
+
+    [Fact]
+    public async Task Problems_are_listed_with_their_kind_once_the_run_is_finished()
+    {
+        using var workspace = new TempWorkspace();
+        await using var app = new ApiFactory(Locked(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit")));
+        using var client = app.CreateClient();
+
+        await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.Accepted);
+
+        var finished = await WaitForFinish(client);
+        var problem = Assert.Single(finished.GetProperty("problems").EnumerateArray());
+        Assert.Equal("notFound", problem.GetProperty("kind").GetString());
+        Assert.Contains("The Hobbit", problem.GetProperty("book").GetString());
+        Assert.Equal(1, finished.GetProperty("counts").GetProperty("notFound").GetInt32());
+    }
+
+    [Fact]
+    public async Task Loading_the_library_reads_the_export_in_the_settings()
+    {
+        using var workspace = new TempWorkspace();
+        await using var app = new ApiFactory(new ServerConfig());
+        using var client = app.CreateClient();
+
+        var missing = await ExpectStatus(await client.PostAsync("/api/books/parse", null), HttpStatusCode.BadRequest);
+        Assert.Equal("csvPath", missing.GetProperty("field").GetString());
+        Assert.Equal("notSet", missing.GetProperty("code").GetString());
+
+        await ExpectStatus(
+            await client.PutAsJsonAsync("/api/settings", new { csvPath = workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit") }),
+            HttpStatusCode.OK);
+
+        var parsed = await ExpectStatus(await client.PostAsync("/api/books/parse", null), HttpStatusCode.OK);
+        Assert.Equal(1, parsed.GetProperty("books").GetArrayLength());
+        var books = await client.GetFromJsonAsync<JsonElement>("/api/books");
+        Assert.Equal(1, books.GetArrayLength());
+    }
+
+    [Fact]
+    public async Task The_old_config_and_schedule_endpoints_are_gone()
+    {
+        await using var app = new ApiFactory(new ServerConfig());
+        using var client = app.CreateClient();
+
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/api/config")).StatusCode);
+        Assert.Equal(
+            HttpStatusCode.MethodNotAllowed,
+            (await client.PutAsJsonAsync("/api/schedule", new { intervalMinutes = 60 })).StatusCode);
+    }
+
+    private static ServerConfig Locked(TempWorkspace workspace, string csvPath, string? destination = null) => new()
+    {
+        CsvPath = csvPath,
+        SourcePath = workspace.Source,
+        DestinationPath = destination ?? workspace.Destination
+    };
+
+    private static async Task<JsonElement> ExpectStatus(HttpResponseMessage response, HttpStatusCode expected)
+    {
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.True(response.StatusCode == expected, $"Expected {expected}, got {response.StatusCode}: {text}");
+        return text.Length == 0 ? default : JsonDocument.Parse(text).RootElement.Clone();
+    }
+
+    private static async Task<JsonElement> WaitForFinish(HttpClient client)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(30);
+        while (true)
+        {
+            var status = await client.GetFromJsonAsync<JsonElement>("/api/sort/progress");
+            if (status.GetProperty("state").GetString() == "finished")
+            {
+                return status;
+            }
+
+            Assert.True(DateTime.UtcNow < deadline, "Timed out waiting for the sort to finish.");
+            await Task.Delay(20);
+        }
+    }
+
+    /// <summary>The real app, with the given configuration in place of whatever the environment says.</summary>
+    private sealed class ApiFactory(ServerConfig config) : WebApplicationFactory<Program>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.ConfigureServices(services => services.AddSingleton(config));
+        }
+    }
+}

@@ -1,0 +1,156 @@
+using AudioFileSorter.Model;
+
+namespace ManagerApi.Services;
+
+/// <summary>
+/// Everything the server takes from its environment, read once at startup. Nothing else reads
+/// environment variables, so what the startup log says is what the server does.
+/// </summary>
+public sealed record ServerConfig
+{
+    public const string CsvPathVariable = "CSV_PATH";
+    public const string SourcePathVariable = "SOURCE_PATH";
+    public const string DestinationPathVariable = "DESTINATION_PATH";
+    public const string ScheduleVariable = "SORT_INTERVAL";
+
+    /// <summary>
+    /// Loopback by default: the desktop app's backend is an unauthenticated file API and must not be
+    /// reachable from the rest of the network. The container sets 0.0.0.0 explicitly.
+    /// </summary>
+    public const string DefaultBindUrl = "http://127.0.0.1:5123";
+
+    /// <summary>CSV_PATH, or null when unset.</summary>
+    public string? CsvPath { get; init; }
+
+    /// <summary>SOURCE_PATH, or null when unset.</summary>
+    public string? SourcePath { get; init; }
+
+    /// <summary>DESTINATION_PATH, or null when unset.</summary>
+    public string? DestinationPath { get; init; }
+
+    /// <summary>COMPARISON_MODE: the update check used until one is saved from the Sort page.</summary>
+    public FileComparisonMode DefaultComparisonMode { get; init; } = SortOptions.Default.ComparisonMode;
+
+    /// <summary>OABO_MAX_PARALLELISM: books copied at once when the copy speed is Normal.</summary>
+    public int NormalParallelism { get; init; } = SortOptions.DefaultParallelism;
+
+    /// <summary>SORT_INTERVAL in minutes, or null when it is unset, "off" or unreadable.</summary>
+    public int? ScheduleIntervalMinutes { get; init; }
+
+    /// <summary>OABO_SETTINGS_PATH, or null to keep settings in memory only.</summary>
+    public string? SettingsPath { get; init; }
+
+    /// <summary>ASPNETCORE_URLS, or <see cref="DefaultBindUrl"/>.</summary>
+    public string BindUrl { get; init; } = DefaultBindUrl;
+
+    /// <summary>Environment values that were ignored, worded for the person who set them.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>
+    /// Setting any of the three paths fixes all of them: a container mounts its volumes where its
+    /// variables say, and a path picked in the page would point somewhere the container cannot see.
+    /// </summary>
+    public bool PathsLocked => CsvPath is not null || SourcePath is not null || DestinationPath is not null;
+
+    /// <summary>
+    /// Only a readable interval fixes the schedule. "off" or a blank value leaves it to the Sort page,
+    /// as does a value that could not be read — the warning says so rather than silently locking it.
+    /// </summary>
+    public bool ScheduleLocked => ScheduleIntervalMinutes is not null;
+
+    /// <summary>The variable that fixes <paramref name="field"/>, for messages that tell the user where to change it.</summary>
+    public static string VariableFor(SortPathField field) => field switch
+    {
+        SortPathField.Csv => CsvPathVariable,
+        SortPathField.Source => SourcePathVariable,
+        _ => DestinationPathVariable
+    };
+
+    public static ServerConfig FromEnvironment() => FromEnvironment(Environment.GetEnvironmentVariable);
+
+    /// <param name="read">Looks up one variable; tests pass a dictionary instead of the real environment.</param>
+    public static ServerConfig FromEnvironment(Func<string, string?> read)
+    {
+        var warnings = new List<string>();
+
+        var comparisonValue = read("COMPARISON_MODE");
+        if (!SortOptions.TryParseComparisonMode(comparisonValue, out var comparisonMode))
+        {
+            warnings.Add($"COMPARISON_MODE=\"{comparisonValue}\" was ignored — use \"quick\" or \"full\".");
+        }
+
+        var parallelismValue = read("OABO_MAX_PARALLELISM");
+        var parallelism = SortOptions.DefaultParallelism;
+        if (!string.IsNullOrWhiteSpace(parallelismValue))
+        {
+            if (int.TryParse(parallelismValue, out var requested) && requested > 0)
+            {
+                parallelism = requested;
+            }
+            else
+            {
+                warnings.Add($"OABO_MAX_PARALLELISM=\"{parallelismValue}\" was ignored — use a whole number of 1 or more.");
+            }
+        }
+
+        var intervalValue = read(ScheduleVariable);
+        if (!SortSchedule.TryParseInterval(intervalValue, out var intervalMinutes))
+        {
+            warnings.Add(
+                $"{ScheduleVariable}=\"{intervalValue}\" was ignored — use a value like 6h, 12h or 1d " +
+                $"(at least {SortSchedule.MinimumIntervalMinutes} minutes), or \"off\".");
+        }
+
+        return new ServerConfig
+        {
+            CsvPath = NullIfBlank(read(CsvPathVariable)),
+            SourcePath = NullIfBlank(read(SourcePathVariable)),
+            DestinationPath = NullIfBlank(read(DestinationPathVariable)),
+            DefaultComparisonMode = comparisonMode,
+            NormalParallelism = parallelism,
+            ScheduleIntervalMinutes = intervalMinutes,
+            SettingsPath = NullIfBlank(read("OABO_SETTINGS_PATH")),
+            BindUrl = NullIfBlank(read("ASPNETCORE_URLS")) ?? DefaultBindUrl,
+            Warnings = warnings
+        };
+    }
+
+    /// <summary>
+    /// One startup summary, so "which paths is it using, and can it see them?" is answered by the
+    /// first lines of <c>docker logs</c>.
+    /// </summary>
+    public void Log(ILogger logger)
+    {
+        logger.LogInformation("Listening on {BindUrl}", BindUrl);
+        LogPath(logger, CsvPathVariable, CsvPath, File.Exists);
+        LogPath(logger, SourcePathVariable, SourcePath, Directory.Exists);
+        LogPath(logger, DestinationPathVariable, DestinationPath, Directory.Exists);
+        logger.LogInformation(
+            "Update check default: {ComparisonMode}; normal copy speed: {Parallelism} books at once",
+            SortOptions.ToWireValue(DefaultComparisonMode), NormalParallelism);
+        logger.LogInformation(
+            "Automatic sorting: {Schedule}",
+            ScheduleIntervalMinutes is { } minutes
+                ? $"every {minutes} minutes, set by {ScheduleVariable}"
+                : "set from the Sort page");
+        logger.LogInformation("Settings file: {SettingsPath}", SettingsPath ?? "none (settings are kept in memory only)");
+
+        foreach (var warning in Warnings)
+        {
+            logger.LogWarning("{Warning}", warning);
+        }
+    }
+
+    private static void LogPath(ILogger logger, string variable, string? path, Func<string, bool> exists)
+    {
+        if (path is null)
+        {
+            logger.LogInformation("{Variable}: not set", variable);
+            return;
+        }
+
+        logger.LogInformation("{Variable}: {Path} ({State})", variable, path, exists(path) ? "found" : "missing");
+    }
+
+    private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+}

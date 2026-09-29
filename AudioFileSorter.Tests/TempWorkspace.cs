@@ -27,6 +27,31 @@ public sealed class TempWorkspace : IDisposable
         return path;
     }
 
+    /// <summary>
+    /// Writes an export with a "Title,Author,File name" header and the given rows, under a fresh
+    /// name, and returns its full path.
+    /// </summary>
+    public string WriteCsv(params string[] rows)
+    {
+        var path = Path.Combine(Root, $"{Guid.NewGuid():N}.csv");
+        File.WriteAllText(path, "Title,Author,File name\n" + string.Join("\n", rows) + "\n");
+        return path;
+    }
+
+    /// <summary>
+    /// An export of <paramref name="count"/> books with a source file each, big enough that a sort
+    /// takes long enough to be watched, joined or cancelled while it runs.
+    /// </summary>
+    public string WriteLargeLibrary(int count, int bytesPerBook = 300_000)
+    {
+        for (var i = 0; i < count; i++)
+        {
+            WriteSourceFile($"book-{i}.m4b", new string('x', bytesPerBook));
+        }
+
+        return WriteCsv(Enumerable.Range(0, count).Select(i => $"Book {i},Author,book-{i}").ToArray());
+    }
+
     public string WriteDestinationFile(string relativePath, string content)
     {
         var path = Path.Combine(Destination, relativePath);

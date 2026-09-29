@@ -26,8 +26,11 @@ WORKDIR /app
 
 COPY --from=backend-build /app/publish ./
 
+# The backend listens on loopback unless told otherwise; a container has to accept connections
+# from outside itself for the published port to work.
 ENV ASPNETCORE_URLS=http://0.0.0.0:5123
-# Keeps a schedule set from the Sort page, and when the last one ran, across container restarts.
+# Keeps the choices made on the Sort page (update check, copy speed, automatic sorting) and when
+# the last automatic sort ran, across container restarts.
 ENV OABO_SETTINGS_PATH=/data/settings.json
 EXPOSE 5123
 

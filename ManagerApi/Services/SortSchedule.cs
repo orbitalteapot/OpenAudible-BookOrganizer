@@ -1,10 +1,9 @@
 using System.Text.RegularExpressions;
-using AudioFileSorter.Model;
 
 namespace ManagerApi.Services;
 
-/// <summary>When to sort automatically, what to sort, and how the last automatic run went.</summary>
-public sealed partial record SortSchedule
+/// <summary>The rules for when automatic sorting runs. Pure functions of the settings and the run history.</summary>
+public static partial class SortSchedule
 {
     /// <summary>
     /// Anything shorter only burns disk reads: a sort over an unchanged library copies nothing, and
@@ -12,37 +11,54 @@ public sealed partial record SortSchedule
     /// </summary>
     public const int MinimumIntervalMinutes = 15;
 
-    /// <summary>Minutes between runs. Null means automatic sorting is off.</summary>
-    public int? IntervalMinutes { get; init; }
+    /// <summary>
+    /// How soon a failed attempt is tried again. An unplugged drive or a NAS that is still waking up
+    /// is usually back within minutes, and waiting a whole day to find out wastes the day.
+    /// </summary>
+    public static readonly TimeSpan RetryDelay = TimeSpan.FromMinutes(15);
 
-    public string? CsvPath { get; init; }
-    public string? SourcePath { get; init; }
-    public string? DestinationPath { get; init; }
-    public FileComparisonMode ComparisonMode { get; init; } = SortOptions.Default.ComparisonMode;
-
-    public DateTime? LastRunUtc { get; init; }
-
-    /// <summary>One line describing how the last automatic run ended.</summary>
-    public string? LastResult { get; init; }
-
-    public bool IsEnabled =>
-        IntervalMinutes is not null &&
-        !string.IsNullOrWhiteSpace(CsvPath) &&
-        !string.IsNullOrWhiteSpace(SourcePath) &&
-        !string.IsNullOrWhiteSpace(DestinationPath);
+    public static bool IsValidInterval(int minutes) => minutes >= MinimumIntervalMinutes;
 
     /// <summary>
-    /// When the next run is due. A schedule that has never run, or whose run was missed while the
-    /// app was closed, is due straight away, so opening the app catches up.
+    /// When the next automatic run is due, or null when automatic sorting is off.
+    ///
+    /// Due straight away when it has not been tried since it was turned on, so turning it on and
+    /// opening the app after a missed run both sort now. After a success, one interval after that
+    /// run started. After a failure, <see cref="RetryDelay"/> after it, but never later than the
+    /// interval would have been.
+    ///
+    /// A time in the future can only come from a clock that has since been set back; taken at
+    /// face value it would hold the schedule off until then, so it counts as now.
     /// </summary>
-    public DateTime? NextRunUtc(DateTime nowUtc)
+    public static DateTime? NextRunUtc(int? intervalMinutes, ScheduleState state, DateTime nowUtc)
     {
-        if (!IsEnabled)
+        if (intervalMinutes is null)
         {
             return null;
         }
 
-        return LastRunUtc is null ? nowUtc : LastRunUtc.Value.AddMinutes(IntervalMinutes!.Value);
+        var lastAttempt = NotAfter(state.LastAttemptUtc, nowUtc);
+        var enabled = NotAfter(state.EnabledAtUtc, nowUtc);
+        if (lastAttempt is null || lastAttempt < enabled)
+        {
+            return nowUtc;
+        }
+
+        var lastSuccess = NotAfter(state.LastSuccessUtc, nowUtc);
+        var normalDue = (lastSuccess ?? lastAttempt.Value).AddMinutes(intervalMinutes.Value);
+        if (!LastAttemptFailed(state))
+        {
+            return normalDue;
+        }
+
+        var retryDue = lastAttempt.Value + RetryDelay;
+        return retryDue < normalDue ? retryDue : normalDue;
+    }
+
+    /// <summary>The last automatic attempt did not sort the library, so the next one is a retry.</summary>
+    public static bool LastAttemptFailed(ScheduleState state)
+    {
+        return state.LastAttemptUtc is not null && state.LastAttemptUtc != state.LastSuccessUtc;
     }
 
     /// <summary>
@@ -82,7 +98,7 @@ public sealed partial record SortSchedule
         return true;
     }
 
-    public static bool IsValidInterval(int minutes) => minutes >= MinimumIntervalMinutes;
+    private static DateTime? NotAfter(DateTime? value, DateTime nowUtc) => value > nowUtc ? nowUtc : value;
 
     [GeneratedRegex(@"^(?<amount>\d+)\s*(?<unit>[mhd]?)$")]
     private static partial Regex IntervalPattern();

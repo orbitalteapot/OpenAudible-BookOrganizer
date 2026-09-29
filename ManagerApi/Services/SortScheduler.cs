@@ -1,205 +1,173 @@
-using AudioFileSorter.Model;
+using AudioFileSorter;
 
 namespace ManagerApi.Services;
 
+/// <summary>What GET /api/schedule returns.</summary>
+/// <param name="IntervalMinutes">Minutes between automatic sorts, or null when they are off.</param>
+/// <param name="Locked">Set by the server's SORT_INTERVAL, so the page may only show it.</param>
+/// <param name="Retrying">The last attempt failed, so the next one is a retry rather than the regular run.</param>
+/// <param name="BlockedReason">Why automatic sorting, although on, cannot run at the moment.</param>
+public sealed record ScheduleStatus(
+    int? IntervalMinutes,
+    bool Locked,
+    DateTime? NextRunUtc,
+    RunRecord? LastRun,
+    bool Retrying,
+    string? BlockedReason);
+
 /// <summary>
-/// Runs a sort on a timer. It starts runs through <see cref="SortService"/> like the Sort page
-/// does, so a scheduled run and a manual one can never overlap, and the progress of either shows up
-/// in the same place.
-///
-/// The schedule comes from one of two places. In a container, SORT_INTERVAL sets it and it cannot be
-/// changed from the page, in keeping with the paths being fixed by the container too. Otherwise the
-/// page sets it and it is saved to the settings file, so it survives a restart and a run that was
-/// missed while the app was closed happens on the next start.
+/// Sorts on a timer, with whatever the settings say when each run starts. Runs go through
+/// <see cref="SortService"/> like the Sort page's, so a scheduled run and a manual one can never
+/// overlap, and the page shows either with its progress and a Cancel button.
 /// </summary>
 public sealed class SortScheduler : BackgroundService
 {
-    /// <summary>Task.Delay rejects anything beyond ~24 days; longer waits are taken in steps.</summary>
-    private static readonly TimeSpan MaxSingleDelay = TimeSpan.FromDays(1);
+    /// <summary>
+    /// The longest single wait. The timer does not count time a laptop spends asleep, so a long wait
+    /// would run late by however long it slept; waking regularly and checking the wall clock again
+    /// keeps a missed run to a few minutes late.
+    /// </summary>
+    private static readonly TimeSpan MaxWait = TimeSpan.FromMinutes(5);
 
     private readonly SortService _sortService;
-    private readonly SortScheduleStore _store;
+    private readonly SettingsService _settings;
+    private readonly TimeProvider _time;
     private readonly ILogger<SortScheduler> _logger;
-    private readonly int _maxParallelism;
     private readonly object _lock = new();
 
-    private SortSchedule _schedule;
+    /// <summary>Cancelled when the settings change, to cut the current wait short.</summary>
     private CancellationTokenSource _wake = new();
 
-    /// <param name="serverSchedule">A schedule fixed by the environment, or null to let the page set it.</param>
-    /// <param name="maxParallelism">Books copied at once by a scheduled run.</param>
-    public SortScheduler(
-        SortService sortService,
-        SortScheduleStore store,
-        SortSchedule? serverSchedule,
-        ILogger<SortScheduler> logger,
-        int maxParallelism)
+    public SortScheduler(SortService sortService, SettingsService settings, TimeProvider time, ILogger<SortScheduler> logger)
     {
         _sortService = sortService;
-        _store = store;
+        _settings = settings;
+        _time = time;
         _logger = logger;
-        _maxParallelism = maxParallelism;
 
-        var saved = store.Load();
-        IsManagedByServer = serverSchedule is not null;
-
-        // A container restart should not trigger a fresh sort of a library it sorted an hour ago,
-        // so the last-run time is kept even when the schedule itself comes from the environment.
-        _schedule = serverSchedule is null
-            ? saved
-            : serverSchedule with { LastRunUtc = saved.LastRunUtc, LastResult = saved.LastResult };
+        _settings.Changed += OnSettingsChanged;
     }
 
-    /// <summary>True when the environment sets the schedule and the page may only display it.</summary>
-    public bool IsManagedByServer { get; }
-
-    public SortSchedule Current
+    public ScheduleStatus GetStatus()
     {
-        get
-        {
-            lock (_lock)
-            {
-                return _schedule;
-            }
-        }
+        var settings = _settings.Effective;
+        var state = _settings.Schedule;
+        var isOn = settings.ScheduleIntervalMinutes is not null;
+
+        return new ScheduleStatus(
+            settings.ScheduleIntervalMinutes,
+            _settings.Config.ScheduleLocked,
+            SortSchedule.NextRunUtc(settings.ScheduleIntervalMinutes, state, UtcNow()),
+            state.LastRun,
+            isOn && SortSchedule.LastAttemptFailed(state),
+            isOn ? PathStatus.BlockedReason(settings, _settings.Config) : null);
     }
 
-    /// <summary>
-    /// Replaces the schedule, keeping the record of the last run. Turning automatic sorting on with
-    /// paths that cannot work is refused now, while the user is looking, rather than failing
-    /// silently at three in the morning.
-    /// </summary>
-    /// <param name="error">Why the schedule was refused, for the user.</param>
-    public bool TryUpdate(SortSchedule schedule, out string? error)
+    public override void Dispose()
     {
-        error = Validate(schedule);
-        if (error is not null)
-        {
-            return false;
-        }
+        _settings.Changed -= OnSettingsChanged;
+        base.Dispose();
 
-        CancellationTokenSource wake;
         lock (_lock)
         {
-            _schedule = schedule with { LastRunUtc = _schedule.LastRunUtc, LastResult = _schedule.LastResult };
-            _store.Save(_schedule);
-
-            wake = _wake;
-            _wake = new CancellationTokenSource();
+            _wake.Dispose();
         }
-
-        // Interrupts the current wait so the new interval applies now, not after the old one ends.
-        wake.Cancel();
-        return true;
-    }
-
-    private string? Validate(SortSchedule schedule)
-    {
-        if (IsManagedByServer)
-        {
-            return "Automatic sorting is set by the server's SORT_INTERVAL setting.";
-        }
-
-        if (schedule.IntervalMinutes is null)
-        {
-            return null;
-        }
-
-        if (!SortSchedule.IsValidInterval(schedule.IntervalMinutes.Value))
-        {
-            return $"Sort at most every {SortSchedule.MinimumIntervalMinutes} minutes.";
-        }
-
-        return schedule.IsEnabled
-            ? SortService.ValidatePaths(schedule.CsvPath!, schedule.SourcePath!, schedule.DestinationPath!, createDestination: false)
-            : "Choose all three paths before turning on automatic sorting.";
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         while (!stoppingToken.IsCancellationRequested)
         {
-            SortSchedule schedule;
-            CancellationToken wakeToken;
+            CancellationTokenSource wake;
             lock (_lock)
             {
-                schedule = _schedule;
-                wakeToken = _wake.Token;
+                wake = _wake;
             }
 
-            var dueUtc = schedule.NextRunUtc(DateTime.UtcNow);
-            var wait = dueUtc is null ? MaxSingleDelay : dueUtc.Value - DateTime.UtcNow;
-
-            if (wait > TimeSpan.Zero)
+            var now = UtcNow();
+            var dueUtc = SortSchedule.NextRunUtc(_settings.Effective.ScheduleIntervalMinutes, _settings.Schedule, now);
+            if (dueUtc <= now)
             {
-                using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, wakeToken);
-                try
-                {
-                    await Task.Delay(wait < MaxSingleDelay ? wait : MaxSingleDelay, waitCancellation.Token);
-                }
-                catch (OperationCanceledException) when (!stoppingToken.IsCancellationRequested)
-                {
-                    // The schedule changed; start over with the new one.
-                }
-
+                await RunAsync();
                 continue;
             }
 
-            await RunAsync(schedule);
+            var untilDue = dueUtc is null ? MaxWait : dueUtc.Value - now;
+            using (var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, wake.Token))
+            {
+                // A wake-up or a shutdown ends the wait early; either way the loop just looks again.
+                // ForceYielding keeps the rest of the loop off the thread that cancelled the wait,
+                // which may be a settings save holding its own lock.
+                await Task.Delay(untilDue < MaxWait ? untilDue : MaxWait, _time, waitCancellation.Token)
+                    .ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing | ConfigureAwaitOptions.ForceYielding);
+            }
+
+            ReplaceWakeIfUsed();
         }
     }
 
-    private async Task RunAsync(SortSchedule schedule)
+    private async Task RunAsync()
     {
-        var startedUtc = DateTime.UtcNow;
-        _logger.LogInformation("Starting scheduled sort of {CsvPath}", schedule.CsvPath);
+        var startedUtc = UtcNow();
 
         // Never creates the destination: nobody is there to notice it landing on the internal disk
         // because the drive it belongs on is unplugged.
-        var result = SortService.ValidatePaths(schedule.CsvPath!, schedule.SourcePath!, schedule.DestinationPath!, createDestination: false);
-        if (result is null)
+        var options = _settings.SortOptionsFor(createDestination: false);
+
+        RunRecord record;
+        try
         {
-            var options = new SortOptions { ComparisonMode = schedule.ComparisonMode, MaxParallelism = _maxParallelism };
-            if (_sortService.TryStartSort(schedule.CsvPath!, schedule.SourcePath!, schedule.DestinationPath!, options, out var sortTask))
-            {
-                await sortTask;
-                result = Describe(_sortService.GetProgress());
-            }
-            else
+            if (!_sortService.TryStartSort(RunTrigger.Scheduled, options, out var run))
             {
                 // A manual sort is doing the same job, so this slot counts as done.
-                result = "Skipped: a sort was already running.";
+                _logger.LogInformation("Scheduled sort skipped: a sort was already running");
+                _settings.UpdateSchedule(state => state with { LastAttemptUtc = startedUtc, LastSuccessUtc = startedUtc });
+                return;
+            }
+
+            record = RunRecord.From(await run);
+        }
+        catch (SortPathException ex)
+        {
+            var rejected = RunStatus.Rejected(RunTrigger.Scheduled, ex.Problem, startedUtc);
+            _logger.LogWarning("{Summary}", RunSummary.Describe(rejected));
+            record = RunRecord.From(rejected);
+        }
+
+        // A run that ended with an error (including one cut short by the app closing) did not sort
+        // the library, so it is tried again soon; one a person cancelled is left until next time.
+        var succeeded = record.Error is null;
+        _settings.UpdateSchedule(state => state with
+        {
+            LastAttemptUtc = startedUtc,
+            LastSuccessUtc = succeeded ? startedUtc : state.LastSuccessUtc,
+            LastRun = record
+        });
+    }
+
+    private void OnSettingsChanged(object? sender, EventArgs e)
+    {
+        lock (_lock)
+        {
+            _wake.Cancel();
+        }
+    }
+
+    /// <summary>A cancelled wake-up source cannot be reset, so it is swapped for a fresh one.</summary>
+    private void ReplaceWakeIfUsed()
+    {
+        CancellationTokenSource? used = null;
+        lock (_lock)
+        {
+            if (_wake.IsCancellationRequested)
+            {
+                used = _wake;
+                _wake = new CancellationTokenSource();
             }
         }
 
-        _logger.LogInformation("Scheduled sort finished: {Result}", result);
-
-        lock (_lock)
-        {
-            _schedule = _schedule with { LastRunUtc = startedUtc, LastResult = result };
-            _store.Save(_schedule);
-        }
+        used?.Dispose();
     }
 
-    /// <summary>"Done: 3 copied, 120 up to date." Only the numbers that are not zero.</summary>
-    private static string Describe(SortProgressResponse progress)
-    {
-        if (progress.Error is not null)
-        {
-            return $"Failed: {progress.Error}";
-        }
-
-        var counts = new (int Count, string Label)[]
-        {
-            (progress.CopiedBooks, "copied"),
-            (progress.UpdatedBooks, "of them updated"),
-            (progress.SkippedBooks, "up to date"),
-            (progress.MissingBooks, "not found"),
-            (progress.FailedBooks, "failed")
-        };
-
-        var details = string.Join(", ", counts.Where(c => c.Count > 0).Select(c => $"{c.Count} {c.Label}"));
-        var outcome = progress.IsCanceled ? "Canceled" : "Done";
-        return details.Length == 0 ? $"{outcome}: no books in the export." : $"{outcome}: {details}.";
-    }
+    private DateTime UtcNow() => _time.GetUtcNow().UtcDateTime;
 }
