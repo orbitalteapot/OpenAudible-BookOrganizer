@@ -1,109 +1,86 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Headphones } from 'lucide-react';
 import TitleBar from './components/TitleBar';
 import Sidebar from './components/Sidebar';
 import Library from './components/Library';
-import SortPanel from './components/SortPanel';
-import { getAppConfig } from './api';
-import { useIsElectron, useSchedule } from './hooks';
+import SortPage from './components/SortPage';
+import RunAnnouncer from './components/RunAnnouncer';
+import { Banner, EmptyState } from './components/ui/Surface';
+import { useIsElectron, useLibrary, useRunStatus, useSchedule, useSettings, useTheme } from './hooks';
 
-const INITIAL_CONFIG = {
-  csvPath: '',
-  sourcePath: '',
-  destPath: '',
-  comparisonMode: 'quick',
-};
-
-const INITIAL_RUN = {
-  sorting: false,
-  progress: null,
-  error: null,
-};
+/** Shown until the backend has answered with the settings, which every page is built from. */
+function Starting({ error }) {
+  return (
+    <EmptyState
+      icon={Headphones}
+      title="Starting the organizer…"
+      description={error ? 'The backend is not answering yet. Still trying.' : undefined}
+    >
+      {error && <Banner tone="critical">{error}</Banner>}
+    </EmptyState>
+  );
+}
 
 export default function App() {
   const isElectron = useIsElectron();
   const [currentPage, setCurrentPage] = useState('library');
-  const [books, setBooks] = useState([]);
-  const [configLoaded, setConfigLoaded] = useState(isElectron);
+  const { theme, setTheme } = useTheme();
 
-  // Deliberately two pieces of state. `run` changes two and a half times a second while a sort is
-  // going; `config` does not. Keeping them apart, with the pages memoised, means that polling
-  // re-renders the progress card and nothing else.
-  const [config, setConfig] = useState(INITIAL_CONFIG);
-  const [run, setRun] = useState(INITIAL_RUN);
-  const scheduleState = useSchedule();
+  const settingsState = useSettings();
+  const { settings, refresh: refreshSettings } = settingsState;
+  const run = useRunStatus();
+  const runFinishedUtc = run.status?.state === 'finished' ? run.status.finishedUtc : null;
+  const scheduleState = useSchedule({ settings, update: settingsState.update, runFinishedUtc });
+  const library = useLibrary(settings?.csvPath);
 
+  // A run can create the destination, and whatever it found out about the folders is worth
+  // showing, so the path statuses are asked for again once it ends.
   useEffect(() => {
-    if (isElectron) return undefined;
+    if (runFinishedUtc) refreshSettings();
+  }, [runFinishedUtc, refreshSettings]);
 
-    let active = true;
-
-    getAppConfig()
-      .then((serverConfig) => {
-        if (!active) return;
-        setConfig((prev) => ({
-          csvPath: serverConfig.csvPath || prev.csvPath,
-          sourcePath: serverConfig.sourcePath || prev.sourcePath,
-          destPath: serverConfig.destinationPath || prev.destPath,
-          comparisonMode: serverConfig.comparisonMode || prev.comparisonMode,
-        }));
-      })
-      .catch(() => {
-        // Surfaced when an action is actually attempted; a failed probe on load is just noise.
-      })
-      .finally(() => {
-        if (active) setConfigLoaded(true);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [isElectron]);
-
-  // The desktop app has no server config to start from, so it reopens on the paths last scheduled.
-  const restoredFromSchedule = useRef(false);
-  const { schedule } = scheduleState;
+  // Electron owns the tray and the login item, so it is told whenever the backend confirms a change.
+  const settingsLoaded = settings !== null;
+  const keepRunningInBackground = settings?.keepRunningInBackground;
+  const openAtLogin = settings?.openAtLogin;
   useEffect(() => {
-    if (!isElectron || !schedule || restoredFromSchedule.current) return;
-    restoredFromSchedule.current = true;
-
-    if (schedule.csvPath) {
-      setConfig((prev) => ({
-        ...prev,
-        csvPath: schedule.csvPath,
-        sourcePath: schedule.sourcePath,
-        destPath: schedule.destinationPath,
-        comparisonMode: schedule.comparisonMode,
-      }));
-    }
-  }, [isElectron, schedule]);
+    if (settingsLoaded) window.electronAPI?.setBackgroundOptions?.({ keepRunningInBackground, openAtLogin });
+  }, [settingsLoaded, keepRunningInBackground, openAtLogin]);
 
   const handlePageChange = useCallback((page) => setCurrentPage(page), []);
 
-  if (!configLoaded) {
-    return <div className="h-full bg-canvas" />;
-  }
-
   return (
     <div className="flex h-full flex-col bg-canvas">
-      <TitleBar />
+      {isElectron && <TitleBar />}
 
       <div className="flex min-h-0 flex-1">
-        <Sidebar currentPage={currentPage} onPageChange={handlePageChange} bookCount={books.length} />
+        <Sidebar
+          currentPage={currentPage}
+          onPageChange={handlePageChange}
+          bookCount={library.books.length}
+          runStatus={run.status}
+          theme={theme}
+          onThemeChange={setTheme}
+        />
 
         <main className="flex min-w-0 flex-1 flex-col p-5">
-          {currentPage === 'library' ? (
-            <Library books={books} setBooks={setBooks} csvPath={config.csvPath} />
-          ) : (
-            <SortPanel
-              config={config}
-              setConfig={setConfig}
-              run={run}
-              setRun={setRun}
-              scheduleState={scheduleState}
+          {!settings ? (
+            <Starting error={settingsState.error} />
+          ) : currentPage === 'library' ? (
+            <Library
+              library={library}
+              settings={settings}
+              update={settingsState.update}
+              fieldErrors={settingsState.fieldErrors}
+              isElectron={isElectron}
             />
+          ) : (
+            <SortPage settingsState={settingsState} run={run} scheduleState={scheduleState} isElectron={isElectron} />
           )}
         </main>
       </div>
+
+      <RunAnnouncer status={run.status} />
     </div>
   );
 }

@@ -3,8 +3,20 @@ import { useRef } from 'react';
 /**
  * A two-or-more way choice, rendered as a real radiogroup so arrow keys move between options and
  * screen readers announce the selection. Roving tabindex keeps the group a single tab stop.
+ *
+ * `iconOnly` shows each option's icon alone, keeping its label as the accessible name and tooltip;
+ * `className` lays the group out (a vertical stack in a narrow rail, say).
  */
-export default function SegmentedControl({ label, value, options, onChange, disabled = false }) {
+export default function SegmentedControl({
+  label,
+  value,
+  options,
+  onChange,
+  disabled = false,
+  describedBy,
+  iconOnly = false,
+  className = 'flex',
+}) {
   const buttonRefs = useRef([]);
   const currentIndex = Math.max(0, options.findIndex((option) => option.value === value));
 
@@ -45,8 +57,10 @@ export default function SegmentedControl({ label, value, options, onChange, disa
     <div
       role="radiogroup"
       aria-label={label}
+      aria-describedby={describedBy}
+      aria-disabled={disabled || undefined}
       onKeyDown={handleKeyDown}
-      className="flex gap-1 rounded border border-line bg-surface p-1"
+      className={`${className} gap-1 rounded border border-line bg-surface p-1`}
     >
       {options.map((option, index) => {
         const selected = option.value === value;
@@ -61,6 +75,8 @@ export default function SegmentedControl({ label, value, options, onChange, disa
             type="button"
             role="radio"
             aria-checked={selected}
+            aria-label={iconOnly ? option.label : undefined}
+            title={iconOnly ? option.label : undefined}
             tabIndex={selected ? 0 : -1}
             disabled={disabled}
             onClick={() => onChange(option.value)}
@@ -72,7 +88,7 @@ export default function SegmentedControl({ label, value, options, onChange, disa
             ].join(' ')}
           >
             {Icon && <Icon size={14} aria-hidden="true" />}
-            {option.label}
+            {!iconOnly && option.label}
           </button>
         );
       })}

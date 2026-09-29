@@ -1,0 +1,93 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { cancelSort, getRunStatus, startSort } from '../api';
+
+// Fast enough for a progress bar to move smoothly while a sort runs; slow enough otherwise that
+// watching for a run the schedule starts costs next to nothing.
+export const RUNNING_POLL_MS = 400;
+export const IDLE_POLL_MS = 3_000;
+
+// A single failed poll is normal while the backend is busy copying; this many in a row
+// (about ten seconds while sorting) means it has gone.
+const FAILURES_BEFORE_ERROR = 25;
+
+export const isRunning = (status) => status?.state === 'running';
+
+/**
+ * The backend's current or most recent sort, whoever started it: this page, the schedule, or
+ * another window. The backend is the only judge of whether a sort is running, so the page follows
+ * what it reports rather than keeping its own idea of it.
+ *
+ * `start` resolves once the backend has accepted the run, and rejects with the ApiError it was
+ * refused with. A sort that is already running is not a failure: the page just follows that one.
+ */
+export default function useRunStatus() {
+  const [status, setStatus] = useState(null);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState(null);
+
+  // Set by the polling effect: asks for the status now rather than at the next tick.
+  const pollNow = useRef(() => {});
+
+  useEffect(() => {
+    let active = true;
+    let timer = null;
+    let failures = 0;
+    let running = false;
+    // Polls can overlap when one is asked for early. Only the newest applies its answer and
+    // schedules the next, so there is only ever one timer and an older reply never wins.
+    let latest = 0;
+
+    const poll = async () => {
+      clearTimeout(timer);
+      const id = ++latest;
+      try {
+        const next = await getRunStatus();
+        if (!active || id !== latest) return;
+        failures = 0;
+        running = isRunning(next);
+        setStatus(next);
+        setError(null);
+      } catch (err) {
+        if (!active || id !== latest) return;
+        failures += 1;
+        if (failures >= FAILURES_BEFORE_ERROR) setError(`Lost contact with the backend: ${err.message}`);
+      }
+      timer = setTimeout(poll, running ? RUNNING_POLL_MS : IDLE_POLL_MS);
+    };
+
+    pollNow.current = poll;
+    poll();
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+      pollNow.current = () => {};
+    };
+  }, []);
+
+  const start = useCallback(async (options) => {
+    setStarting(true);
+    try {
+      setStatus(await startSort(options));
+    } catch (err) {
+      if (err.code !== 'alreadyRunning') throw err;
+    } finally {
+      setStarting(false);
+      // Picks up the faster cadence at once, and the run already going when the start was refused.
+      pollNow.current();
+    }
+  }, []);
+
+  const cancel = useCallback(async () => {
+    try {
+      await cancelSort();
+    } catch (err) {
+      // A 400 means there was nothing left to cancel: the run finished first, as the next status shows.
+      if (err.status !== 400) throw err;
+    } finally {
+      pollNow.current();
+    }
+  }, []);
+
+  return useMemo(() => ({ status, start, cancel, starting, error }), [status, start, cancel, starting, error]);
+}

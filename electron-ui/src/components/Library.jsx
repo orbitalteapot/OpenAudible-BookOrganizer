@@ -1,56 +1,91 @@
 import { memo, useCallback, useMemo, useState } from 'react';
-import { BookOpen, FileUp, Search } from 'lucide-react';
-import { parseBooks } from '../api';
-import { useDebounced, useIsElectron } from '../hooks';
+import { BookOpen, FileUp, RefreshCw, Search } from 'lucide-react';
+import { chooseCsvFile } from '../desktop';
+import { useDebounced } from '../hooks';
 import { compareBooks, filterBooks, SORT_LABELS } from '../sorting';
 import Button from './ui/Button';
+import Disclosure from './ui/Disclosure';
 import { TextInput } from './ui/Field';
 import { Banner, EmptyState } from './ui/Surface';
 import LibraryTable from './LibraryTable';
 
-function LibraryView({ books, setBooks, csvPath }) {
-  const isElectron = useIsElectron();
+/** Rows the export had that could not be read, with the reasons, folded away until asked for. */
+function ImportNotice({ skippedRows, warnings }) {
+  if (skippedRows === 0 && warnings.length === 0) return null;
+
+  const summary =
+    skippedRows > 0
+      ? `${skippedRows.toLocaleString()} row${skippedRows === 1 ? '' : 's'} of the export could not be read and ${skippedRows === 1 ? 'was' : 'were'} skipped`
+      : `${warnings.length.toLocaleString()} warning${warnings.length === 1 ? '' : 's'} while reading the export`;
+
+  return (
+    <Disclosure summary={summary}>
+      <ul className="max-h-40 space-y-1 overflow-y-auto rounded border border-line bg-raised px-3.5 py-2.5 text-2xs text-fg-muted">
+        {warnings.map((warning, index) => (
+          <li key={index} className="break-words">
+            {warning}
+          </li>
+        ))}
+      </ul>
+    </Disclosure>
+  );
+}
+
+/** Reload, and on the desktop "Choose export…". The browser build reads the export the server names. */
+function LibraryActions({ library, isElectron, onChoose, csvPath }) {
+  return (
+    <>
+      {csvPath && (
+        <Button icon={RefreshCw} loading={library.loading} onClick={library.reload}>
+          Reload
+        </Button>
+      )}
+      {isElectron && (
+        <Button variant={csvPath ? 'secondary' : 'primary'} icon={FileUp} onClick={onChoose}>
+          Choose export…
+        </Button>
+      )}
+    </>
+  );
+}
+
+/** What to show before there are books: why there are none, and what to do about it. */
+function emptyStateText({ library, csvPath, isElectron }) {
+  if (!csvPath) {
+    return {
+      title: 'No library export chosen',
+      description: isElectron
+        ? 'Export your library from OpenAudible as a CSV file, then choose it here to browse, search and sort your books.'
+        : 'Set CSV_PATH in the container to your OpenAudible CSV export to browse your books here.',
+    };
+  }
+  if (library.loading) return { title: 'Reading your library…', description: csvPath };
+  if (library.error) return { title: "Couldn't read the library export", description: csvPath };
+  if (library.loaded) return { title: 'The export has no books', description: csvPath };
+  return { title: 'No audiobooks loaded', description: csvPath };
+}
+
+/**
+ * The books in the export chosen in the settings — the same file the Sort page sorts from. It loads
+ * on its own once the settings arrive; Reload reads it again, and on the desktop "Choose export…"
+ * picks a different one, which is then saved for both pages.
+ */
+function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState({ field: 'title', dir: 'asc' });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [notice, setNotice] = useState(null);
-
   const debouncedSearch = useDebounced(search);
 
-  const handleLoadCsv = useCallback(async () => {
-    let filePath = csvPath;
+  const { books } = library;
+  const csvPath = settings.csvPath;
+  const error = fieldErrors.csvPath || library.error;
 
-    if (isElectron) {
-      filePath = await window.electronAPI?.openFile([{ name: 'CSV Files', extensions: ['csv'] }]);
-      if (!filePath) return;
-    } else if (!filePath) {
-      setError('No CSV path is configured for web mode');
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    setNotice(null);
-
-    try {
-      const { books: loaded, skippedRows } = await parseBooks(filePath);
-      setBooks(loaded);
-
-      if (skippedRows > 0) {
-        setNotice(
-          `${skippedRows} row${skippedRows === 1 ? '' : 's'} could not be read and were skipped. ` +
-            `${loaded.length} book${loaded.length === 1 ? '' : 's'} loaded.`
-        );
-      } else if (loaded.length === 0) {
-        setNotice('The export was read successfully but contained no books.');
-      }
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-    }
-  }, [csvPath, isElectron, setBooks]);
+  const handleChoose = useCallback(async () => {
+    const path = await chooseCsvFile();
+    if (!path) return;
+    // A different export is loaded as soon as the saved path changes; the same one is just re-read.
+    if (path === csvPath) library.reload();
+    else await update({ csvPath: path });
+  }, [csvPath, library, update]);
 
   const handleSort = useCallback((field) => {
     setSort((prev) => (prev.field === field ? { field, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { field, dir: 'asc' }));
@@ -82,24 +117,15 @@ function LibraryView({ books, setBooks, csvPath }) {
   ].join(', ');
 
   if (books.length === 0) {
+    const { title, description } = emptyStateText({ library, csvPath, isElectron });
+
     return (
-      <EmptyState
-        icon={BookOpen}
-        title="No audiobooks loaded"
-        description={
-          isElectron
-            ? 'Import your OpenAudible CSV export to browse, search and sort your collection.'
-            : 'Load the CSV export configured on the server to browse your collection.'
-        }
-      >
-        <Button variant="primary" icon={FileUp} loading={loading} onClick={handleLoadCsv}>
-          {isElectron ? 'Load CSV export' : 'Load library'}
-        </Button>
-        {!isElectron && csvPath && (
-          <p className="max-w-sm break-all text-2xs text-fg-subtle">{csvPath}</p>
-        )}
+      <EmptyState icon={BookOpen} title={title} description={description}>
+        <div className="flex flex-wrap justify-center gap-2">
+          <LibraryActions library={library} isElectron={isElectron} onChoose={handleChoose} csvPath={csvPath} />
+        </div>
         {error && <Banner tone="critical">{error}</Banner>}
-        {notice && <Banner tone="caution">{notice}</Banner>}
+        <ImportNotice skippedRows={library.skippedRows} warnings={library.warnings} />
       </EmptyState>
     );
   }
@@ -114,6 +140,9 @@ function LibraryView({ books, setBooks, csvPath }) {
               ? `${books.length.toLocaleString()} audiobooks`
               : `${rows.length.toLocaleString()} of ${books.length.toLocaleString()} audiobooks`}
           </p>
+          <p className="max-w-md truncate text-2xs text-fg-subtle" title={csvPath}>
+            {csvPath}
+          </p>
         </div>
 
         <div className="flex items-center gap-2">
@@ -126,14 +155,12 @@ function LibraryView({ books, setBooks, csvPath }) {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <Button icon={FileUp} loading={loading} onClick={handleLoadCsv}>
-            Reload
-          </Button>
+          <LibraryActions library={library} isElectron={isElectron} onChoose={handleChoose} csvPath={csvPath} />
         </div>
       </div>
 
       {error && <Banner tone="critical">{error}</Banner>}
-      {notice && <Banner tone="caution">{notice}</Banner>}
+      <ImportNotice skippedRows={library.skippedRows} warnings={library.warnings} />
 
       {/*
         Always mounted, so it actually announces. A live region that appears at the same moment as

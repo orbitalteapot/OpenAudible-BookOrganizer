@@ -7,9 +7,14 @@ import { useId, useLayoutEffect, useRef } from 'react';
  * Set `group` when the child is a composite (a radiogroup, say) rather than a single form control:
  * a <label for> pointing at a group is not a valid association, and the group carries its own
  * accessible name instead.
+ *
+ * `children(id, hintId)`: the control takes `id` and puts `hintId` in its aria-describedby, so the
+ * hint (a description, a status, why it is disabled) is read out with it. `hintId` is undefined
+ * when there is no hint.
  */
 export function Field({ label, hint, group = false, children, className = '' }) {
   const id = useId();
+  const hintId = hint ? `${id}-hint` : undefined;
 
   return (
     <div className={className}>
@@ -20,8 +25,12 @@ export function Field({ label, hint, group = false, children, className = '' }) 
           {label}
         </label>
       )}
-      {children(id)}
-      {hint && <p className="mt-1.5 text-2xs text-fg-subtle">{hint}</p>}
+      {children(id, hintId)}
+      {hint && (
+        <div id={hintId} className="mt-1.5 text-2xs text-fg-subtle">
+          {hint}
+        </div>
+      )}
     </div>
   );
 }
@@ -34,7 +43,7 @@ export function Field({ label, hint, group = false, children, className = '' }) 
  * `direction: rtl`, which does keep the tail in view but reorders the leading separator to the
  * wrong end, rendering "/home/me/books.csv" as "home/me/books.csv/".
  */
-export function PathInput({ id, value, placeholder, icon: Icon, invalid = false }) {
+export function PathInput({ id, value, placeholder, icon: Icon, invalid = false, describedBy }) {
   const inputRef = useRef(null);
 
   useLayoutEffect(() => {
@@ -56,8 +65,10 @@ export function PathInput({ id, value, placeholder, icon: Icon, invalid = false 
         id={id}
         type="text"
         readOnly
-        value={value}
+        value={value ?? ''}
         placeholder={placeholder}
+        aria-invalid={invalid || undefined}
+        aria-describedby={describedBy}
         title={value || undefined}
         className={[
           'h-control w-full rounded border bg-surface pr-3 text-sm text-fg-muted',
