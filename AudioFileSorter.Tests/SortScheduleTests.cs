@@ -99,6 +99,20 @@ public class SortScheduleTests
     }
 
     [Fact]
+    public void A_failed_run_stays_failed_when_the_clock_goes_back_past_it_and_the_last_success()
+    {
+        var state = Succeeded(Now.AddDays(2)) with { LastAttemptUtc = Now.AddDays(3) };
+
+        var clamped = SortSchedule.ClampToNow(state, Now);
+
+        // Both clamped to now, the two times matched and the failure read as a success a day away.
+        Assert.True(SortSchedule.LastAttemptFailed(clamped));
+        Assert.Equal(Now, clamped.LastAttemptUtc);
+        Assert.Equal(Now.AddMinutes(15), SortSchedule.NextRunUtc(1440, state, Now));
+        Assert.Equal(clamped, SortSchedule.ClampToNow(clamped, Now));
+    }
+
+    [Fact]
     public async Task The_first_run_starts_as_soon_as_the_scheduler_does()
     {
         using var workspace = new TempWorkspace();

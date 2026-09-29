@@ -64,14 +64,25 @@ public static partial class SortSchedule
     /// no better: the due time slides along with the clock, and an EnabledAtUtc that stays ahead of
     /// every run starts one sort after another. So the scheduler saves the clamped times once, and
     /// the next run is worked out from a fixed point.
+    ///
+    /// A failed attempt stays failed. When the clock has gone back past both the last success and
+    /// the failed attempt after it, both would become "now", and equal times read as a success
+    /// (see <see cref="LastAttemptFailed"/>); so the success is put one tick before the attempt.
     /// </summary>
     public static ScheduleState ClampToNow(ScheduleState state, DateTime nowUtc)
     {
+        var lastAttempt = NotAfter(state.LastAttemptUtc, nowUtc);
+        var lastSuccess = NotAfter(state.LastSuccessUtc, nowUtc);
+        if (LastAttemptFailed(state) && lastSuccess == lastAttempt)
+        {
+            lastSuccess = lastAttempt!.Value.AddTicks(-1);
+        }
+
         return state with
         {
             EnabledAtUtc = NotAfter(state.EnabledAtUtc, nowUtc),
-            LastAttemptUtc = NotAfter(state.LastAttemptUtc, nowUtc),
-            LastSuccessUtc = NotAfter(state.LastSuccessUtc, nowUtc)
+            LastAttemptUtc = lastAttempt,
+            LastSuccessUtc = lastSuccess
         };
     }
 
