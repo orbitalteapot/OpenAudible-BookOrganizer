@@ -15,6 +15,11 @@ namespace AudioFileSorter;
 /// Its presence also tells automatic sorts that the folder is the library, not the empty stand-in
 /// for an unmounted drive (see <see cref="SortPathValidator.InspectMarker"/>).
 ///
+/// A recorded file counts as its book's only while it still holds what it held when it went on record
+/// (see <see cref="IsRecorded"/>), never by its name alone: a record a sort could not save (a full disk,
+/// the app killed, a power cut) stays on disk as it was, and by the time it is read again another book's
+/// file may be under a name it records.
+///
 /// On disk it is JSON with paths relative to the destination, so the library can be moved or
 /// mounted elsewhere; in memory every path is a full one inside <see cref="Root"/>.
 /// </summary>
@@ -30,9 +35,10 @@ public sealed class LibraryManifest
     private const int FormatVersion = 1;
 
     private const string Note =
-        "Written by OpenAudible Book Organizer. It records which book owns which folder, so that the folder of a book " +
-        "that has left the export is never given to another. Deleting it loses that, and automatic sorts pause until " +
-        "a sort is started by hand and confirmed.";
+        "Written by OpenAudible Book Organizer. It records which book owns which folder, and what each of its files " +
+        "held, so that the folder of a book that has left the export is never given to another, and a file changed " +
+        "since is never taken for the book's. Deleting it loses that, and automatic sorts pause until a sort is " +
+        "started by hand and confirmed.";
 
     private static readonly JsonSerializerOptions WriteOptions = new()
     {
@@ -80,6 +86,12 @@ public sealed class LibraryManifest
     /// <summary>
     /// Records where a book is filed, in place of anything recorded for it before. Refused, and
     /// false returned, when the folder or a file name would lead outside the destination.
+    ///
+    /// Each file goes on record with what it holds now, unless the entry gives what it held when it
+    /// was recorded before (see <see cref="ManifestEntry.Stamps"/>), which it keeps: taking what a
+    /// file carried over from the old record holds now would make whatever is under its name the
+    /// book's. So only a file the caller has just proven the book's may be given without one. A file
+    /// that cannot be read now goes on record with nothing, which proves nothing.
     /// </summary>
     public bool Set(string bookId, ManifestEntry entry)
     {
@@ -91,8 +103,38 @@ public sealed class LibraryManifest
             return false;
         }
 
-        _books[bookId] = entry;
+        var stamps = new Dictionary<string, ContentStamp>(StringComparer.Ordinal);
+        foreach (var name in entry.Files)
+        {
+            var stamp = entry.Stamps.TryGetValue(name, out var recorded) ? recorded : FileComparison.Stamp(Path.Combine(entry.Folder, name));
+            if (stamp is { } known)
+            {
+                stamps[name] = known;
+            }
+        }
+
+        _books[bookId] = entry with { Stamps = stamps };
         return true;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="path"/> is a file on record as the book's that still holds what it held
+    /// when it went on record: only then is it provably the book's own copy, which a sort may move or
+    /// replace. Checked when asked, not only when the record was read, and false whenever it cannot be
+    /// told, as for a file that cannot be read right now.
+    /// </summary>
+    public bool IsRecorded(string bookId, string path)
+    {
+        if (Get(bookId) is not { } entry)
+        {
+            return false;
+        }
+
+        var fullPath = Path.GetFullPath(path);
+        var name = entry.Files.FirstOrDefault(name =>
+            string.Equals(Path.GetFullPath(Path.Combine(entry.Folder, name)), fullPath, PathSanitizer.PathComparison));
+
+        return name is not null && entry.Stamps.TryGetValue(name, out var stamp) && FileComparison.Stamp(fullPath) == stamp;
     }
 
     public bool Remove(string bookId) => _books.Remove(bookId);
@@ -107,8 +149,10 @@ public sealed class LibraryManifest
     /// it, which kept their folders from other books, is lost with it.
     ///
     /// Only what is still true is kept: an entry that leads outside the destination is ignored, a
-    /// book whose folder or files are all gone (the person deleted it) is dropped, and a folder
-    /// recorded twice keeps its first owner, as one folder is one book.
+    /// file no longer there or no longer holding what it held when it went on record is dropped (the
+    /// person deleted or changed it, or a sort whose record was lost put another book's file under
+    /// its name), so is a book with none of its files left, and a folder recorded twice keeps its first
+    /// owner, as one folder is one book.
     /// </summary>
     /// <exception cref="IOException">
     /// The file is there but cannot be read right now: another program has it open, a network drive
@@ -186,7 +230,10 @@ public sealed class LibraryManifest
         var books = new SortedDictionary<string, object>(StringComparer.Ordinal);
         foreach (var (bookId, entry) in _books)
         {
-            books[bookId] = new { folder = RelativeFolder(entry.Folder), files = entry.Files, title = entry.Title };
+            var files = entry.Files.Select(name => entry.Stamps.TryGetValue(name, out var stamp)
+                ? (object)new { name, size = stamp.Size, sample = stamp.Sample }
+                : new { name });
+            books[bookId] = new { folder = RelativeFolder(entry.Folder), files, title = entry.Title };
         }
 
         var file = new { format = FormatName, version = FormatVersion, note = Note, books };
@@ -253,18 +300,53 @@ public sealed class LibraryManifest
         // A folder that cannot be looked into right now (its permissions, or its parent's, a network
         // hiccup) is not a book the person deleted: it stays the book's, with the files on record.
         var canLook = Directory.Exists(folder) && ListNames(folder) is not null;
-        var files = filesElement.EnumerateArray()
-            .Where(file => file.ValueKind == JsonValueKind.String)
-            .Select(file => file.GetString()!)
-            .Where(name => IsPlainName(name) && IsInside(Path.Combine(folder, name)) && (!canLook || File.Exists(Path.Combine(folder, name))))
-            .Distinct(StringComparer.Ordinal)
-            .ToList();
+        var files = new List<string>();
+        var stamps = new Dictionary<string, ContentStamp>(StringComparer.Ordinal);
+        foreach (var file in filesElement.EnumerateArray())
+        {
+            // A file on record with nothing to tell it by (a hand edit, an earlier build's record) proves nothing.
+            if (ReadFile(file) is not var (name, stamp) || !IsPlainName(name) || !IsInside(Path.Combine(folder, name)) ||
+                stamps.ContainsKey(name) || (canLook && !StillHolds(Path.Combine(folder, name), stamp)))
+            {
+                continue;
+            }
+
+            files.Add(name);
+            stamps[name] = stamp;
+        }
 
         var title = element.TryGetProperty("title", out var titleElement) && titleElement.ValueKind == JsonValueKind.String
             ? titleElement.GetString()!
             : string.Empty;
 
-        return files.Count == 0 ? null : new ManifestEntry(folder, files, title);
+        return files.Count == 0 ? null : new ManifestEntry(folder, files, title) { Stamps = stamps };
+    }
+
+    /// <summary>One recorded file's name and what it held, or null when the record does not say both.</summary>
+    private static (string Name, ContentStamp Stamp)? ReadFile(JsonElement file)
+    {
+        return file.ValueKind == JsonValueKind.Object &&
+               file.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String &&
+               file.TryGetProperty("size", out var size) && size.ValueKind == JsonValueKind.Number && size.TryGetInt64(out var length) && length >= 0 &&
+               file.TryGetProperty("sample", out var sample) && sample.ValueKind == JsonValueKind.String && sample.GetString() is { Length: > 0 } hash
+            ? (name.GetString()!, new ContentStamp(length, hash))
+            : null;
+    }
+
+    /// <summary>
+    /// Whether the recorded file at <paramref name="path"/> is still there holding what it held when it
+    /// went on record. One that is there but cannot be read right now stays on record, as a folder that
+    /// cannot be looked into does: it still keeps its folder from other books, and <see cref="IsRecorded"/>
+    /// takes it for the book's only once it can be read and holds that.
+    /// </summary>
+    private static bool StillHolds(string path, ContentStamp stamp)
+    {
+        if (!File.Exists(path))
+        {
+            return false;
+        }
+
+        return FileComparison.Stamp(path) is not { } now || now == stamp;
     }
 
     /// <summary>

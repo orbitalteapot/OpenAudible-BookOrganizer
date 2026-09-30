@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Security.Cryptography;
+using AudioFileSorter.Model;
 
 namespace AudioFileSorter;
 
@@ -60,6 +62,34 @@ internal static class FileComparison
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
             return false; // Assume the files differ: a copy is retried, and an old file is not taken for the book.
+        }
+    }
+
+    /// <summary>
+    /// What <see cref="AreSameQuick"/> compares of one file, to keep and compare with later: its size and a
+    /// hash of the same sampled chunks. Two files with equal stamps are the same to <see cref="AreSameQuick"/>.
+    /// Null when the file is not there or cannot be read right now.
+    /// </summary>
+    internal static ContentStamp? Stamp(string filePath)
+    {
+        try
+        {
+            using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, SampleSize);
+            var length = stream.Length;
+            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            var buffer = new byte[SampleSize];
+            foreach (var offset in GetSampleOffsets(length))
+            {
+                stream.Seek(offset, SeekOrigin.Begin);
+                var read = stream.ReadAtLeast(buffer, SampleSize, throwOnEndOfStream: false);
+                hash.AppendData(buffer, 0, read);
+            }
+
+            return new ContentStamp(length, Convert.ToHexStringLower(hash.GetHashAndReset()));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
+        {
+            return null; // Proves nothing, so a file on record is not taken for the book's.
         }
     }
 

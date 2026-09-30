@@ -34,8 +34,8 @@ public class FileSorter
     /// <param name="cancellationToken">Token used to abort the run.</param>
     /// <exception cref="SortPathException">The paths cannot be used; see <see cref="SortPathValidator"/>.</exception>
     /// <exception cref="IOException">
-    /// The destination's record of its books cannot be read right now (see <see cref="LibraryManifest.Load"/>).
-    /// Nothing was sorted, and the record is left as it is.
+    /// The destination's record of its books cannot be read right now (see <see cref="LibraryManifest.Load"/>),
+    /// or cannot be brought up to date before sorting (see <see cref="SaveBeforeSorting"/>). Nothing was sorted.
     /// </exception>
     public async Task<SortSummary> SortAudioFiles(
         string source,
@@ -58,6 +58,7 @@ public class FileSorter
 
         var destinationRoot = Path.GetFullPath(destination);
         var manifest = LibraryManifest.Load(destinationRoot);
+        SaveBeforeSorting(manifest);
         var tally = new RunTally(books.Count, progress);
         if (manifest.Problem is not null)
         {
@@ -124,9 +125,35 @@ public class FileSorter
     }
 
     /// <summary>
+    /// Writes the record as it was read, before any file is moved or written, and stops the run when
+    /// that fails, as <see cref="LibraryManifest.Load"/> does when it cannot read it. Reading it left off
+    /// what is no longer true: books deleted, files gone or changed since they went on record. A sort
+    /// that went on anyway would move and write books under a record on disk that still says otherwise,
+    /// and one failed save after another is how a record ends up naming another book's file. Nothing is
+    /// written when nothing changed, as every quarter of an hour a sort may find.
+    /// </summary>
+    /// <exception cref="IOException">It cannot be written. The message is worded for the person sorting.</exception>
+    private static void SaveBeforeSorting(LibraryManifest manifest)
+    {
+        try
+        {
+            manifest.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException(
+                $"Could not update its record of which book is in which folder (the {LibraryManifest.FileName} file), so nothing " +
+                $"was sorted: {ex.Message} Sort again once the file can be written.",
+                ex);
+        }
+    }
+
+    /// <summary>
     /// Records where each book this run worked on is, beside what earlier runs recorded, and writes
-    /// the manifest. Not being able to write it costs no book anything, so it is reported rather than
-    /// allowed to fail the run: the next sort finds the books in their folders again.
+    /// the manifest. By now files have moved, so not being able to write it is reported rather than
+    /// allowed to fail the run. It costs no book anything: a file the record on disk names vouches for
+    /// its book only while it holds what it held when it went on record (see <see cref="LibraryManifest.IsRecorded"/>),
+    /// and the next sort finds the books in their folders again.
     ///
     /// Only what is provably the book's goes on record (see <see cref="Attempt.Proven"/>), never merely
     /// what is at its destination: the record is what later lets a sort replace or move a file, so a
@@ -140,9 +167,13 @@ public class FileSorter
     /// Where the book's files are is what counts, not whether its copy succeeded: one that failed or was
     /// cancelled after its files moved is in its new folder. A book with nothing proven in its folder
     /// keeps what was recorded for it.
+    ///
+    /// A file proven this run goes on record with what it holds now; one kept from before with what it
+    /// held when it first went on record, never what it holds now (see <see cref="LibraryManifest.Set"/>).
     /// </summary>
     private static void SaveManifest(LibraryManifest manifest, IEnumerable<Attempt> attempted, RunTally tally)
     {
+        var sameFile = StringComparer.FromComparison(PathSanitizer.PathComparison);
         foreach (var attempt in attempted.Where(attempt => attempt.Item.BookId is not null && attempt.Proven.Count > 0))
         {
             var item = attempt.Item;
@@ -151,21 +182,28 @@ public class FileSorter
             // As the disk tells folders apart: on a case-sensitive one "Author/foo" is not the book's "Author/Foo",
             // and the names recorded for the one must never be taken for files in the other.
             var moved = recorded is not null && !string.Equals(recorded.Folder, item.TargetDirectory, PathSanitizer.PathComparison);
-            var kept = recorded is not null && !moved ? recorded.Files.Select(name => Path.Combine(recorded.Folder, name)) : [];
-            var files = attempt.Proven
-                .Concat(kept)
+            var proven = attempt.Proven
                 .Where(File.Exists)
                 .Select(Path.GetFileName)
                 .OfType<string>()
-                .Distinct(StringComparer.FromComparison(PathSanitizer.PathComparison))
+                .Distinct(sameFile)
                 .ToList();
+            var kept = recorded is not null && !moved
+                ? recorded.Files
+                    .Where(name => !proven.Contains(name, sameFile) && recorded.Stamps.ContainsKey(name) && File.Exists(Path.Combine(recorded.Folder, name)))
+                    .ToList()
+                : [];
 
-            if (files.Count == 0)
+            if (proven.Count == 0 && kept.Count == 0)
             {
                 continue;
             }
 
-            Record(manifest, item.BookId!, new ManifestEntry(item.TargetDirectory!, files, item.Title), tally);
+            var entry = new ManifestEntry(item.TargetDirectory!, [.. proven, .. kept], item.Title)
+            {
+                Stamps = kept.ToDictionary(name => name, name => recorded!.Stamps[name], StringComparer.Ordinal)
+            };
+            Record(manifest, item.BookId!, entry, tally);
             if (moved)
             {
                 KeepLeftBehind(manifest, item, recorded!, tally);
@@ -208,7 +246,7 @@ public class FileSorter
     /// </summary>
     private static void KeepLeftBehind(LibraryManifest manifest, PlannedCopy item, ManifestEntry recorded, RunTally tally)
     {
-        var left = recorded.Files.Where(name => File.Exists(Path.Combine(recorded.Folder, name))).ToList();
+        var left = recorded.Files.Where(name => recorded.Stamps.ContainsKey(name) && File.Exists(Path.Combine(recorded.Folder, name))).ToList();
         if (left.Count == 0)
         {
             return;
@@ -311,18 +349,12 @@ public class FileSorter
     /// </summary>
     private sealed class FileOwnership(LibraryManifest manifest)
     {
-        // Read-only during a run: the record is only written once every book is done.
-        public bool IsRecordedFor(string? bookId, string path)
-        {
-            if (bookId is null || manifest.Get(bookId) is not { } entry)
-            {
-                return false;
-            }
-
-            var fullPath = Path.GetFullPath(path);
-            return entry.Files.Any(name =>
-                string.Equals(Path.GetFullPath(Path.Combine(entry.Folder, name)), fullPath, PathSanitizer.PathComparison));
-        }
+        /// <summary>
+        /// Whether the record says <paramref name="path"/> is the book's: on record for it, and still holding
+        /// what it held when it went on record, never by its name alone (see <see cref="LibraryManifest.IsRecorded"/>).
+        /// The record in memory is only changed once every book is done.
+        /// </summary>
+        public bool IsRecordedFor(string? bookId, string path) => bookId is not null && manifest.IsRecorded(bookId, path);
 
         /// <summary>
         /// Whether <paramref name="file"/> may be moved into place for the book whose download is

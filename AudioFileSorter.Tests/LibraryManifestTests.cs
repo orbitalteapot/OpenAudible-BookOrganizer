@@ -61,8 +61,131 @@ public class LibraryManifestTests
         Assert.Contains("automatic sorts pause", note);
         var book = root.GetProperty("books").GetProperty("b01");
         Assert.Equal("An Author/Saga/Book 1", book.GetProperty("folder").GetString());
-        Assert.Equal("A Book.m4b", Assert.Single(book.GetProperty("files").EnumerateArray()).GetString());
+        var file = Assert.Single(book.GetProperty("files").EnumerateArray());
+        Assert.Equal("A Book.m4b", file.GetProperty("name").GetString());
         Assert.Equal("A Book — An Author", book.GetProperty("title").GetString());
+
+        // What the file held when it went on record, so a later sort can tell it is still the one recorded.
+        Assert.Equal(5, file.GetProperty("size").GetInt64());
+        Assert.Matches("^[0-9a-f]{64}$", file.GetProperty("sample").GetString());
+    }
+
+    [Fact]
+    public void A_recorded_file_that_holds_something_else_now_is_forgotten()
+    {
+        // As a sort whose record was lost leaves it: another book's file has been written under the name
+        // the record still gives. The name alone must not make it this book's.
+        using var workspace = new TempWorkspace();
+        var folder = Path.Combine(workspace.Destination, "An Author", "Foo");
+        workspace.WriteDestinationFile(Path.Combine(folder, "Foo.m4b"), "book-4-audio");
+        workspace.WriteDestinationFile(Path.Combine(folder, "Foo.pdf"), "book-4-pdf");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Bar", "Bar.m4b"), "book-5-audio");
+        var manifest = LibraryManifest.Load(workspace.Destination);
+        manifest.Set("b4", new ManifestEntry(folder, ["Foo.m4b", "Foo.pdf"], "Foo"));
+        manifest.Set("b5", new ManifestEntry(Path.Combine(workspace.Destination, "An Author", "Bar"), ["Bar.m4b"], "Bar"));
+        manifest.Save();
+
+        workspace.WriteDestinationFile(Path.Combine(folder, "Foo.m4b"), "book-1-audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Bar", "Bar.m4b"), "book-1-other");
+        var loaded = LibraryManifest.Load(workspace.Destination);
+
+        Assert.Equal(["Foo.pdf"], loaded.Get("b4")?.Files);
+        Assert.Null(loaded.Get("b5"));
+    }
+
+    [Fact]
+    public void A_file_on_record_without_what_it_held_is_forgotten()
+    {
+        // A hand edit, or a record an earlier build wrote: a name alone proves nothing.
+        using var workspace = new TempWorkspace();
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "audio");
+        var file = new
+        {
+            format = "openaudible-organizer-manifest",
+            version = 1,
+            books = new { b01 = new { folder = "An Author/A Book", files = new[] { "A Book.m4b" }, title = "A Book" } }
+        };
+        File.WriteAllText(Path.Combine(workspace.Destination, LibraryManifest.FileName), JsonSerializer.Serialize(file));
+
+        var manifest = LibraryManifest.Load(workspace.Destination);
+
+        Assert.Empty(manifest.Books);
+        Assert.Null(manifest.Problem);
+    }
+
+    [Fact]
+    public void A_file_is_the_books_only_while_it_holds_what_it_held_when_it_went_on_record()
+    {
+        using var workspace = new TempWorkspace();
+        var folder = Path.Combine(workspace.Destination, "An Author", "A Book");
+        var path = workspace.WriteDestinationFile(Path.Combine(folder, "A Book.m4b"), "audio");
+        var other = workspace.WriteDestinationFile(Path.Combine(folder, "Other.m4b"), "audio");
+        var manifest = LibraryManifest.Load(workspace.Destination);
+        manifest.Set("b01", new ManifestEntry(folder, ["A Book.m4b"], "A Book"));
+
+        Assert.True(manifest.IsRecorded("b01", path));
+        Assert.False(manifest.IsRecorded("b02", path));
+        Assert.False(manifest.IsRecorded("b01", other));
+
+        // Checked when asked, not only when the record was read.
+        File.WriteAllText(path, "other-book");
+        Assert.False(manifest.IsRecorded("b01", path));
+        File.WriteAllText(path, "audio");
+        Assert.True(manifest.IsRecorded("b01", path));
+    }
+
+    [Fact]
+    public void Setting_an_entry_read_from_the_record_keeps_what_its_files_held_then()
+    {
+        // Were what a file holds now taken for a file carried over from the old record, whatever had
+        // been written under its name since would become the book's.
+        using var workspace = new TempWorkspace();
+        var folder = Path.Combine(workspace.Destination, "An Author", "A Book");
+        var path = workspace.WriteDestinationFile(Path.Combine(folder, "A Book.m4b"), "audio");
+        var first = LibraryManifest.Load(workspace.Destination);
+        first.Set("b01", new ManifestEntry(folder, ["A Book.m4b"], "A Book"));
+        first.Save();
+
+        var manifest = LibraryManifest.Load(workspace.Destination);
+        var entry = manifest.Get("b01")!;
+        File.WriteAllText(path, "other-book");
+        manifest.Set("b01", entry with { Title = "Renamed" });
+
+        Assert.False(manifest.IsRecorded("b01", path));
+        manifest.Save();
+        Assert.Null(LibraryManifest.Load(workspace.Destination).Get("b01"));
+    }
+
+    [Fact]
+    public void A_recorded_file_that_cannot_be_read_right_now_is_kept_but_proves_nothing_until_it_can()
+    {
+        // As an unreadable folder is: it keeps its folder from other books, and is taken for the book's once it can be checked.
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        {
+            return;
+        }
+
+        using var workspace = new TempWorkspace();
+        var folder = Path.Combine(workspace.Destination, "An Author", "A Book");
+        var path = workspace.WriteDestinationFile(Path.Combine(folder, "A Book.m4b"), "audio");
+        var first = LibraryManifest.Load(workspace.Destination);
+        first.Set("b01", new ManifestEntry(folder, ["A Book.m4b"], "A Book"));
+        first.Save();
+
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var manifest = LibraryManifest.Load(workspace.Destination);
+            Assert.Equal(["A Book.m4b"], manifest.Get("b01")?.Files);
+            Assert.False(manifest.IsRecorded("b01", path));
+
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            Assert.True(manifest.IsRecorded("b01", path));
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
     }
 
     [Fact]
@@ -303,13 +426,21 @@ public class LibraryManifestTests
         Assert.Null(manifest.Get("b01"));
     }
 
+    /// <summary>Writes a record by hand, each file on it with what it holds now, as a sort records a file (just the name when there is none).</summary>
     private static void WriteManifest(TempWorkspace workspace, params (string Id, string Folder, string[] Files)[] books)
     {
         var file = new
         {
             format = "openaudible-organizer-manifest",
             version = 1,
-            books = books.ToDictionary(book => book.Id, book => new { folder = book.Folder, files = book.Files, title = book.Id })
+            books = books.ToDictionary(book => book.Id, book => new
+            {
+                folder = book.Folder,
+                files = book.Files.Select(name => FileComparison.Stamp(Path.Combine(workspace.Destination, book.Folder, name)) is { } stamp
+                    ? (object)new { name, size = stamp.Size, sample = stamp.Sample }
+                    : new { name }),
+                title = book.Id
+            })
         };
         File.WriteAllText(Path.Combine(workspace.Destination, LibraryManifest.FileName), JsonSerializer.Serialize(file));
     }

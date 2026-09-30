@@ -1279,20 +1279,142 @@ public class FileSorterTests
     }
 
     [Fact]
-    public async Task A_manifest_that_cannot_be_saved_is_reported_without_failing_the_sort()
+    public async Task A_manifest_that_cannot_be_brought_up_to_date_stops_the_sort_before_any_file_is_touched()
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "audio");
-        // A folder where the manifest's temporary file goes makes the save fail.
-        Directory.CreateDirectory(Path.Combine(workspace.Destination, LibraryManifest.FileName + ".tmp"));
+        BlockManifestSaves(workspace);
 
-        var summary = await Sort(workspace, TempWorkspace.Book());
+        var error = await Assert.ThrowsAsync<IOException>(() => Sort(workspace, TempWorkspace.Book()));
+
+        Assert.StartsWith("Could not update its record of which book is in which folder", error.Message);
+        Assert.Contains("nothing was sorted", error.Message);
+        Assert.Empty(workspace.DestinationFiles());
+    }
+
+    [Fact]
+    public async Task A_manifest_that_cannot_be_saved_once_books_are_sorted_is_reported_without_failing_the_sort()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+
+        // Blocked once planning is done: the record was brought up to date, and books are about to be copied.
+        var summary = await Sort(workspace, new InlineProgress(_ => BlockManifestSaves(workspace)), TempWorkspace.Book());
 
         Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
         var problem = Assert.Single(summary.Problems);
         Assert.Equal(SortProblemKind.Warning, problem.Kind);
         Assert.StartsWith("Could not save its record of which book is in which folder", problem.Message);
     }
+
+    [Fact]
+    public async Task A_stale_record_never_lets_a_book_overwrite_another_books_only_copy_under_a_name_it_records()
+    {
+        // Book 4 moves into a series and book 1 of the same title takes its old folder, both in sorts
+        // whose record never reached the disk (the app killed, a power cut, a backup of the record put
+        // back): the record still says "Foo/Foo.m4b" is book 4's, but it holds book 1's only copy now.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("src-4.m4b", "book-4-audio");
+        await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "src-4"));
+        var stale = File.ReadAllBytes(ManifestPath(workspace));
+
+        await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "src-4", seriesName: "Saga"));
+        File.WriteAllBytes(ManifestPath(workspace), stale);
+        workspace.WriteSourceFile("src-1.m4b", "book-1-audio");
+        await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "src-1"));
+        File.WriteAllBytes(ManifestPath(workspace), stale);
+        Assert.Equal("book-1-audio", ReadDestination(workspace, "An Author", "Foo", "Foo.m4b"));
+
+        // Book 4 leaves the series; book 1 is still listed, but no longer in the source.
+        File.Delete(Path.Combine(workspace.Source, "src-1.m4b"));
+        var summary = await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "src-4"), TempWorkspace.Book(title: "Foo", filename: "src-1"));
+
+        Assert.Equal(0, summary.Counts.Updated);
+        Assert.Equal("book-1-audio", ReadDestination(workspace, "An Author", "Foo", "Foo.m4b"));
+        Assert.Equal("book-4-audio", ReadDestination(workspace, "An Author", "Foo (2)", "Foo.m4b"));
+    }
+
+    [Fact]
+    public async Task A_stale_record_never_moves_another_books_file_into_a_books_new_folder()
+    {
+        // Book 4 is retitled out of "Alpha", and a new book 1 "Alpha" is written there, both in sorts
+        // whose record never reached the disk. Book 4 is then retitled again, and moves.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("src-4.m4b", "book-4-audio");
+        await Sort(workspace, TempWorkspace.Book(title: "Alpha", filename: "src-4"));
+        var stale = File.ReadAllBytes(ManifestPath(workspace));
+
+        await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "src-4"));
+        File.WriteAllBytes(ManifestPath(workspace), stale);
+        workspace.WriteSourceFile("src-1.m4b", "book-1-audio");
+        await Sort(workspace, TempWorkspace.Book(title: "Alpha", filename: "src-1"));
+        File.WriteAllBytes(ManifestPath(workspace), stale);
+
+        File.Delete(Path.Combine(workspace.Source, "src-1.m4b"));
+        var summary = await Sort(workspace, TempWorkspace.Book(title: "Bar", filename: "src-4"));
+
+        Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
+        Assert.Equal("book-1-audio", ReadDestination(workspace, "An Author", "Alpha", "Alpha.m4b"));
+        Assert.Equal("book-4-audio", ReadDestination(workspace, "An Author", "Bar", "Bar.m4b"));
+        Assert.Equal(
+            [Path.Combine(workspace.Destination, "An Author", "Bar")],
+            LibraryManifest.Load(workspace.Destination).Books.Values.Select(entry => entry.Folder));
+    }
+
+    [Fact]
+    public async Task A_stale_record_never_takes_a_persons_file_under_a_name_it_records_for_the_book()
+    {
+        // One sort whose record never reached the disk is enough when a file of the person's own turns up
+        // under a name the record still gives: it must not move with the book and be written over there.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("x.m4b", "x-audio");
+        workspace.WriteSourceFile("x.pdf", "x-pdf");
+        await Sort(workspace, TempWorkspace.Book(title: "Alpha", filename: "x", asin: "X", pdf: "Yes"));
+        var stale = File.ReadAllBytes(ManifestPath(workspace));
+
+        await Sort(workspace, TempWorkspace.Book(title: "Beta", filename: "x", asin: "X", pdf: "Yes"));
+        File.WriteAllBytes(ManifestPath(workspace), stale);
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Alpha", "Alpha.pdf"), "the-persons-own-notes");
+
+        await Sort(workspace, TempWorkspace.Book(title: "Gamma", filename: "x", asin: "X", pdf: "Yes"));
+
+        Assert.Equal("the-persons-own-notes", ReadDestination(workspace, "An Author", "Alpha", "Alpha.pdf"));
+        Assert.Equal("x-pdf", ReadDestination(workspace, "An Author", "Gamma", "Gamma.pdf"));
+    }
+
+    [Fact]
+    public async Task A_sort_whose_record_could_not_be_saved_stops_the_next_one_from_sorting_under_a_stale_record()
+    {
+        // The saves fail for real: a sort that could not save its record is reported, and the next one,
+        // which would move and write books under that out-of-date record, sorts nothing until it can.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("src-4.m4b", "book-4-audio");
+        await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "src-4"));
+
+        BlockManifestSaves(workspace);
+        var moved = await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "src-4", seriesName: "Saga"));
+        Assert.Contains(moved.Problems, problem => problem.Message.StartsWith("Could not save its record", StringComparison.Ordinal));
+        var files = workspace.DestinationFiles();
+
+        workspace.WriteSourceFile("src-1.m4b", "book-1-audio");
+        var error = await Assert.ThrowsAsync<IOException>(() => Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "src-1")));
+        Assert.Contains("nothing was sorted", error.Message);
+        Assert.Equal(files, workspace.DestinationFiles());
+
+        Directory.Delete(Path.Combine(workspace.Destination, LibraryManifest.FileName + ".tmp"));
+        await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "src-1"));
+        File.Delete(Path.Combine(workspace.Source, "src-1.m4b"));
+        await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "src-4"), TempWorkspace.Book(title: "Foo", filename: "src-1"));
+
+        Assert.Equal("book-1-audio", ReadDestination(workspace, "An Author", "Foo", "Foo.m4b"));
+        Assert.Equal("book-4-audio", ReadDestination(workspace, "An Author", "Saga", "Foo", "Foo.m4b"));
+    }
+
+    private static string ManifestPath(TempWorkspace workspace) => Path.Combine(workspace.Destination, LibraryManifest.FileName);
+
+    /// <summary>Makes every save of the manifest fail, as a full disk would: a folder is where its temporary file goes.</summary>
+    private static void BlockManifestSaves(TempWorkspace workspace) =>
+        Directory.CreateDirectory(Path.Combine(workspace.Destination, LibraryManifest.FileName + ".tmp"));
 
     [Fact]
     public async Task A_manifest_that_cannot_be_read_right_now_stops_the_sort_and_is_left_as_it_is()

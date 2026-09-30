@@ -236,7 +236,9 @@ merely has the book's name stays where it is, and the problems list names it.
 
 **Nothing is written over unless it is provably the book's own copy.** A file already in the
 destination is moved or replaced only when the record says it belongs to that book, or when its
-content is identical to the book's download. Anything else, such as an old copy of a book you have
+content is identical to the book's download. The record also notes what each file held, so a file
+that has changed since, or another book's file now under a recorded name (as a sort that could not
+save its record can leave it), no longer counts as the book's. Anything else, such as an old copy of a book you have
 downloaded again since, or the only copy of a book you have returned, stays exactly where it is, and
 the problems list names it so you can delete it yourself if it is an old copy. Such a file never goes
 on the record as the book's, so later sorts leave it alone too; a book whose audio is left alone this
@@ -321,6 +323,7 @@ operating system's setting and changes with it.
 | *"The destination folder doesn't exist. Is the drive connected?"* | The drive or network share holding your library is not connected. Connect it and start again. |
 | *"The destination folder … no longer holds the .openaudible-organizer file…"* | Automatic sorting found the destination folder, but not the record of your books earlier sorts left in it: usually the drive or share is not mounted, and the empty folder it is mounted on stands in for it. Mount it. If you emptied the folder on purpose, press **Start sorting** once and choose *Sort into it anyway*. |
 | *"Could not read its record of which book is in which folder (the .openaudible-organizer file), so nothing was sorted"* | Another program had the file open (a virus scanner, a backup or sync tool, a second copy of the app), or a network drive hiccuped. Nothing was changed; sort again. If it keeps happening, check that you can open the file. |
+| *"Could not update its record of which book is in which folder (the .openaudible-organizer file), so nothing was sorted"* | The record had to be brought up to date before any book was moved, and could not be written: the disk is full, the file or folder is read-only, or another program has it open. Nothing was changed; free up space or fix the permissions, and sort again. |
 | The destination says **Can't write to this folder** | You do not have permission to write there, or the drive is read-only. Pick another folder, or fix the permissions. |
 | **Start sorting** is greyed out: *"A sort is already running."* | A sort — possibly an automatic one — is still going. Follow it in the Progress card, or cancel it there. |
 | **Automatic sorting** is greyed out | Choose all three paths first; the card says which are missing. |
