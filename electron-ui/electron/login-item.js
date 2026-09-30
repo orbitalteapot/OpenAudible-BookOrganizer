@@ -17,9 +17,14 @@ function launchedAtLogin() {
   return process.platform === 'darwin' && app.getLoginItemSettings().wasOpenedAtLogin === true;
 }
 
+/** A .desktop file's escaping for a value of type string: backslashes and line breaks. */
+function escapeDesktopString(value) {
+  return value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t');
+}
+
 /** Quotes one argument for the Exec line of a .desktop file (the spec's quoting, then its string escaping). */
 function quoteDesktopExecArg(arg) {
-  return `"${arg.replace(/(["`$\\])/g, '\\$1')}"`.replace(/\\/g, '\\\\');
+  return escapeDesktopString(`"${arg.replace(/(["`$\\])/g, '\\$1')}"`);
 }
 
 /**
@@ -69,6 +74,10 @@ function setLinuxAutostart(enabled, executable) {
       `Name=${APP_NAME}`,
       'Comment=Starts hidden in the tray, ready for the next automatic sort',
       `Exec=${quoteDesktopExecArg(executable)} ${HIDDEN_ARG}`,
+      // The entry lives in the user's home, where removing the .deb or deleting the AppImage cannot
+      // reach it; with this, the desktop skips it once the program is gone instead of trying to start
+      // a missing file at every sign-in.
+      `TryExec=${escapeDesktopString(executable)}`,
       'X-GNOME-Autostart-enabled=true',
       '',
     ].join('\n')

@@ -7,19 +7,34 @@ import SortPage from './components/SortPage';
 import RunAnnouncer from './components/RunAnnouncer';
 import AppNotices from './components/AppNotices';
 import { Banner, EmptyState } from './components/ui/Surface';
-import { isRunning, useIsElectron, useLibrary, useRunStatus, useSchedule, useSettings, useTheme } from './hooks';
+import {
+  isRunning,
+  useBackendStopped,
+  useIsElectron,
+  useLibrary,
+  useRunStatus,
+  useSchedule,
+  useSettings,
+  useTheme,
+} from './hooks';
 
 // How often the folder statuses (and with them the schedule) are asked for again.
 const STATUS_REFRESH_MS = 30_000;
 
 /**
  * Shown until the backend has answered with the settings, which every page is built from. One
- * message at a time: on the desktop the app itself says, in a dialog, if the organizer never
- * starts, so the page only says it is taking a while; in the browser, only the page can say that
- * the container is not answering.
+ * message at a time: on the desktop the app itself restarts an organizer that is not there, and says
+ * in a dialog if it never starts, so the page only says it is taking a while, until the app has given
+ * up (`stopped` is then why); in the browser, only the page can say that the container is not
+ * answering. An organizer that answers nothing in time is there but stuck on a folder, which only the
+ * error's own message explains, on the desktop too.
  */
-function Starting({ error, isElectron }) {
-  if (error && isElectron) {
+function Starting({ error, errorCode, stopped, isElectron }) {
+  if (stopped) {
+    return <EmptyState icon={Headphones} title="The organizer didn't start" description={stopped} />;
+  }
+
+  if (error && isElectron && errorCode === 'unreachable') {
     return (
       <EmptyState
         icon={Headphones}
@@ -42,6 +57,7 @@ export default function App() {
   const { theme, setTheme } = useTheme();
 
   const settingsState = useSettings();
+  const backendStopped = useBackendStopped();
   const { settings, refresh: refreshSettings } = settingsState;
   const run = useRunStatus();
   const runFinishedUtc = run.status?.state === 'finished' ? run.status.finishedUtc : null;
@@ -122,7 +138,12 @@ export default function App() {
         <main className="flex min-w-0 flex-1 flex-col p-5">
           {settings && <AppNotices lostContact={run.error} serverWarnings={settings.serverWarnings} />}
           {!settings ? (
-            <Starting error={settingsState.error} isElectron={isElectron} />
+            <Starting
+              error={settingsState.error}
+              errorCode={settingsState.errorCode}
+              stopped={backendStopped}
+              isElectron={isElectron}
+            />
           ) : currentPage === 'library' ? (
             <Library
               library={library}

@@ -21,6 +21,32 @@ export function useIsElectron() {
 }
 
 /**
+ * Why the desktop app has left its organizer stopped, with nothing left to start it again; null while
+ * it runs or is being restarted, and always in a browser, where only the page can tell.
+ */
+export function useBackendStopped() {
+  const [reason, setReason] = useState(null);
+
+  useEffect(() => {
+    const api = window.electronAPI;
+    if (!api?.onBackendStopped) return undefined;
+
+    let active = true;
+    // It may have stopped before the page was loaded, or before this subscribed.
+    api.backendStopped?.().then((current) => {
+      if (active && current) setReason(current);
+    });
+    const unsubscribe = api.onBackendStopped(setReason);
+    return () => {
+      active = false;
+      unsubscribe();
+    };
+  }, []);
+
+  return reason;
+}
+
+/**
  * A ref that always holds the latest committed `value`, for code that runs later (after a request
  * comes back) and needs what is on screen then, not what was when it started.
  */

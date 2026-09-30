@@ -83,4 +83,21 @@ describe('setOpenAtLogin', () => {
 
     expect(fs.readFileSync(autostartFile, 'utf8')).toContain('Exec="/opt/Organizer/openaudible-book-organizer" --hidden');
   });
+
+  it('names the program the entry needs, so the desktop skips it once the app is uninstalled', () => {
+    // The .deb installs where the product name, spaces and all, says.
+    Object.defineProperty(process, 'execPath', {
+      value: '/opt/OpenAudible Book Organizer/openaudible-book-organizer',
+      configurable: true,
+      writable: true,
+    });
+    delete process.env.APPIMAGE;
+    delete process.env.APPDIR;
+
+    setOpenAtLogin(true);
+
+    expect(fs.readFileSync(autostartFile, 'utf8').split('\n')).toContain(
+      'TryExec=/opt/OpenAudible Book Organizer/openaudible-book-organizer'
+    );
+  });
 });

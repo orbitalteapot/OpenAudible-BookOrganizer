@@ -84,8 +84,6 @@ function createWindow({ reveal }) {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
-      // The port is picked at launch, so the page cannot know it in advance. preload.js reads this.
-      additionalArguments: [`--backend-url=${backend.url() ?? ''}`],
     },
   });
 
@@ -399,6 +397,12 @@ function registerIpcHandlers() {
   ipcMain.handle('window:staysInBackground', () => staysInBackground());
 
   ipcMain.handle('app:quit', () => quitWhenSafe());
+  // The port is picked at launch, and again whenever the backend is restarted, so the page cannot
+  // know it in advance; preload.js asks each time the page loads.
+  ipcMain.on('backend:url', (event) => {
+    event.returnValue = backend.url() ?? '';
+  });
+  ipcMain.handle('backend:stopped', () => backendStoppedReason());
   ipcMain.handle('app:setBackgroundOptions', (_, options) => applyBackgroundOptions(options));
   ipcMain.handle('app:setTheme', (_, theme) => {
     if (!THEMES.has(theme)) return;
@@ -414,33 +418,75 @@ function withWindow(action) {
 // ---------------------------------------------------------------------------------------------
 // Backend problems
 
+/** Why the backend has stopped with nothing left to start it again, or null while it runs or restarts. */
+function backendStoppedReason() {
+  return backend.stoppedForGood() ? backend.failure() : null;
+}
+
+/**
+ * The backend exited and was started again on a new port. The page only learns the port as it loads
+ * (see preload.js), so it is loaded again, and picks up where the new backend is.
+ */
+function onBackendRestarted() {
+  if (hasWindow()) mainWindow.loadURL(appUrl());
+}
+
+/**
+ * Quits and opens the app again. Only asked for once the backend has stopped for good, so there is
+ * no sort to ask about. Never hidden in the tray, even when this launch was a sign-in start.
+ */
+function relaunchApp() {
+  quitting = true;
+  app.relaunch({ args: process.argv.slice(1).filter((arg) => arg !== HIDDEN_ARG) });
+  app.quit();
+}
+
+/** The backend was left stopped: the page stops saying it is still trying, and the user is told. */
+function onBackendStoppedForGood(reason) {
+  if (hasWindow()) mainWindow.webContents.send('backend:stopped', reason);
+  reportBackendStopped(reason);
+}
+
 // Worded as the page words it: the user knows "Book Organizer", not a backend or an exit code.
-function reportBackendStopped(reason) {
+async function reportBackendStopped(reason) {
   // Before it first answered, startup reports the failure itself (reportBackendDidNotStart).
   if (quitting || !hasWindow() || !backendReady) return;
 
   // It may have died while the app sat in the tray; the user needs to see this either way.
   showWindow();
-  showMessage({
-    type: 'error',
+  await offerRestart({
     title: 'Book Organizer stopped working',
     message: 'Book Organizer stopped working.',
     detail: `Sorting and your library are unavailable until the app is restarted. ${reason}`,
-    buttons: ['OK'],
   });
 }
 
 function reportBackendDidNotStart() {
   console.error('Backend did not start in time');
-  showMessage({
-    type: 'error',
+  const stopped = backendStoppedReason();
+  if (stopped && hasWindow()) mainWindow.webContents.send('backend:stopped', stopped);
+  return offerRestart({
     title: "Book Organizer didn't start",
     message: "Book Organizer didn't start.",
     detail:
       backend.failure() ||
       'It did not respond within a minute. Restart the app; if this keeps happening, reinstall it.',
-    buttons: ['OK'],
   });
+}
+
+/** An error message box whose Restart button opens the app again. */
+async function offerRestart({ title, message, detail }) {
+  const { response } = await showMessage({
+    type: 'error',
+    title,
+    message,
+    detail,
+    buttons: ['Restart', 'Not now'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true,
+  });
+  if (response === 0 && !quitting) relaunchApp();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -453,6 +499,13 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv) => {
+    // Opening the app again is how people restart it, and what the messages about a backend that
+    // stopped ask for; with the window closed to the tray, it would otherwise bring back this same
+    // copy, still without the backend and without automatic sorting.
+    if (backendStoppedReason()) {
+      relaunchApp();
+      return;
+    }
     // The sign-in entry firing while the app already runs should not pop the window up.
     if (!argv.includes(HIDDEN_ARG)) showWindow();
   });
@@ -481,7 +534,8 @@ if (!app.requestSingleInstanceLock()) {
     await backend.start({
       packaged: app.isPackaged,
       settingsPath: path.join(app.getPath('userData'), 'settings.json'),
-      onUnexpectedExit: reportBackendStopped,
+      onRestarted: onBackendRestarted,
+      onStoppedForGood: onBackendStoppedForGood,
     });
 
     // The window comes up at once, without waiting for the backend: it can take a while to answer

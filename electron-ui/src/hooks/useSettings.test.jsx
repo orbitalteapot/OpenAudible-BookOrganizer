@@ -2,7 +2,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, getSettings, updateSettings } from '../api';
 import { settingsResponse } from '../test/fixtures';
-import useSettings from './useSettings';
+import useSettings, { LOAD_ERROR_AFTER_MS } from './useSettings';
 
 vi.mock('../api', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -50,6 +50,42 @@ describe('useSettings', () => {
     await waitFor(() => expect(result.current.settings).not.toBeNull(), { timeout: 3000 });
     expect(getSettings).toHaveBeenCalledTimes(2);
     expect(result.current.error).toBeNull();
+  });
+
+  it('says at once that the organizer did not answer in time, as it is not still starting', async () => {
+    const timeout = new ApiError('The organizer did not answer in time. A network drive…', { code: 'timeout' });
+    vi.mocked(getSettings).mockRejectedValue(timeout);
+
+    const { result, unmount } = renderHook(() => useSettings());
+
+    await waitFor(() => expect(result.current.error).toBe(timeout.message));
+    expect(getSettings).toHaveBeenCalledTimes(1);
+    expect(result.current.errorCode).toBe('timeout');
+    unmount();
+  });
+
+  it('counts failures to load in time, not attempts, as an attempt can take long to fail', async () => {
+    vi.useFakeTimers();
+    try {
+      // Each attempt fails only after a while, as one does on a slow network.
+      vi.mocked(getSettings).mockImplementation(
+        () =>
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new ApiError('unreachable', { code: 'unreachable' })), LOAD_ERROR_AFTER_MS / 2)
+          )
+      );
+      const { result, unmount } = renderHook(() => useSettings());
+
+      await act(() => vi.advanceTimersByTimeAsync(LOAD_ERROR_AFTER_MS / 2));
+      expect(result.current.error).toBeNull();
+
+      // Ten attempts would have taken ten times as long.
+      await act(() => vi.advanceTimersByTimeAsync(LOAD_ERROR_AFTER_MS));
+      expect(result.current.error).toBe('unreachable');
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('drops an error about a folder once a refresh finds it, but not a refused pick of a new one', async () => {

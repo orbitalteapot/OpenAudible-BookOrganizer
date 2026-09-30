@@ -3,9 +3,11 @@ import { getSettings, isUnanswered, updateSettings } from '../api';
 import { isFoundAgain } from '../paths';
 
 // The desktop backend is started alongside the window and takes a few seconds to answer; a Docker
-// container may be restarting. Keep asking, and only call it an error once it has taken a while.
+// container may be restarting. Keep asking, and only call it an error once it has taken a while:
+// counted in time rather than in attempts, because an attempt that hangs on an offline network drive
+// takes as long as its timeout to fail, not a moment, and ten of them took most of twenty minutes.
 const LOAD_RETRY_MS = 1_000;
-const LOAD_ATTEMPTS_BEFORE_ERROR = 10;
+export const LOAD_ERROR_AFTER_MS = 10_000;
 
 /**
  * Drops the errors a successful save has dealt with: those about a field it changed, and those
@@ -71,10 +73,12 @@ export default function useSettings() {
     // leaving it running beside the new one.
     let active = true;
     let timer = null;
-    let attempts = 0;
+    // When the first failed attempt was sent.
+    let failingSince = null;
 
     const load = () =>
       enqueue(async () => {
+        const sentAt = Date.now();
         try {
           const loaded = await getSettings();
           if (!active) return;
@@ -82,8 +86,10 @@ export default function useSettings() {
           setErrorState(null);
         } catch (err) {
           if (!active) return;
-          attempts += 1;
-          if (attempts >= LOAD_ATTEMPTS_BEFORE_ERROR) setErrorState(err);
+          failingSince ??= sentAt;
+          // An organizer that answers nothing in time is not still starting: it is stuck on a folder,
+          // and the message says which kind of thing to check. Shown at once.
+          if (err.code === 'timeout' || Date.now() - failingSince >= LOAD_ERROR_AFTER_MS) setErrorState(err);
           timer = setTimeout(load, LOAD_RETRY_MS);
         }
       });

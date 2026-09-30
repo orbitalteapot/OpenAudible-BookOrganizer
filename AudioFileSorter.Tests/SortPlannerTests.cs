@@ -74,6 +74,74 @@ public class SortPlannerTests
     }
 
     [Fact]
+    public void Upgrade_keeps_a_series_in_the_folder_main_gave_it_when_a_book_without_a_number_lies_loose_in_it()
+    {
+        // main reused "Expanse" for "The Expanse" and left the unnumbered book loose in it. Taking
+        // that for a book's own folder copied the whole series into a second one.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("b1.m4b", "leviathan");
+        workspace.WriteSourceFile("novella.m4b", "novella");
+        var numbered = workspace.WriteDestinationFile(Path.Combine("An Author", "Expanse", "Book 1", "Leviathan Wakes.m4b"), "leviathan");
+        var loose = workspace.WriteDestinationFile(Path.Combine("An Author", "Expanse", "The Churn.m4b"), "novella");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Leviathan Wakes", filename: "b1", seriesName: "The Expanse", seriesSequence: "1"),
+            TempWorkspace.Book(title: "The Churn", filename: "novella", seriesName: "The Expanse"));
+
+        Assert.Equal(numbered, planned[0].AudioDestination);
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "Expanse", "The Churn", "The Churn.m4b"),
+            planned[1].AudioDestination);
+        Assert.Equal(loose, planned[1].AudioLegacyPath);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Upgrade_files_every_spelling_of_a_series_in_the_folder_main_used_whatever_the_row_order(bool otherSpellingFirst)
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("eye.m4b", "eye");
+        workspace.WriteSourceFile("hunt.m4b", "hunt");
+        workspace.WriteSourceFile("spring.m4b", "spring");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Wheel of Time", "Book 1", "The Eye of the World.m4b"), "eye");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Wheel of Time", "Book 2", "The Great Hunt.m4b"), "hunt");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Wheel of Time", "New Spring.m4b"), "spring");
+        var other = TempWorkspace.Book(title: "The Great Hunt", filename: "hunt", seriesName: "The Wheel of Time", seriesSequence: "2");
+        OpenAudible[] rest =
+        [
+            TempWorkspace.Book(title: "The Eye of the World", filename: "eye", seriesName: "Wheel of Time", seriesSequence: "1"),
+            TempWorkspace.Book(title: "New Spring", filename: "spring", seriesName: "Wheel of Time")
+        ];
+
+        var planned = Plan(workspace, otherSpellingFirst ? [other, .. rest] : [.. rest, other]);
+
+        var seriesFolder = Path.Combine(workspace.Destination, "An Author", "Wheel of Time");
+        Assert.All(planned, copy => Assert.StartsWith(seriesFolder + Path.DirectorySeparatorChar, copy.AudioDestination));
+    }
+
+    [Fact]
+    public void Upgrade_moves_a_series_out_of_the_folder_main_used_when_that_folder_cannot_be_reused()
+    {
+        // The loose file belongs to a book that has left the export, so "Expanse" may be its own
+        // folder and the series gets a new one; the series' old copies go with it.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("b1.m4b", "leviathan");
+        var old = workspace.WriteDestinationFile(Path.Combine("An Author", "Expanse", "Book 1", "Leviathan Wakes.m4b"), "leviathan");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Expanse", "Something Else.m4b"), "other");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Leviathan Wakes", filename: "b1", seriesName: "The Expanse", seriesSequence: "1"));
+
+        Assert.Equal(
+            Path.Combine(workspace.Destination, "An Author", "The Expanse", "Book 1", "Leviathan Wakes.m4b"),
+            planned[0].AudioDestination);
+        Assert.Equal(old, planned[0].AudioLegacyPath);
+    }
+
+    [Fact]
     public void Plan_gives_two_different_books_with_the_same_name_separate_folders()
     {
         using var workspace = new TempWorkspace();

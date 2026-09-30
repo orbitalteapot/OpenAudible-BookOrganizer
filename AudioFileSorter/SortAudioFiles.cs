@@ -298,6 +298,11 @@ public class FileSorter
             {
                 await sourceStream.CopyToAsync(destinationStream, CopyBufferSize, cancellationToken);
                 await destinationStream.FlushAsync(cancellationToken);
+
+                // On the disk before the rename replaces the old copy: without it, a power cut or an
+                // unplugged drive can leave an empty or truncated book where the good copy was on
+                // file systems that do not order the two (exFAT, NTFS-3g, XFS, many network shares).
+                destinationStream.Flush(flushToDisk: true);
                 copied = destinationStream.Length;
             }
 

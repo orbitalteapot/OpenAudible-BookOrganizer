@@ -43,6 +43,9 @@ public sealed class SortPlanner
     private readonly HashSet<string> _standaloneBookFolders = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, string>> _subdirectoryNames = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>What the export lists of each series, by <see cref="SeriesKey"/>; see <see cref="MayBeSeriesFolder"/>.</summary>
+    private readonly Dictionary<string, ListedSeries> _listedSeries = new(StringComparer.Ordinal);
+
     /// <summary>The folder each book (by its audio source) was found in before; see <see cref="KeepBookFolders"/>.</summary>
     private readonly Dictionary<string, string> _keptBookDirectories = new(SourceComparer);
 
@@ -79,6 +82,8 @@ public sealed class SortPlanner
         /// <summary>
         /// In that folder under another "Title (n)" name, which the export no longer explains: a
         /// same-titled book listed before this one has left the export since, or the order changed.
+        /// Or under any of its names in another folder spelled like the series, which an older
+        /// version used for it and this run does not.
         /// </summary>
         SharedFolderOtherName,
 
@@ -129,8 +134,20 @@ public sealed class SortPlanner
         var isRepeat = audioSources.Select(source => source is not null && !seenSources.Add(source)).ToList();
         var listedPlans = namingPlans.Where((_, index) => !isRepeat[index]).ToList();
 
-        // Known before any series folder is resolved, so a series never settles on a folder that
-        // is a standalone book's own (see ResolveDirectoryName).
+        // Known before any series folder is resolved, so a series settles on the folder an older
+        // version gave it and never on one that is a standalone book's own (see MayBeSeriesFolder).
+        foreach (var plan in listedPlans.Where(plan => plan.SeriesName is not null))
+        {
+            var key = SeriesKey(ResolveAuthorDirectory(fullDestinationRoot, plan), Normalize(plan.SeriesName!, FolderKind.Series));
+            if (!_listedSeries.TryGetValue(key, out var series))
+            {
+                _listedSeries[key] = series = new ListedSeries([], []);
+            }
+
+            series.Spellings.Add(PathSanitizer.NormalizeComparisonKey(plan.SeriesName));
+            series.Titles.Add(PathSanitizer.NormalizeComparisonKey(plan.FileStem));
+        }
+
         foreach (var plan in listedPlans.Where(plan => plan.SeriesName is null))
         {
             _standaloneBookFolders.Add(BookFolderKey(ResolveAuthorDirectory(fullDestinationRoot, plan), plan.FileStem));
@@ -169,6 +186,9 @@ public sealed class SortPlanner
 
     /// <summary>A place an older version may have left a book's file.</summary>
     private sealed record LegacyCandidate(LegacyLayout Layout, string Path);
+
+    /// <summary>The spellings a series is listed under, and the titles of its books (as comparison keys).</summary>
+    private sealed record ListedSeries(HashSet<string> Spellings, HashSet<string> Titles);
 
     /// <summary>One book's plan, with every destination it holds, written to or not.</summary>
     private sealed record PlannedBook(PlannedCopy Copy, IReadOnlyList<HeldFile> Held);
@@ -630,6 +650,11 @@ public sealed class SortPlanner
 
         if (plan.SeriesName is not null)
         {
+            // Older versions took the first folder on disk that meant the series, whatever lay in it;
+            // this run may file the series in another spelling's folder (see ResolveDirectoryName).
+            candidates.AddRange(OtherSeriesDirectories(authorDirectory, plan.SeriesName, parentDirectory)
+                .Select(folder => plan.SeriesSequence is null ? folder : Path.Combine(folder, NumberedFolderName(plan)))
+                .SelectMany(folder => OtherSharedFolderNames(folder, stem, extension)));
             candidates.Add(new LegacyCandidate(LegacyLayout.Standalone, Path.Combine(authorDirectory, fileName)));
             candidates.Add(new LegacyCandidate(LegacyLayout.Standalone, Path.Combine(BookFolderIn(authorDirectory, stem), fileName)));
         }
@@ -681,6 +706,16 @@ public sealed class SortPlanner
             .Select(attempt => Path.Combine(directory, stem + Suffix(attempt) + extension))
             .Where(path => FindExistingFile(path) is not null)
             .Select(path => new LegacyCandidate(LegacyLayout.SharedFolderOtherName, path));
+    }
+
+    /// <summary>The folders on disk in <paramref name="authorDirectory"/>, other than <paramref name="seriesDirectory"/>, that are spelled like the series.</summary>
+    private IEnumerable<string> OtherSeriesDirectories(string authorDirectory, string seriesName, string seriesDirectory)
+    {
+        var normalized = Normalize(seriesName, FolderKind.Series);
+        return SubdirectoryNames(authorDirectory).Values
+            .Where(name => Normalize(name, FolderKind.Series) == normalized)
+            .Select(name => Path.Combine(authorDirectory, name))
+            .Where(folder => !string.Equals(folder, seriesDirectory, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -815,9 +850,13 @@ public sealed class SortPlanner
         }
 
         // The kind is part of the key: "The Witcher" as a series and "Witcher" as a book normalise
-        // to the same text under different rules, and must not be given each other's folder.
-        var cacheKey = $"{parentDirectory}\u0000{kind}\u0000{normalized}";
-        if (_resolvedDirectoryNames.TryGetValue(cacheKey, out var cached))
+        // to the same text under different rules, and must not be given each other's folder. Each
+        // spelling is also remembered on its own, so the first row's spelling never decides the
+        // folder of a row whose own spelling names a folder on disk.
+        var sharedKey = $"{parentDirectory}\u0000{kind}\u0000{normalized}";
+        var exactKey = PathSanitizer.NormalizeComparisonKey(requestedName);
+        var spellingKey = $"{sharedKey}\u0000{exactKey}";
+        if (_resolvedDirectoryNames.TryGetValue(spellingKey, out var cached))
         {
             return cached;
         }
@@ -830,20 +869,68 @@ public sealed class SortPlanner
 
         // The folder this name was given before comes first. The looser series match would
         // otherwise let "The Witcher" settle on a standalone book's "Witcher" folder whenever the
-        // disk happens to list that one first, and copy both the series and the book again. Nor
-        // does it settle on a folder with audio lying in it: that is a book's own folder, even when
-        // the book has left the export, and a series inside it would be read as that one book.
-        var exactKey = PathSanitizer.NormalizeComparisonKey(requestedName);
+        // disk happens to list that one first, and copy both the series and the book again. Next
+        // comes the folder another spelling was given in this run, so a new series listed under
+        // two spellings gets one folder. A series folder spelled as another row spells it wins
+        // the looser match, whatever order the disk lists the folders in.
         var resolved = existingNames.FirstOrDefault(name => PathSanitizer.NormalizeComparisonKey(name) == exactKey)
-            ?? existingNames.FirstOrDefault(name =>
-                Normalize(name, kind) == normalized &&
-                !(kind == FolderKind.Series &&
-                  (_standaloneBookFolders.Contains(BookFolderKey(parentDirectory, name)) ||
-                   ExistingAudioFiles(Path.Combine(parentDirectory, name)).Count > 0)))
+            ?? _resolvedDirectoryNames.GetValueOrDefault(sharedKey)
+            ?? existingNames
+                .Where(name =>
+                    Normalize(name, kind) == normalized &&
+                    (kind != FolderKind.Series || MayBeSeriesFolder(parentDirectory, name, normalized)))
+                .OrderBy(name => kind == FolderKind.Series && IsListedSpelling(parentDirectory, name, normalized) ? 0 : 1)
+                .FirstOrDefault()
             ?? requestedName;
 
-        _resolvedDirectoryNames[cacheKey] = resolved;
+        _resolvedDirectoryNames.TryAdd(sharedKey, resolved);
+        _resolvedDirectoryNames[spellingKey] = resolved;
         return resolved;
+    }
+
+    /// <summary>
+    /// Whether the folder <paramref name="name"/>, spelled like a series, may be taken for it. Not
+    /// a standalone book's folder, nor one with audio lying in it, which is a book's own folder
+    /// even when the book has left the export: a series inside it would be read as that one book.
+    /// Unless that audio is named after one of the series' books, as the older versions that put
+    /// its books without a number loose in the series folder named them, or the folder is spelled
+    /// as the export spells the series: refusing it would copy the whole series into a second folder.
+    /// </summary>
+    private bool MayBeSeriesFolder(string parentDirectory, string name, string normalizedSeries)
+    {
+        if (_standaloneBookFolders.Contains(BookFolderKey(parentDirectory, name)))
+        {
+            return false;
+        }
+
+        var audio = ExistingAudioFiles(Path.Combine(parentDirectory, name));
+        return audio.Count == 0 ||
+               IsListedSpelling(parentDirectory, name, normalizedSeries) ||
+               (_listedSeries.TryGetValue(SeriesKey(parentDirectory, normalizedSeries), out var series) &&
+                audio.Any(file => IsNamedAfterOneOf(file, series.Titles)));
+    }
+
+    /// <summary>Whether a row of the export spells the series exactly as the folder <paramref name="name"/> is spelled.</summary>
+    private bool IsListedSpelling(string parentDirectory, string name, string normalizedSeries)
+    {
+        return _listedSeries.TryGetValue(SeriesKey(parentDirectory, normalizedSeries), out var series) &&
+               series.Spellings.Contains(PathSanitizer.NormalizeComparisonKey(name));
+    }
+
+    /// <summary>Whether <paramref name="file"/> is named after one of <paramref name="titles"/>, as is or with a "(n)" after it.</summary>
+    private static bool IsNamedAfterOneOf(string file, HashSet<string> titles)
+    {
+        var stem = Path.GetFileNameWithoutExtension(file);
+        return Enumerable.Range(1, MaxDisambiguationAttempts)
+            .Select(Suffix)
+            .Any(suffix => stem.EndsWith(suffix, StringComparison.Ordinal) &&
+                           titles.Contains(PathSanitizer.NormalizeComparisonKey(stem[..^suffix.Length])));
+    }
+
+    /// <summary>Identifies a series, by its normalised name, among the author folder <paramref name="authorDirectory"/>'s.</summary>
+    private static string SeriesKey(string authorDirectory, string normalizedSeries)
+    {
+        return $"{authorDirectory}\u0000{normalizedSeries}";
     }
 
     /// <summary>Identifies the folder a standalone book titled <paramref name="name"/> uses in <paramref name="parentDirectory"/>.</summary>

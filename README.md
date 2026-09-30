@@ -304,7 +304,7 @@ operating system's setting and changes with it.
 | The destination says **Can't write to this folder** | You do not have permission to write there, or the drive is read-only. Pick another folder, or fix the permissions. |
 | **Start sorting** is greyed out: *"A sort is already running."* | A sort — possibly an automatic one — is still going. Follow it in the Progress card, or cancel it there. |
 | **Automatic sorting** is greyed out | Choose all three paths first; the card says which are missing. |
-| *"The Book Organizer backend could not be started"* | The part of the app that does the copying did not start. The message says why; restart the app, and reinstall it if that keeps happening. |
+| *"Book Organizer didn't start"* or *"Book Organizer stopped working"* | The part of the app that does the copying did not start, or kept stopping: the app starts it again by itself a few times first. The message says why. Choose **Restart**, or open the app again, and reinstall it if that keeps happening. |
 | No tray icon on Linux | Some desktops, including GNOME, only show tray icons with an extension such as *AppIndicator and KStatusNotifierItem Support*. Without one, the app still keeps running when its window is closed in background mode: open Book Organizer again to bring the window back, and use **Quit** in its title bar to stop it. |
 | Some books land under **Unknown** | Those rows have no author in the CSV. Fix them in OpenAudible and re-export. |
 | A row is missing from the library | The CSV row could not be read. The Library page says how many rows it skipped, and why, above the table. |
@@ -353,12 +353,12 @@ docker run -d \
   --name openaudible-bookorganizer \
   -e CSV_PATH=/data/books.csv \
   -e SOURCE_PATH=/source \
-  -e DESTINATION_PATH=/destination \
+  -e DESTINATION_PATH=/destination/nas/Audiobooks \
   -e SORT_INTERVAL=6h \
   -p 5123:5123 \
   -v ./data:/data \
   -v /path/to/your/audiobooks:/source \
-  --mount type=bind,src=/path/to/your/organized,dst=/destination \
+  --mount type=bind,src=/mnt,dst=/destination,bind-propagation=rslave \
   --restart unless-stopped \
   ghcr.io/orbitalteapot/openaudible-bookorganizer:latest
 ```
@@ -372,7 +372,7 @@ services:
     environment:
       CSV_PATH: /data/books.csv
       SOURCE_PATH: /source
-      DESTINATION_PATH: /destination
+      DESTINATION_PATH: /destination/nas/Audiobooks
       SORT_INTERVAL: 6h
     ports:
       - "5123:5123"
@@ -380,9 +380,10 @@ services:
       - ./data:/data
       - /path/to/your/audiobooks:/source
       - type: bind
-        source: /path/to/your/organized
+        source: /mnt
         target: /destination
         bind:
+          propagation: rslave
           create_host_path: false
     restart: unless-stopped
 ```
@@ -391,13 +392,24 @@ services:
 docker compose up -d
 ```
 
-The destination is mounted with `--mount` (in Compose, the long `type: bind` form) rather than
-`-v`, because `-v` quietly creates a host folder that is missing as an empty one. With the drive or
-NAS share the library lives on not mounted yet after a reboot, or a USB disk unplugged, the
-container would start with an empty folder on the system disk as its destination, and a sort would
-copy the whole library there, hidden under the mount point once the drive is back. `--mount`
-refuses to start the container until the folder is there, and `restart: unless-stopped` keeps
-trying.
+Here the library is the `Audiobooks` folder on a NAS share mounted at `/mnt/nas` on the host.
+Replace `/mnt` with the host folder your drive or share is mounted *in* (`/media/you` for a USB disk
+mounted at `/media/you/Disk`), not the mount point itself, and `nas/Audiobooks` with the library
+folder's path inside that. If the library is on a disk that is always there, bind its parent
+folder the same way.
+
+The destination is bound this way, rather than straight to the library folder, because Docker
+starts a container once. If a bound folder is missing at that moment (the share is mounted after
+Docker at boot, or the USB disk is unplugged when the container restarts), the start fails, and
+`restart: unless-stopped` never tries a failed start again: the organizer would stay stopped, with
+nothing to tell you, until you start it by hand. The folder a drive is mounted in is always there,
+so the container always starts, and `bind-propagation=rslave` (Compose: `propagation: rslave`) passes
+the drive in whenever the host mounts it. Until then the library folder is missing inside the
+container: the Sort page says so, sorts never create it, and automatic sorts retry every 15 minutes.
+It is `--mount` (in Compose, the long `type: bind` form) rather than `-v`, because `-v` quietly
+creates a host folder that is missing as an empty one on the system disk. Propagation works only with
+Docker Engine on Linux: with Docker Desktop, run `docker restart openaudible-bookorganizer` after
+connecting a drive the container started without.
 
 The [docker-compose.yml](docker-compose.yml) in this repository is the same service, built from
 source rather than pulled, with every setting explained in its comments.
@@ -461,9 +473,10 @@ page, the problems list for every run, and any ignored setting as a warning at t
 | A path says *"not found inside the container"* | The volume for it is missing from `docker-compose.yml` or the `docker run` command, or the variable does not match where it is mounted. The startup log lists what the container sees. |
 | Everything is **Not found** | `SOURCE_PATH` is mounted somewhere other than where the books are. |
 | *"The destination folder cannot be the source folder or a folder inside it."* | Copying a folder into itself never terminates cleanly, so it is refused. Mount them separately. |
-| *"The destination folder … was not found inside the container"* | The volume behind `DESTINATION_PATH` is not mounted, or the host folder is missing. The container never creates it, so a forgotten mount cannot fill the container with a copy of your library. Automatic sorts retry every 15 minutes until it is back. |
-| *"The destination folder … no longer holds the .openaudible-organizer file…"* | The folder is there but empty of what earlier sorts left in it: usually the drive or share behind it is not mounted, and Docker (with `-v`) or the host's empty mount point stands in for it. Automatic sorts wait, retrying every 15 minutes, rather than copy the library onto the system disk. Mount it, and switch the destination to `--mount` (see above). If you emptied the folder on purpose, press **Start sorting** once and choose *Sort into it anyway*. |
-| *"The folder … does not exist inside /destination"* | The mount works, but the subfolder `DESTINATION_PATH` names (such as `/destination/Audiobooks`) has not been made yet. Create it on the host, in the folder mapped to `/destination`. |
+| *"The destination folder … was not found inside the container"* | The volume behind `DESTINATION_PATH` is not mounted, or the drive or share the library is on is not mounted on the host yet. The container never creates it, so a forgotten mount cannot fill the container with a copy of your library. Automatic sorts retry every 15 minutes until it is back; for a drive that is mounted late, bind the folder it is mounted in with `rslave` propagation (see above), or the drive never reaches the container. |
+| The container is *Exited* after a reboot, or after a drive was unplugged, and the page does not load | A folder bound with `--mount` was missing when Docker started the container, and Docker does not retry a start that failed. Mount the drive, run `docker start openaudible-bookorganizer`, and bind the folder the drive is mounted in instead of the drive's own folder (see above) so it cannot happen again. |
+| *"The destination folder … no longer holds the .openaudible-organizer file…"* | The folder is there but empty of what earlier sorts left in it: usually the drive or share behind it is not mounted, and Docker (with `-v`) or the host's empty mount point stands in for it. Automatic sorts wait, retrying every 15 minutes, rather than copy the library onto the system disk. Mount it, and bind the destination as shown above. If you emptied the folder on purpose, press **Start sorting** once and choose *Sort into it anyway*. |
+| *"The folder … does not exist inside /destination"* | The mount works, but the subfolder `DESTINATION_PATH` names (such as `/destination/nas/Audiobooks`) is not there: the drive or share it is on is not mounted on the host yet (automatic sorts retry every 15 minutes), or the folder has not been made. Mount the drive, or create the folder on the host, in the folder mapped to `/destination`. |
 | *"Cannot write to the destination folder"* | The container's user cannot write to the mounted folder. Check the host folder's permissions. |
 | Sorted books cannot be renamed or deleted over SMB or by another app | The container ran as root, so it owns what it sorted. Run it as your own user (see above) and, once, `chown -R` the destination folder on the host back to you. |
 | A warning at the top of the page, such as ``SORT_INTERVAL="6x" was ignored`` | The value could not be read. Use something like `6h`, `12h` or `1d`, or `off`. |

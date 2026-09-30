@@ -10,6 +10,12 @@ const START_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 500;
 // Short, because these requests sit between the user and a window closing or the app quitting.
 const REQUEST_TIMEOUT_MS = 3_000;
+// How long to wait before each restart of a backend that exited on its own: running out of memory,
+// ended in Task Manager, or a copy that just quit still letting go of the settings file. Once these
+// are used up it is left stopped, and the user is told.
+const RESTART_DELAYS_MS = [1_000, 5_000, 15_000];
+// A backend that ran this long before it exited was working: it gets every restart again.
+const STABLE_RUN_MS = 60_000;
 // What the backend exits with when another copy of it still holds the settings file (SettingsFileLock).
 const SETTINGS_IN_USE_EXIT_CODE = 75;
 // The Docker image's settings, which the backend reads from its environment (ServerConfig). They are
@@ -30,6 +36,12 @@ let baseUrl = null;
 let child = null;
 let failure = null; // plain-language reason once the backend has failed to start or has stopped
 let stopping = false;
+// Restarts since the backend last ran for STABLE_RUN_MS, and when the current one was started.
+let restarts = 0;
+let launchedAt = 0;
+let restartTimer = null;
+// Nothing will start it again: the restarts are used up, or it could not be started at all.
+let stoppedForGood = false;
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -67,6 +79,7 @@ function backendCommand(packaged) {
   const exe = packagedExecutable();
   if (!fs.existsSync(exe)) {
     failure = `Part of the app is missing from the installation. Reinstall the app. (Missing: ${exe})`;
+    stoppedForGood = true;
     return null;
   }
 
@@ -80,17 +93,31 @@ function backendCommand(packaged) {
   return { file: exe, args: [] };
 }
 
-function attachProcessLogging(proc, onUnexpectedExit) {
+/**
+ * Leaves the backend stopped and tells `hooks.onStoppedForGood`, unless the app is quitting anyway.
+ */
+function giveUp(hooks) {
+  stoppedForGood = true;
+  if (!stopping) hooks.onStoppedForGood(failure);
+}
+
+function attachProcessLogging(proc, hooks) {
   proc.stdout?.on('data', (data) => console.log(`[API] ${data.toString().trim()}`));
   proc.stderr?.on('data', (data) => console.error(`[API] ${data.toString().trim()}`));
 
   proc.on('error', (err) => {
     console.error('[API] Failed to start backend:', err.message);
     failure = `Part of the app could not be started. Restart the app; if this keeps happening, reinstall it. (${err.message})`;
+    // Never started (no program to run), so there is no exit to wait for, and trying again finds the same.
+    if (proc.pid === undefined) {
+      child = null;
+      giveUp(hooks);
+    }
   });
 
-  // Without this, a backend that dies mid-session leaves the UI waiting forever on requests
-  // that will never be answered.
+  // Without this, a backend that dies mid-session leaves the UI waiting forever on requests that will
+  // never be answered, and automatic sorting stopped for the rest of the session: closing and
+  // opening the window again only shows the same window while the app keeps running in the tray.
   proc.on('exit', (code, signal) => {
     console.error(`[API] Backend exited (code ${code}, signal ${signal})`);
     failure ??=
@@ -98,8 +125,34 @@ function attachProcessLogging(proc, onUnexpectedExit) {
         ? 'Another copy of the Book Organizer is still running. Wait a moment, then open the app again.'
         : `It closed unexpectedly. Restart the app to continue. (Error code: ${code === null ? signal : code})`;
     child = null;
-    if (!stopping) onUnexpectedExit(failure);
+    if (stopping || stoppedForGood) return;
+
+    if (Date.now() - launchedAt >= STABLE_RUN_MS) restarts = 0;
+    if (restarts >= RESTART_DELAYS_MS.length) {
+      giveUp(hooks);
+      return;
+    }
+
+    const wait = RESTART_DELAYS_MS[restarts];
+    restarts += 1;
+    console.error(`[API] Starting the backend again in ${wait} ms (restart ${restarts} of ${RESTART_DELAYS_MS.length})`);
+    restartTimer = setTimeout(() => restart(hooks), wait);
   });
+}
+
+/** Starts the backend again, on a new port: the old one may have been taken since. */
+async function restart(hooks) {
+  restartTimer = null;
+  if (stopping) return;
+
+  failure = null;
+  const url = await launch(hooks);
+  if (stopping) return;
+  if (url && child) {
+    hooks.onRestarted(url);
+  } else {
+    giveUp(hooks);
+  }
 }
 
 /** This process's environment, without the Docker image's settings (see CONTAINER_ONLY_VARIABLES). */
@@ -114,22 +167,33 @@ function desktopEnvironment() {
  * Starts the backend on 127.0.0.1 and returns its URL. It keeps its settings in `settingsPath`.
  * In a development build, OABO_BACKEND_URL points the app at a backend the developer runs
  * themselves (say, under a debugger) instead of starting one.
+ *
+ * A backend that exits on its own is started again, on a new port, a few times (see
+ * RESTART_DELAYS_MS): `onRestarted(url)` is called with each new URL, and `onStoppedForGood(reason)`
+ * once it is left stopped.
  */
-async function start({ packaged, settingsPath, onUnexpectedExit }) {
+async function start({ packaged, settingsPath, onRestarted, onStoppedForGood }) {
   if (!packaged && process.env.OABO_BACKEND_URL) {
     baseUrl = process.env.OABO_BACKEND_URL.replace(/\/+$/, '');
     console.log(`[API] Using the backend at ${baseUrl} (OABO_BACKEND_URL)`);
     return baseUrl;
   }
 
+  return launch({ packaged, settingsPath, onRestarted, onStoppedForGood });
+}
+
+/** Spawns the backend on a free port; returns its URL, or null (with `failure` set) when there is none. */
+async function launch(hooks) {
+  launchedAt = Date.now();
   try {
     baseUrl = `http://127.0.0.1:${await findFreePort()}`;
   } catch (err) {
     failure = `No free network port was available on this computer. Restart the app. (${err.message})`;
+    stoppedForGood = true;
     return null;
   }
 
-  const command = backendCommand(packaged);
+  const command = backendCommand(hooks.packaged);
   if (!command) return baseUrl;
 
   console.log(`[API] Starting backend on ${baseUrl}: ${command.file} ${command.args.join(' ')}`);
@@ -143,11 +207,11 @@ async function start({ packaged, settingsPath, onUnexpectedExit }) {
     env: {
       ...desktopEnvironment(),
       ASPNETCORE_URLS: baseUrl,
-      OABO_SETTINGS_PATH: settingsPath,
+      OABO_SETTINGS_PATH: hooks.settingsPath,
       OABO_PARENT_PID: String(process.pid),
     },
   });
-  attachProcessLogging(child, onUnexpectedExit);
+  attachProcessLogging(child, hooks);
   return baseUrl;
 }
 
@@ -169,15 +233,17 @@ async function request(pathname, method = 'GET', body = undefined) {
   }
 }
 
-/** Resolves true once the backend answers, false if it died or took too long. */
+/**
+ * Resolves true once the backend answers, false once it is stopped for good or the copy started last
+ * has taken too long. One that exits is waited for through its restarts.
+ */
 async function waitUntilReady() {
-  const deadline = Date.now() + START_TIMEOUT_MS;
-
-  while (Date.now() < deadline) {
+  const calledAt = Date.now();
+  while (Date.now() < Math.max(calledAt, launchedAt) + START_TIMEOUT_MS) {
     if (await request('/api/health')) return true;
 
-    // No point waiting out the full timeout for a process that has already died.
-    if (failure) return false;
+    // No point waiting out the full timeout for a process nothing will start again.
+    if (stoppedForGood) return false;
 
     await delay(POLL_INTERVAL_MS);
   }
@@ -206,6 +272,7 @@ async function cancelSortAndWait(timeoutMs) {
 /** Stops the backend. On macOS and Linux it gets SIGTERM, which it handles by cancelling its run. */
 function stop() {
   stopping = true;
+  clearTimeout(restartTimer);
   if (!child) return;
 
   const proc = child;
@@ -232,4 +299,5 @@ module.exports = {
   stop,
   url: () => baseUrl,
   failure: () => failure,
+  stoppedForGood: () => stoppedForGood,
 };

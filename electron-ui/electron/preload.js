@@ -1,9 +1,8 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-// main.js picks the backend's port at launch and passes its URL as this argument.
-const BACKEND_URL_ARG = '--backend-url=';
-const backendUrl =
-  process.argv.find((arg) => arg.startsWith(BACKEND_URL_ARG))?.slice(BACKEND_URL_ARG.length) ?? '';
+// main.js picks the backend's port at launch, and a new one whenever it restarts the backend, when
+// it loads the page again. Asked for as the page loads, so a reload always gets the current one.
+const backendUrl = ipcRenderer.sendSync('backend:url');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   /** Where the backend listens, e.g. "http://127.0.0.1:49731". Empty if it could not be started. */
@@ -25,6 +24,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event, stays) => handler(stays);
     ipcRenderer.on('window:stays-in-background-changed', listener);
     return () => ipcRenderer.removeListener('window:stays-in-background-changed', listener);
+  },
+
+  /**
+   * Why the organizer has stopped with nothing left to start it again (it kept exiting, or could not
+   * be started at all), or null while it runs or is being restarted.
+   */
+  backendStopped: () => ipcRenderer.invoke('backend:stopped'),
+
+  /** Fires with that reason once it happens. Returns an unsubscribe. */
+  onBackendStopped: (handler) => {
+    const listener = (_event, reason) => handler(reason);
+    ipcRenderer.on('backend:stopped', listener);
+    return () => ipcRenderer.removeListener('backend:stopped', listener);
   },
 
   /** Quits the app, asking first when a sort is running, as closing the window does. */

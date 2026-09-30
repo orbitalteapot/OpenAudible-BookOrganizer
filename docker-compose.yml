@@ -10,10 +10,11 @@ services:
       CSV_PATH: /data/books.csv
       # Path inside the container where source audiobook files are mounted
       SOURCE_PATH: /source
-      # Path inside the container where sorted books are written. It must already exist: sorts
-      # never create it here, so a forgotten mount or an unmounted drive is reported instead of
-      # the library being copied into the container.
-      DESTINATION_PATH: /destination
+      # Path inside the container where sorted books are written: the library folder, inside the
+      # folder mounted at /destination below (here, "Audiobooks" on a share mounted at /mnt/nas on the
+      # host). It must already exist: sorts never create it here, so a forgotten mount or an
+      # unmounted drive is reported instead of the library being copied into the container.
+      DESTINATION_PATH: /destination/nas/Audiobooks
       # Update check used until one is chosen on the Sort page: "quick" (size and sampled contents)
       # or "full" (every byte). The page's choice is saved in /data/settings.json and wins after that.
       COMPARISON_MODE: quick
@@ -40,16 +41,22 @@ services:
       # Replace the left-hand side with your actual audiobook source directory. It is only read.
       # Without this line the Sort page shows the source folder as not found inside the container.
       - /path/to/your/audiobooks:/source
-      # Replace the source path with the directory you want books sorted into. Without this entry
+      # Replace the source path with the host folder the drive or NAS share holding your library is
+      # mounted in (/mnt for a share mounted at /mnt/nas, /media/you for a USB disk), not the mount
+      # point itself, and point DESTINATION_PATH at the library folder inside it. Without this entry
       # nothing is sorted: the Sort page shows the destination folder as not found, rather than
-      # copying the library somewhere inside the container where it would be lost. Written out in
-      # full because the short "host:container" form creates a host folder that is missing as an
-      # empty one: with the drive or NAS share it lives on not mounted (after a reboot, or with a USB
-      # disk unplugged), the library would be copied onto the system disk instead. This form refuses
-      # to start the container until the folder is there.
+      # copying the library somewhere inside the container where it would be lost.
+      # A folder that is always there, because Docker starts a container once: had the bind named
+      # the library folder, a share mounted after Docker at boot (or a disk unplugged when the
+      # container restarts) would fail that start, and "restart" never tries a failed start again,
+      # so the organizer would stay stopped. "rslave" passes the drive in once the host mounts it;
+      # until then the library folder is missing, and automatic sorts retry every 15 minutes.
+      # Written out in full because the short "host:container" form creates a host folder that is
+      # missing as an empty one on the system disk.
       - type: bind
-        source: /path/to/your/organized
+        source: /mnt
         target: /destination
         bind:
+          propagation: rslave
           create_host_path: false
     restart: unless-stopped
