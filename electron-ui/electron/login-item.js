@@ -22,9 +22,17 @@ function quoteDesktopExecArg(arg) {
   return `"${arg.replace(/(["`$\\])/g, '\\$1')}"`.replace(/\\/g, '\\\\');
 }
 
-/** What the sign-in entry starts. An AppImage runs from a mount point that changes every launch; APPIMAGE is the file itself. */
+/**
+ * What the sign-in entry starts. An AppImage runs from a mount point (APPDIR) that changes every
+ * launch; APPIMAGE is the file itself. Both are inherited by everything an AppImage starts, so they
+ * are only this app's when it runs from inside that mount: a .deb install started from another
+ * AppImage's terminal would otherwise register that other app to start at sign-in.
+ */
 function loginExecutable() {
-  return process.env.APPIMAGE || process.execPath;
+  const { APPIMAGE, APPDIR } = process.env;
+  const relative = APPDIR ? path.relative(APPDIR, process.execPath) : '';
+  const runsFromAppImage = Boolean(APPIMAGE && relative && !relative.startsWith('..') && !path.isAbsolute(relative));
+  return runsFromAppImage ? APPIMAGE : process.execPath;
 }
 
 /**

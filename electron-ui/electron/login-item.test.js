@@ -21,12 +21,17 @@ describe('setOpenAtLogin', () => {
   let setOpenAtLogin;
   const platform = process.platform;
   const appImage = process.env.APPIMAGE;
+  const appDir = process.env.APPDIR;
+  const execPath = process.execPath;
 
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'login-item-'));
     autostartFile = path.join(root, 'appData', 'autostart', 'openaudible-book-organizer.desktop');
     Object.defineProperty(process, 'platform', { value: 'linux' });
+    // What an AppImage's runtime sets up: the file, the folder it is mounted on, and the app inside.
     process.env.APPIMAGE = '/opt/Organizer.AppImage';
+    process.env.APPDIR = '/tmp/.mount_Organizer';
+    Object.defineProperty(process, 'execPath', { value: '/tmp/.mount_Organizer/openaudible-book-organizer', configurable: true, writable: true });
     ({ setOpenAtLogin } = loadLoginItem({
       isPackaged: true,
       getPath: (name) => path.join(root, name),
@@ -39,6 +44,9 @@ describe('setOpenAtLogin', () => {
     Object.defineProperty(process, 'platform', { value: platform });
     if (appImage === undefined) delete process.env.APPIMAGE;
     else process.env.APPIMAGE = appImage;
+    if (appDir === undefined) delete process.env.APPDIR;
+    else process.env.APPDIR = appDir;
+    Object.defineProperty(process, 'execPath', { value: execPath, configurable: true, writable: true });
     fs.rmSync(root, { recursive: true, force: true });
   });
 
@@ -63,5 +71,16 @@ describe('setOpenAtLogin', () => {
     setOpenAtLogin(true);
 
     expect(fs.readFileSync(autostartFile, 'utf8')).toContain('Exec="/home/me/Apps/Organizer.AppImage" --hidden');
+  });
+
+  it('registers the app itself, not another AppImage it was started from', () => {
+    // Installed from the .deb, started in the terminal of an editor that runs as an AppImage.
+    process.env.APPIMAGE = '/home/me/Apps/Cursor.AppImage';
+    process.env.APPDIR = '/tmp/.mount_Cursor';
+    Object.defineProperty(process, 'execPath', { value: '/opt/Organizer/openaudible-book-organizer', configurable: true, writable: true });
+
+    setOpenAtLogin(true);
+
+    expect(fs.readFileSync(autostartFile, 'utf8')).toContain('Exec="/opt/Organizer/openaudible-book-organizer" --hidden');
   });
 });

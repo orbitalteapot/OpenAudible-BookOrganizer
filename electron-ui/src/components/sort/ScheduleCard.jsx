@@ -40,11 +40,16 @@ function describeFailedAttempt(lastRun) {
 
 function ScheduleFacts({ isOn, schedule, runStatus }) {
   const { nextRunUtc, lastRun, retrying } = schedule;
-  const runningNow = isRunning(runStatus) && runStatus.trigger === 'scheduled';
+  const sortRunning = isRunning(runStatus);
+  const runningNow = sortRunning && runStatus.trigger === 'scheduled';
 
   const facts = [];
   if (runningNow) {
     facts.push(['Now', 'An automatic sort is running.']);
+  } else if (isOn && nextRunUtc && sortRunning && new Date(nextRunUtc) <= new Date()) {
+    // A slot that comes due during a sort started by hand waits for that sort and counts as done
+    // when it finishes: "Now" would promise a second sort that never comes.
+    facts.push(['Next sort', 'Covered by the sort that is running.']);
   } else if (isOn && nextRunUtc) {
     facts.push(
       retrying

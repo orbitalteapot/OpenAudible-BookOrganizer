@@ -4,7 +4,8 @@ using AudioFileSorter.Model;
 namespace ManagerApi.Services;
 
 /// <summary>
-/// Whether each path can be seen right now: "ok", "notSet" or "notFound". Only looks, never writes,
+/// Whether each path can be seen right now: "ok", "notSet" or "notFound", or "unmounted" for a
+/// destination that no longer holds the marker earlier sorts left in it. Only looks, never writes,
 /// so a page can ask as often as it likes; whether the destination can be written is found out when
 /// a sort starts or automatic sorting is turned on.
 /// </summary>
@@ -34,6 +35,7 @@ public sealed record PathStatus(string Csv, string Source, string Destination)
     {
         null => "ok",
         SortPathProblemCode.NotSet => "notSet",
+        SortPathProblemCode.DestinationUnmounted => "unmounted",
         _ => "notFound"
     };
 }
@@ -45,14 +47,15 @@ public sealed record PathStatus(string Csv, string Source, string Destination)
 /// </summary>
 public sealed record PathProblems(SortPathProblem? Csv, SortPathProblem? Source, SortPathProblem? Destination)
 {
-    public static PathProblems For(AppSettings settings)
+    public static PathProblems For(AppSettings settings, SettingsService service)
     {
         return new PathProblems(
             SortPathValidator.ValidateCsv(settings.CsvPath),
             SortPathValidator.ValidateSource(settings.SourcePath),
             // No overlap check here: that is a problem with the pair, not with this folder, and saving
-            // or starting refuses it with its own message.
-            SortPathValidator.InspectDestination(null, settings.DestinationPath));
+            // or starting refuses it with its own message. The marker is, whether or not automatic
+            // sorting is on: a person about to press Start sorting needs the warning as much.
+            SortPathValidator.InspectDestination(null, settings.DestinationPath) ?? service.CheckUnattended(settings));
     }
 }
 

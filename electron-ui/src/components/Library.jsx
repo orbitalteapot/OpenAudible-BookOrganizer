@@ -3,7 +3,8 @@ import { BookOpen, FileUp, RefreshCw, Search } from 'lucide-react';
 import { isUnanswered } from '../api';
 import { choosePath } from '../desktop';
 import { useDebounced, useFocusFallback, useLatest } from '../hooks';
-import { CSV_FIELD, describePath } from '../paths';
+import { CSV_FIELD, describePath, RUN_ACTIVE_PATH_REASON } from '../paths';
+import { pluralBooks } from '../format';
 import { compareBooks, filterBooks, SORT_LABELS } from '../sorting';
 import Button from './ui/Button';
 import Disclosure from './ui/Disclosure';
@@ -35,9 +36,10 @@ function ImportNotice({ skippedRows, warnings }) {
 
 /**
  * Reload, and on the desktop "Choose export…". The browser build reads the export the server names.
- * `buttonProps` go on both buttons.
+ * `buttonProps` go on both buttons. While a sort runs the export can't be changed, as on the Folders
+ * card: the run goes on with the old one, and its counts would sit beside the new one's books.
  */
-function LibraryActions({ library, isElectron, onChoose, csvPath, buttonProps }) {
+function LibraryActions({ library, isElectron, onChoose, csvPath, runActive, buttonProps }) {
   return (
     <>
       {csvPath && (
@@ -46,12 +48,23 @@ function LibraryActions({ library, isElectron, onChoose, csvPath, buttonProps })
         </Button>
       )}
       {isElectron && (
-        <Button variant={csvPath ? 'secondary' : 'primary'} icon={FileUp} onClick={onChoose} {...buttonProps}>
+        <Button
+          variant={csvPath ? 'secondary' : 'primary'}
+          icon={FileUp}
+          disabledReason={runActive ? RUN_ACTIVE_PATH_REASON : null}
+          onClick={onChoose}
+          {...buttonProps}
+        >
           Choose export…
         </Button>
       )}
     </>
   );
+}
+
+/** "1 audiobook", "1,204 audiobooks". */
+function audiobooks(count) {
+  return `${count.toLocaleString()} audiobook${count === 1 ? '' : 's'}`;
 }
 
 /** What to show before there are books: why there are none, and what to do about it. */
@@ -75,7 +88,7 @@ function emptyStateText({ library, csvPath, isElectron }) {
  * on its own once the settings arrive; Reload reads it again, and on the desktop "Choose export…"
  * picks a different one, which is then saved for both pages.
  */
-function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
+function LibraryView({ library, settings, update, fieldErrors, isElectron, runActive }) {
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState({ field: 'title', dir: 'asc' });
   // The last "Choose export…" refusal (`error`), when that is not about the export itself: saving a new
@@ -110,8 +123,11 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
       : library.error;
 
   // The empty page's buttons go when the books arrive; the search field is where the table starts.
+  // The header's go while a different export is read, and its heading holds focus until then.
   const searchRef = useRef(null);
+  const emptyTitleRef = useRef(null);
   const emptyActionFocus = useFocusFallback(books.length > 0, searchRef);
+  const headerActionFocus = useFocusFallback(books.length === 0, emptyTitleRef);
 
   const handleChoose = useCallback(async () => {
     const path = await choosePath(CSV_FIELD, csvPath);
@@ -153,8 +169,8 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
     debouncedSearch.trim()
       ? rows.length === 0
         ? `No books match ${debouncedSearch.trim()}`
-        : `${rows.length.toLocaleString()} of ${books.length.toLocaleString()} books match ${debouncedSearch.trim()}`
-      : `${books.length.toLocaleString()} books`,
+        : `${rows.length.toLocaleString()} of ${pluralBooks(books.length)} match ${debouncedSearch.trim()}`
+      : pluralBooks(books.length),
     `sorted by ${sortLabel}, ${sort.dir === 'asc' ? 'ascending' : 'descending'}`,
   ].join(', ');
 
@@ -162,13 +178,14 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
     const { title, description } = emptyStateText({ library, csvPath, isElectron });
 
     return (
-      <EmptyState icon={BookOpen} title={title} description={description}>
+      <EmptyState icon={BookOpen} title={title} titleRef={emptyTitleRef} titleProps={emptyActionFocus} description={description}>
         <div className="flex flex-wrap justify-center gap-2">
           <LibraryActions
             library={library}
             isElectron={isElectron}
             onChoose={handleChoose}
             csvPath={csvPath}
+            runActive={runActive}
             buttonProps={emptyActionFocus}
           />
         </div>
@@ -185,8 +202,8 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
           <h1 className="text-xl font-semibold tracking-tight text-fg">Library</h1>
           <p className="tabular text-xs text-fg-muted">
             {rows.length === books.length
-              ? `${books.length.toLocaleString()} audiobooks`
-              : `${rows.length.toLocaleString()} of ${books.length.toLocaleString()} audiobooks`}
+              ? audiobooks(books.length)
+              : `${rows.length.toLocaleString()} of ${audiobooks(books.length)}`}
           </p>
           {/* Cut from the start, not the end: the file name is the part that says which export this is.
               The isolate keeps the path itself left to right inside the right-to-left box. */}
@@ -206,7 +223,14 @@ function LibraryView({ library, settings, update, fieldErrors, isElectron }) {
             value={search}
             onChange={(event) => setSearch(event.target.value)}
           />
-          <LibraryActions library={library} isElectron={isElectron} onChoose={handleChoose} csvPath={csvPath} />
+          <LibraryActions
+            library={library}
+            isElectron={isElectron}
+            onChoose={handleChoose}
+            csvPath={csvPath}
+            runActive={runActive}
+            buttonProps={headerActionFocus}
+          />
         </div>
       </div>
 

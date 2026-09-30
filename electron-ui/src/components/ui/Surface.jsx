@@ -63,7 +63,11 @@ export function Banner({ tone = 'critical', live = true, children, className = '
 }
 
 /** Centred placeholder for a view with nothing in it yet. */
-export function EmptyState({ icon: Icon, title, description, children }) {
+/**
+ * What a page shows before it has anything to show. `titleRef` makes the heading a place focus can be
+ * moved to (not a Tab stop), and `titleProps` go on it, such as a focus fallback's.
+ */
+export function EmptyState({ icon: Icon, title, titleRef, titleProps, description, children }) {
   return (
     <div className="flex flex-1 items-center justify-center p-8">
       <div className="max-w-sm text-center">
@@ -72,7 +76,9 @@ export function EmptyState({ icon: Icon, title, description, children }) {
             <Icon size={22} className="text-fg-muted" aria-hidden="true" />
           </div>
         )}
-        <h2 className="text-base font-semibold text-fg">{title}</h2>
+        <h2 ref={titleRef} tabIndex={titleRef ? -1 : undefined} className="text-base font-semibold text-fg" {...titleProps}>
+          {title}
+        </h2>
         {description && <p className="mx-auto mt-2 text-sm leading-relaxed text-fg-muted">{description}</p>}
         {children && <div className="mt-6 flex flex-col items-center gap-3">{children}</div>}
       </div>

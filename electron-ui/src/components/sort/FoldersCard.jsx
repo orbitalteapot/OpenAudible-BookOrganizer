@@ -1,6 +1,6 @@
 import { FileSpreadsheet, FolderOpen, FolderOutput } from 'lucide-react';
 import { choosePath } from '../../desktop';
-import { describePath, PATH_FIELDS } from '../../paths';
+import { describePath, PATH_FIELDS, RUN_ACTIVE_PATH_REASON } from '../../paths';
 import Button from '../ui/Button';
 import { Field, PathInput } from '../ui/Field';
 import StatusDot from '../ui/StatusDot';
@@ -11,7 +11,7 @@ const ICONS = { csvPath: FileSpreadsheet, sourcePath: FolderOpen, destinationPat
 /** Why a path cannot be changed right now, or null when it can. */
 function browseBlockedReason({ variable }, locked, runActive) {
   if (locked) return `Set by the server's ${variable} setting.`;
-  if (runActive) return "Folders can't be changed while a sort is running.";
+  if (runActive) return RUN_ACTIVE_PATH_REASON;
   return null;
 }
 

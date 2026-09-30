@@ -155,10 +155,11 @@ export function getBooks() {
 
 /**
  * Starts a sort with the saved settings. `comparisonMode` overrides the saved update check for this
- * run only; `createDestination` is sent once the user has agreed to create a missing destination.
+ * run only; `createDestination` is sent once the user has agreed to create a missing destination, and
+ * `confirmUnmounted` once they have agreed to sort into one that has lost the file earlier sorts left.
  */
-export function startSort({ comparisonMode, createDestination = false } = {}) {
-  return request('/api/sort/start', { method: 'POST', body: { comparisonMode, createDestination } });
+export function startSort({ comparisonMode, createDestination = false, confirmUnmounted = false } = {}) {
+  return request('/api/sort/start', { method: 'POST', body: { comparisonMode, createDestination, confirmUnmounted } });
 }
 
 /** The current or most recent sort, however it was started. */

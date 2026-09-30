@@ -106,7 +106,7 @@ public static class SortPathValidator
                 $"The destination folder {destinationPath} no longer holds the {MarkerFileName} file earlier sorts left in it, " +
                 "as happens when the drive or share it is on is not mounted and an empty folder stands in for it. " +
                 "Automatic sorts wait for it rather than copy the whole library there. " +
-                "If the folder was emptied on purpose, press Start sorting to sort into it again.");
+                "If the folder was emptied on purpose, press Start sorting and confirm to sort into it again.");
     }
 
     /// <summary>Leaves the marker (see <see cref="MarkerFileName"/>) in the destination, unless it is there already.</summary>

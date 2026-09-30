@@ -7,7 +7,7 @@ import SortPage from './components/SortPage';
 import RunAnnouncer from './components/RunAnnouncer';
 import AppNotices from './components/AppNotices';
 import { Banner, EmptyState } from './components/ui/Surface';
-import { useIsElectron, useLibrary, useRunStatus, useSchedule, useSettings, useTheme } from './hooks';
+import { isRunning, useIsElectron, useLibrary, useRunStatus, useSchedule, useSettings, useTheme } from './hooks';
 
 // How often the folder statuses (and with them the schedule) are asked for again.
 const STATUS_REFRESH_MS = 30_000;
@@ -130,6 +130,7 @@ export default function App() {
               update={settingsState.update}
               fieldErrors={settingsState.fieldErrors}
               isElectron={isElectron}
+              runActive={isRunning(run.status)}
             />
           ) : (
             <SortPage

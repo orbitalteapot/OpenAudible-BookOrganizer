@@ -240,8 +240,9 @@ public static class PathSanitizer
     private static string TrimSegment(string value)
     {
         // Windows silently drops trailing dots and spaces, which turns "Vol. 2 ." into a name
-        // that never matches on a later run.
-        return value.Trim().TrimEnd('.', ' ').Trim();
+        // that never matches on a later run. A leading dot ("...And Ladies of the Club") makes a
+        // hidden folder on Linux, macOS and NAS shares, which Audiobookshelf skips entirely.
+        return value.Trim().TrimStart('.', ' ').TrimEnd('.', ' ').Trim();
     }
 
     private static string CollapseWhitespace(string value)

@@ -155,8 +155,11 @@ public class SortScheduleTests
         Assert.Contains(SortPathValidator.MarkerFileName, status.BlockedReason);
         Assert.Empty(workspace.DestinationFiles());
 
-        // A person who emptied it on purpose sorts once by hand, which marks it again.
-        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var manual));
+        // A person who emptied it on purpose sorts once by hand, which marks it again, once they have
+        // said so: Start sorting alone is refused like the automatic run.
+        var refused = Assert.Throws<SortPathException>(() => backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out _));
+        Assert.Equal(SortPathProblemCode.DestinationUnmounted, refused.Problem.Code);
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var manual, confirmUnmounted: true));
         Assert.Null((await manual).Error);
         Assert.Equal(20, workspace.DestinationFiles().Length);
         Assert.Null(scheduler.GetStatus().BlockedReason);
@@ -371,7 +374,7 @@ public class SortScheduleTests
         using var scheduler = backend.CreateScheduler();
 
         await scheduler.StartAsync(CancellationToken.None);
-        await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the manual run to start");
+        await WaitForSlotToJoin(backend);
         Assert.True(backend.Sort.CancelSort(appClosing));
         await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastRun is not null, "the slot to be recorded");
         await scheduler.StopAsync(CancellationToken.None);
@@ -382,6 +385,40 @@ public class SortScheduleTests
         Assert.True(SortSchedule.LastAttemptFailed(state));
         Assert.Null(state.LastSuccessUtc);
         Assert.Equal(Now.AddMinutes(15), scheduler.GetStatus().NextRunUtc);
+    }
+
+    [Fact]
+    public async Task Cancelling_a_manual_sort_a_slot_joined_long_ago_does_not_start_another_at_once()
+    {
+        using var workspace = new TempWorkspace();
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time);
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out _));
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var manual));
+        using var scheduler = backend.CreateScheduler();
+        await scheduler.StartAsync(CancellationToken.None);
+        await WaitForSlotToJoin(backend);
+
+        // Half an hour into the manual sort, the person cancels it.
+        time.Advance(TimeSpan.FromMinutes(30));
+        Assert.True(backend.Sort.CancelSort());
+        await manual;
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastRun is not null, "the slot to be recorded");
+        await Task.Delay(200);
+        await scheduler.StopAsync(CancellationToken.None);
+
+        // Timed from when the slot joined, the retry was already due and a new sort started at once.
+        Assert.Equal(RunTrigger.Manual, backend.Sort.GetStatus().Trigger);
+        Assert.Equal(Now.AddMinutes(30), backend.Settings.Schedule.LastAttemptUtc);
+        Assert.Equal(Now.AddMinutes(45), scheduler.GetStatus().NextRunUtc);
+    }
+
+    /// <summary>Waits until the scheduler, finding the manual sort running, has joined it.</summary>
+    private static Task WaitForSlotToJoin(TestBackend backend)
+    {
+        return TestBackend.WaitUntil(
+            () => backend.SchedulerLog.Messages.Any(message => message.Contains("waits for the sort already running")),
+            "the slot to join the manual sort");
     }
 
     [Fact]
@@ -495,7 +532,8 @@ public class SortScheduleTests
             CsvPath = workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"),
             SourcePath = workspace.Source,
             DestinationPath = destination,
-            ScheduleIntervalMinutes = 360
+            ScheduleIntervalMinutes = 360,
+            IsMappedFolder = folder => folder == workspace.Destination
         };
         using var backend = new TestBackend(config);
         using var scheduler = backend.CreateScheduler();
@@ -503,6 +541,42 @@ public class SortScheduleTests
         Assert.Equal(
             $"The folder Audiobooks does not exist inside {workspace.Destination}. Create it on the host (in the folder mapped to {workspace.Destination}), then try again.",
             scheduler.GetStatus().BlockedReason);
+    }
+
+    [Fact]
+    public void A_missing_mount_under_a_folder_the_image_already_has_is_blamed_on_the_mapping()
+    {
+        // The image has /mnt and /media of its own, with nothing mapped to them.
+        var config = new ServerConfig
+        {
+            CsvPath = "/data/books.csv",
+            SourcePath = "/media/audiobooks",
+            DestinationPath = "/mnt/organized",
+            IsMappedFolder = _ => false
+        };
+
+        Assert.Equal(
+            "The destination folder /mnt/organized was not found inside the container. Check the volume mapping for DESTINATION_PATH.",
+            config.Explain(new SortPathProblem(SortPathField.Destination, SortPathProblemCode.DestinationMissing, "")).Message);
+        Assert.Equal(
+            "The source folder /media/audiobooks was not found inside the container. Check the volume mapping for SOURCE_PATH.",
+            config.Explain(new SortPathProblem(SortPathField.Source, SortPathProblemCode.NotFound, "")).Message);
+    }
+
+    [Fact]
+    public void A_missing_source_is_never_one_to_create()
+    {
+        // An empty folder made on the host would leave every book "Not found".
+        using var workspace = new TempWorkspace();
+        var config = new ServerConfig
+        {
+            SourcePath = Path.Combine(workspace.Source, "Books"),
+            IsMappedFolder = _ => true
+        };
+
+        Assert.StartsWith(
+            "The source folder",
+            config.Explain(new SortPathProblem(SortPathField.Source, SortPathProblemCode.NotFound, "")).Message);
     }
 
     private static ScheduleState Succeeded(DateTime startedUtc) => new()

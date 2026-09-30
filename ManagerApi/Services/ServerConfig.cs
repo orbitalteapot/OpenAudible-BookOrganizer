@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using AudioFileSorter.Model;
 
 namespace ManagerApi.Services;
@@ -54,6 +55,12 @@ public sealed record ServerConfig
     public IReadOnlyList<string> Warnings { get; init; } = [];
 
     /// <summary>
+    /// Whether a folder lies on a volume mapped into the container rather than on the image's own
+    /// disk (see <see cref="IsOnMappedVolume"/>). Replaced in tests, which do not run in a container.
+    /// </summary>
+    internal Func<string, bool> IsMappedFolder { get; init; } = IsOnMappedVolume;
+
+    /// <summary>
     /// Setting any of the three paths fixes all of them: a container mounts its volumes where its
     /// variables say, and a path picked in the page would point somewhere the container cannot see.
     /// </summary>
@@ -95,8 +102,9 @@ public sealed record ServerConfig
             (SortPathProblemCode.NotSet, _) => $"{variable} is not set.",
             (SortPathProblemCode.NotFound, SortPathField.Csv) =>
                 $"The library export {CsvPath} was not found inside the container. Check that the folder holding it is mapped, and that {variable} names the file.",
+            // An empty source folder made on the host would not help: every book would be "Not found".
             (SortPathProblemCode.NotFound or SortPathProblemCode.DestinationMissing, SortPathField.Source) =>
-                MissingFolder("source", SourcePath!, variable),
+                MissingMount("source", SourcePath!, variable),
             (SortPathProblemCode.NotFound or SortPathProblemCode.DestinationMissing, SortPathField.Destination) =>
                 MissingFolder("destination", DestinationPath!, variable),
             _ => problem.Message
@@ -106,19 +114,53 @@ public sealed record ServerConfig
     }
 
     /// <summary>
-    /// A server-set folder that is not there. When the folder it sits in is (and is not the root,
-    /// which every container has), the mapping works and only the folder itself is missing, such as
-    /// an "Audiobooks" subfolder of the mount nobody has made yet. Sending that admin to check a
-    /// mapping that is fine leaves them stuck, with no Create folder button to press.
+    /// A server-set folder that is not there. When the folder it sits in is on a mapped volume, the
+    /// mapping works and only the folder itself is missing, such as an "Audiobooks" subfolder of the
+    /// mount nobody has made yet. Sending that admin to check a mapping that is fine leaves them
+    /// stuck, with no Create folder button to press. A parent that merely exists proves nothing: the
+    /// image already has /mnt, /media, /srv, /opt and /home, and nothing is mapped to them.
     /// </summary>
-    private static string MissingFolder(string noun, string path, string variable)
+    private string MissingFolder(string noun, string path, string variable)
     {
         var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(path));
-        var parentIsMounted = !string.IsNullOrEmpty(parent) && Path.GetPathRoot(parent) != parent && Directory.Exists(parent);
+        var parentIsMounted = !string.IsNullOrEmpty(parent) && Directory.Exists(parent) && IsMappedFolder(parent);
 
         return parentIsMounted
             ? $"The folder {Path.GetFileName(Path.TrimEndingDirectorySeparator(path))} does not exist inside {parent}. Create it on the host (in the folder mapped to {parent}), then try again."
-            : $"The {noun} folder {path} was not found inside the container. Check the volume mapping for {variable}.";
+            : MissingMount(noun, path, variable);
+    }
+
+    private static string MissingMount(string noun, string path, string variable)
+    {
+        return $"The {noun} folder {path} was not found inside the container. Check the volume mapping for {variable}.";
+    }
+
+    /// <summary>
+    /// Whether <paramref name="folder"/> is on a mount other than the container's root file system:
+    /// a volume or bind mount, as listed in /proc/self/mountinfo. False where that cannot be read,
+    /// which keeps the advice to check the mapping.
+    /// </summary>
+    private static bool IsOnMappedVolume(string folder)
+    {
+        string[] lines;
+        try
+        {
+            lines = File.ReadAllLines("/proc/self/mountinfo");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            return false;
+        }
+
+        var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        return lines
+            .Select(line => line.Split(' '))
+            .Where(fields => fields.Length > 4)
+            // The mount point, with spaces and other awkward characters written as octal escapes.
+            .Select(fields => Regex.Replace(
+                fields[4], @"\\([0-7]{3})", match => ((char)Convert.ToInt32(match.Groups[1].Value, 8)).ToString()))
+            .Any(mountPoint => mountPoint != "/" &&
+                               (full == mountPoint || full.StartsWith(mountPoint + "/", StringComparison.Ordinal)));
     }
 
     /// <summary>The variable that fixes <paramref name="field"/>, for messages that tell the user where to change it.</summary>

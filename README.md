@@ -255,10 +255,10 @@ again 15 minutes later until it works. If the schedule cannot run at all — the
 missing, say — the card says *"Automatic sorting can't run"* and why.
 
 Every sort that finishes leaves a small `.openaudible-organizer` file at the top of the destination.
-Automatic sorts refuse a folder that has lost it: that is what an empty mount point looks like while
-the drive or share meant to be mounted there is not, and sorting into it would copy the whole library
-onto the system disk. If you emptied the folder on purpose, press **Start sorting** once and automatic
-sorting carries on from there.
+Automatic sorts refuse a folder that has lost it, and **Start sorting** asks first: that is what an
+empty mount point looks like while the drive or share meant to be mounted there is not, and sorting
+into it would copy the whole library onto the system disk. If you emptied the folder on purpose, press
+**Start sorting** once, choose *Sort into it anyway*, and automatic sorting carries on from there.
 
 An automatic sort that comes due while you are sorting by hand waits for that sort instead of
 starting another. If you cancel it, or it fails, the automatic sort is tried again 15 minutes later.
@@ -300,7 +300,7 @@ operating system's setting and changes with it.
 | Books show as **Not found** and nothing is copied | The source folder does not contain the files named in the CSV. Check the source path, and re-export the CSV if you have moved files since. |
 | Books show as **Failed** | Open **Problems** under the counters: each book is listed with the reason, such as a full disk or a folder you cannot write to. |
 | *"The destination folder doesn't exist. Is the drive connected?"* | The drive or network share holding your library is not connected. Connect it and start again. |
-| *"The destination folder … no longer holds the .openaudible-organizer file…"* | Automatic sorting found the destination folder, but not the file earlier sorts left in it: usually the drive or share is not mounted, and the empty folder it is mounted on stands in for it. Mount it. If you emptied the folder on purpose, press **Start sorting** once. |
+| *"The destination folder … no longer holds the .openaudible-organizer file…"* | Automatic sorting found the destination folder, but not the file earlier sorts left in it: usually the drive or share is not mounted, and the empty folder it is mounted on stands in for it. Mount it. If you emptied the folder on purpose, press **Start sorting** once and choose *Sort into it anyway*. |
 | The destination says **Can't write to this folder** | You do not have permission to write there, or the drive is read-only. Pick another folder, or fix the permissions. |
 | **Start sorting** is greyed out: *"A sort is already running."* | A sort — possibly an automatic one — is still going. Follow it in the Progress card, or cancel it there. |
 | **Automatic sorting** is greyed out | Choose all three paths first; the card says which are missing. |
@@ -419,7 +419,7 @@ a restart or an image update.
 | --- | --- | --- | --- |
 | `CSV_PATH` | yes | — | The OpenAudible CSV export, inside the container. |
 | `SOURCE_PATH` | yes | — | Mounted folder holding your downloaded audiobooks. |
-| `DESTINATION_PATH` | yes | — | Mounted folder to write the organised library into. It must already exist: automatic sorts never create it. Every finished sort leaves a `.openaudible-organizer` file in it, and automatic sorts refuse the folder once that file is gone, so an empty folder standing in for an unmounted drive is reported rather than filled in. |
+| `DESTINATION_PATH` | yes | — | Mounted folder to write the organised library into. It must already exist: automatic sorts never create it. Every finished sort leaves a `.openaudible-organizer` file in it, and automatic sorts refuse the folder once that file is gone (Start sorting asks first), so an empty folder standing in for an unmounted drive is reported rather than filled in. |
 | `COMPARISON_MODE` | no | `quick` | Update check used until one is chosen on the Sort page: `quick` or `full`. Once chosen there, the page's choice is saved and wins. |
 | `SORT_INTERVAL` | no | off | Sort automatically, e.g. `6h`, `12h`, `1d` or `30m` (at least 15 minutes; a bare number is hours). A valid value fixes the schedule, and the Sort page shows it without letting it be changed. Leave it unset, or set `off`, to choose automatic sorting on the Sort page instead. A value that cannot be read is ignored, and the Sort page says so. |
 | `OABO_MAX_PARALLELISM` | no | cores ÷ 4, max 8 | How many books are copied at once at the **Normal** copy speed. The Sort page's **Gentle** copy speed always copies one at a time, which is the better choice for a network share or a spinning disk. |
@@ -462,7 +462,7 @@ page, the problems list for every run, and any ignored setting as a warning at t
 | Everything is **Not found** | `SOURCE_PATH` is mounted somewhere other than where the books are. |
 | *"The destination folder cannot be the source folder or a folder inside it."* | Copying a folder into itself never terminates cleanly, so it is refused. Mount them separately. |
 | *"The destination folder … was not found inside the container"* | The volume behind `DESTINATION_PATH` is not mounted, or the host folder is missing. The container never creates it, so a forgotten mount cannot fill the container with a copy of your library. Automatic sorts retry every 15 minutes until it is back. |
-| *"The destination folder … no longer holds the .openaudible-organizer file…"* | The folder is there but empty of what earlier sorts left in it: usually the drive or share behind it is not mounted, and Docker (with `-v`) or the host's empty mount point stands in for it. Automatic sorts wait, retrying every 15 minutes, rather than copy the library onto the system disk. Mount it, and switch the destination to `--mount` (see above). If you emptied the folder on purpose, press **Start sorting** once to sort into it again. |
+| *"The destination folder … no longer holds the .openaudible-organizer file…"* | The folder is there but empty of what earlier sorts left in it: usually the drive or share behind it is not mounted, and Docker (with `-v`) or the host's empty mount point stands in for it. Automatic sorts wait, retrying every 15 minutes, rather than copy the library onto the system disk. Mount it, and switch the destination to `--mount` (see above). If you emptied the folder on purpose, press **Start sorting** once and choose *Sort into it anyway*. |
 | *"The folder … does not exist inside /destination"* | The mount works, but the subfolder `DESTINATION_PATH` names (such as `/destination/Audiobooks`) has not been made yet. Create it on the host, in the folder mapped to `/destination`. |
 | *"Cannot write to the destination folder"* | The container's user cannot write to the mounted folder. Check the host folder's permissions. |
 | Sorted books cannot be renamed or deleted over SMB or by another app | The container ran as root, so it owns what it sorted. Run it as your own user (see above) and, once, `chown -R` the destination folder on the host back to you. |

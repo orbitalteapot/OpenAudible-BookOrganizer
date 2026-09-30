@@ -186,7 +186,7 @@ app.MapPost("/api/sort/start", (StartSortRequest? request, SortService sortServi
     var options = settings.SortOptionsFor(request?.CreateDestination ?? false, comparisonMode);
     try
     {
-        return sortService.TryStartSort(RunTrigger.Manual, options, out _)
+        return sortService.TryStartSort(RunTrigger.Manual, options, out _, request?.ConfirmUnmounted ?? false)
             ? Results.Accepted(value: sortService.GetStatus())
             : Results.Conflict(new { error = "A sort is already running.", code = RunErrors.AlreadyRunning });
     }
@@ -223,7 +223,11 @@ static IResult CsvError(string message, string code)
 
 /// <param name="ComparisonMode">"quick" or "full" for this run only. Omitted means the saved setting.</param>
 /// <param name="CreateDestination">Create a missing destination folder; sent once the user has agreed to it.</param>
-record StartSortRequest(string? ComparisonMode = null, bool CreateDestination = false);
+/// <param name="ConfirmUnmounted">
+/// Sort into a destination that no longer holds the marker earlier sorts left in it; sent once the
+/// user has agreed to it (see <see cref="SortService.TryStartSort"/>).
+/// </param>
+record StartSortRequest(string? ComparisonMode = null, bool CreateDestination = false, bool ConfirmUnmounted = false);
 
 /// <param name="Reason">
 /// <see cref="AppClosing"/> when the desktop app is quitting ("Stop sorting and quit"), which

@@ -85,6 +85,33 @@ describe('SortPage', () => {
     await waitFor(() => expect(startSort).toHaveBeenLastCalledWith({ createDestination: true }));
   });
 
+  it('asks before sorting into a destination that has lost the file earlier sorts left, and says so on its row', async () => {
+    await openSortPage();
+    vi.mocked(startSort)
+      .mockRejectedValueOnce(
+        new ApiError('The destination folder /books/sorted no longer holds the .openaudible-organizer file…', {
+          status: 400,
+          code: 'destinationUnmounted',
+          field: 'destinationPath',
+        })
+      )
+      .mockResolvedValueOnce(runningStatus());
+    vi.mocked(getSettings).mockResolvedValue(
+      settingsResponse({ pathStatus: { csv: 'ok', source: 'ok', destination: 'unmounted' } })
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Start sorting' }));
+    const confirm = await screen.findByRole('button', { name: 'Sort into it anyway' });
+    expect(screen.getByText(/the drive may not be mounted\. Sort into it anyway\?$/)).toBeTruthy();
+    expect(document.activeElement).toBe(confirm);
+
+    const hint = statusLine(screen.getByLabelText('Destination folder'));
+    await waitFor(() => expect(hint.textContent).toMatch(/^The file earlier sorts left here is gone/));
+
+    fireEvent.click(confirm);
+    await waitFor(() => expect(startSort).toHaveBeenLastCalledWith({ confirmUnmounted: true }));
+  });
+
   it('goes back to Start sorting when the create-folder question is dismissed', async () => {
     await openSortPage();
     vi.mocked(startSort).mockRejectedValueOnce(

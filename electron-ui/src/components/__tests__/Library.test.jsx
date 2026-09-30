@@ -70,6 +70,13 @@ describe('Library', () => {
     expect(screen.getByText(message)).toBeTruthy();
   });
 
+  it('counts a single book in the singular, on screen and for screen readers', async () => {
+    renderApp({ library: { books: [book('We Are Legion')], skippedRows: 0, warnings: [] } });
+
+    expect(await screen.findByText('1 audiobook')).toBeTruthy();
+    expect(screen.getByText('1 book, sorted by title, ascending')).toBeTruthy();
+  });
+
   it('shows rows the export could not read, folded away', async () => {
     renderApp({ library: { books: [book('We Are Legion')], skippedRows: 1, warnings: ['Row 7: no title'] } });
 
@@ -97,7 +104,7 @@ describe('Library', () => {
 
     it('says why a chosen export was refused when the reason is not the export', async () => {
       renderApp({ library: { books: [book('We Are Legion')], skippedRows: 0, warnings: [] } });
-      await screen.findByText('1 audiobooks');
+      await screen.findByText('1 audiobook');
       vi.mocked(window.electronAPI.openFile).mockResolvedValue('/media/usb/new.csv');
       vi.mocked(updateSettings).mockRejectedValueOnce(
         new ApiError('The destination folder does not exist. Is the drive connected?', {
@@ -124,7 +131,7 @@ describe('Library', () => {
 
     it('drops "did not answer in time" once the export turns out to be saved after all', async () => {
       renderApp({ library: { books: [book('We Are Legion')], skippedRows: 0, warnings: [] } });
-      await screen.findByText('1 audiobooks');
+      await screen.findByText('1 audiobook');
       vi.mocked(window.electronAPI.openFile).mockResolvedValue('/books/new.csv');
       vi.mocked(updateSettings).mockRejectedValueOnce(
         new ApiError('The organizer did not answer in time.', { code: 'timeout' })
@@ -149,8 +156,46 @@ describe('Library', () => {
       choose.focus();
       fireEvent.click(choose);
 
-      await screen.findByText('1 audiobooks');
+      await screen.findByText('1 audiobook');
       await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('searchbox', { name: 'Search books' })));
+    });
+
+    it('keeps focus on the page while a different export chosen from the book list is read', async () => {
+      renderApp({ library: { books: [book('We Are Legion')], skippedRows: 0, warnings: [] } });
+      await screen.findByText('1 audiobook');
+      const choose = screen.getByRole('button', { name: 'Choose export…' });
+      vi.mocked(window.electronAPI.openFile).mockResolvedValue('/books/other.csv');
+      vi.mocked(updateSettings).mockResolvedValueOnce(settingsResponse({ csvPath: '/books/other.csv' }));
+      let finishReading;
+      vi.mocked(parseLibrary).mockReturnValueOnce(
+        new Promise((resolve) => {
+          finishReading = resolve;
+        })
+      );
+
+      choose.focus();
+      fireEvent.click(choose);
+
+      const reading = await screen.findByRole('heading', { name: 'Reading your library…' });
+      await waitFor(() => expect(document.activeElement).toBe(reading));
+
+      await act(async () => finishReading({ books: [book('Heaven’s River')], skippedRows: 0, warnings: [] }));
+      await screen.findByText('Heaven’s River');
+      await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('searchbox', { name: 'Search books' })));
+    });
+
+    it("doesn't change the export while a sort is running, as the Folders card doesn't", async () => {
+      renderApp({ status: runningStatus(), library: { books: [book('We Are Legion')], skippedRows: 0, warnings: [] } });
+      await screen.findByText('1 audiobook');
+      const choose = screen.getByRole('button', { name: 'Choose export…' });
+      await waitFor(() => expect(choose.getAttribute('aria-disabled')).toBe('true'));
+      vi.mocked(window.electronAPI.openFile).mockResolvedValue('/books/other.csv');
+
+      fireEvent.click(choose);
+
+      expect(choose.getAttribute('title')).toBe("Folders can't be changed while a sort is running.");
+      expect(window.electronAPI.openFile).not.toHaveBeenCalled();
+      expect(updateSettings).not.toHaveBeenCalled();
     });
   });
 });

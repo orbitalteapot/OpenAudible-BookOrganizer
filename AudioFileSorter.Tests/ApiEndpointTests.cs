@@ -23,7 +23,8 @@ public class ApiEndpointTests
             CsvPath = Path.Combine(workspace.Root, "missing.csv"),
             SourcePath = workspace.Source,
             // A subfolder of a working mount that nobody has made yet.
-            DestinationPath = Path.Combine(workspace.Destination, "Audiobooks")
+            DestinationPath = Path.Combine(workspace.Destination, "Audiobooks"),
+            IsMappedFolder = folder => folder == workspace.Destination
         };
         await using var app = new ApiFactory(config);
         using var client = app.CreateClient();
@@ -260,6 +261,34 @@ public class ApiEndpointTests
         Assert.Equal(
             $"The destination folder {missing} was not found inside the container. Check the volume mapping for DESTINATION_PATH.",
             refused.GetProperty("error").GetString());
+    }
+
+    [Fact]
+    public async Task Start_sorting_asks_before_filling_a_destination_that_has_lost_its_marker()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        await using var app = new ApiFactory(Locked(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit")));
+        using var client = app.CreateClient();
+        await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.Accepted);
+        await WaitForFinish(client);
+
+        // After a reboot the drive is not mounted, and an empty folder stands at the same path.
+        Directory.Delete(workspace.Destination, recursive: true);
+        Directory.CreateDirectory(workspace.Destination);
+
+        var settings = await client.GetFromJsonAsync<JsonElement>("/api/settings");
+        Assert.Equal("unmounted", settings.GetProperty("pathStatus").GetProperty("destination").GetString());
+        Assert.Contains(SortPathValidator.MarkerFileName, settings.GetProperty("pathMessages").GetProperty("destination").GetString());
+
+        var refused = await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.BadRequest);
+        Assert.Equal("destinationUnmounted", refused.GetProperty("code").GetString());
+        Assert.Empty(workspace.DestinationFiles());
+
+        await ExpectStatus(
+            await client.PostAsJsonAsync("/api/sort/start", new { confirmUnmounted = true }), HttpStatusCode.Accepted);
+        await WaitForFinish(client);
+        Assert.Equal(["Tolkien/The Hobbit/The Hobbit.m4b"], workspace.DestinationFiles());
     }
 
     [Fact]

@@ -27,6 +27,12 @@ public sealed class SortPlanner
         "The book's file in the source folder is empty, as it is while OpenAudible is still downloading or " +
         "converting it. It is copied once it is complete.";
 
+    /// <summary>
+    /// Compares audio sources, which own the names and folders handed out in a run, as the file
+    /// system compares their paths: on Linux "It.m4b" and "IT.m4b" are two books, not one listed twice.
+    /// </summary>
+    private static readonly StringComparer SourceComparer = StringComparer.FromComparison(PathSanitizer.PathComparison);
+
     private readonly Dictionary<string, string> _resolvedDirectoryNames = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, string>> _directoryFileIndex = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string> _claimedDestinations = new(StringComparer.OrdinalIgnoreCase);
@@ -38,7 +44,7 @@ public sealed class SortPlanner
     private readonly Dictionary<string, Dictionary<string, string>> _subdirectoryNames = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>The folder each book (by its audio source) was found in before; see <see cref="KeepBookFolders"/>.</summary>
-    private readonly Dictionary<string, string> _keptBookDirectories = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _keptBookDirectories = new(SourceComparer);
 
     /// <summary>
     /// The books that could not be given back a folder of their own, by <see cref="RivalKeys"/>:
@@ -119,7 +125,7 @@ public sealed class SortPlanner
         // only its first listing is planned, whatever title the others give it: a second title
         // would otherwise get a folder and a copy of its own, and the next run, finding the first
         // listing's folder, would move that copy in beside it and double the book's length.
-        var seenSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenSources = new HashSet<string>(SourceComparer);
         var isRepeat = audioSources.Select(source => source is not null && !seenSources.Add(source)).ToList();
         var listedPlans = namingPlans.Where((_, index) => !isRepeat[index]).ToList();
 
@@ -358,7 +364,7 @@ public sealed class SortPlanner
             {
                 if (!_unplacedOwners.TryGetValue(key, out var owners))
                 {
-                    _unplacedOwners[key] = owners = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    _unplacedOwners[key] = owners = new HashSet<string>(SourceComparer);
                 }
 
                 owners.Add(owner);
@@ -376,6 +382,7 @@ public sealed class SortPlanner
             var existing = FindExistingFile(Path.Combine(folder, fileName));
             if (existing is not null &&
                 FileSorter.AreFilesSame(audioSource, existing) &&
+                !HoldsBookFolders(folder) &&
                 _claimedBookDirectories.TryAdd(folder, audioSource))
             {
                 _keptBookDirectories[audioSource] = folder;
@@ -397,7 +404,7 @@ public sealed class SortPlanner
     {
         var hasRival = RivalKeys(plan, destinationRoot).Any(key =>
             _unplacedOwners.TryGetValue(key, out var owners) &&
-            owners.Any(owner => !string.Equals(owner, audioSource, StringComparison.OrdinalIgnoreCase)));
+            owners.Any(owner => !SourceComparer.Equals(owner, audioSource)));
         if (!hasRival)
         {
             return false;
@@ -425,6 +432,26 @@ public sealed class SortPlanner
     /// <summary>"Name", "Name (2)", "Name (3)"... inside <paramref name="parentDirectory"/> that are on disk, in that order.</summary>
     private IEnumerable<string> ExistingBookFolders(string parentDirectory, string baseName)
     {
+        var names = SubdirectoryNames(parentDirectory);
+        return Enumerable.Range(1, MaxDisambiguationAttempts)
+            .Select(attempt => names.GetValueOrDefault(baseName + Suffix(attempt)))
+            .OfType<string>()
+            .Select(name => Path.Combine(parentDirectory, name));
+    }
+
+    /// <summary>
+    /// Whether <paramref name="folder"/> holds other books' folders, as a series folder does, even one
+    /// whose series has left the export. A book filed in it would lie loose above them, and
+    /// Audiobookshelf, which groups the shallowest files first, would read the whole series as that book.
+    /// </summary>
+    private bool HoldsBookFolders(string folder)
+    {
+        return SubdirectoryNames(folder).Values.Any(name => ExistingAudioFiles(Path.Combine(folder, name)).Count > 0);
+    }
+
+    /// <summary>The folders on disk in <paramref name="parentDirectory"/>, read once per run.</summary>
+    private Dictionary<string, string> SubdirectoryNames(string parentDirectory)
+    {
         if (!_subdirectoryNames.TryGetValue(parentDirectory, out var names))
         {
             // Looked up without regard to case, as folders are claimed; spelled as on disk.
@@ -437,10 +464,7 @@ public sealed class SortPlanner
             _subdirectoryNames[parentDirectory] = names;
         }
 
-        return Enumerable.Range(1, MaxDisambiguationAttempts)
-            .Select(attempt => names.GetValueOrDefault(baseName + Suffix(attempt)))
-            .OfType<string>()
-            .Select(name => Path.Combine(parentDirectory, name));
+        return names;
     }
 
     /// <summary>The audio files on disk in <paramref name="folder"/>.</summary>
@@ -486,7 +510,10 @@ public sealed class SortPlanner
     private string ClaimBookDirectory(string parentDirectory, string baseName, string owner, Func<string, bool>? isTaken)
     {
         var claim = ClaimFirstFree(
-            _claimedBookDirectories, owner, suffix => Path.Combine(parentDirectory, baseName + suffix), isTaken);
+            _claimedBookDirectories,
+            owner,
+            suffix => Path.Combine(parentDirectory, baseName + suffix),
+            folder => HoldsBookFolders(folder) || isTaken?.Invoke(folder) == true);
 
         // Out of names: share the folder; ClaimDestination still keeps the files apart.
         return claim?.Path ?? Path.Combine(parentDirectory, baseName);
@@ -803,12 +830,16 @@ public sealed class SortPlanner
 
         // The folder this name was given before comes first. The looser series match would
         // otherwise let "The Witcher" settle on a standalone book's "Witcher" folder whenever the
-        // disk happens to list that one first, and copy both the series and the book again.
+        // disk happens to list that one first, and copy both the series and the book again. Nor
+        // does it settle on a folder with audio lying in it: that is a book's own folder, even when
+        // the book has left the export, and a series inside it would be read as that one book.
         var exactKey = PathSanitizer.NormalizeComparisonKey(requestedName);
         var resolved = existingNames.FirstOrDefault(name => PathSanitizer.NormalizeComparisonKey(name) == exactKey)
             ?? existingNames.FirstOrDefault(name =>
                 Normalize(name, kind) == normalized &&
-                !(kind == FolderKind.Series && _standaloneBookFolders.Contains(BookFolderKey(parentDirectory, name))))
+                !(kind == FolderKind.Series &&
+                  (_standaloneBookFolders.Contains(BookFolderKey(parentDirectory, name)) ||
+                   ExistingAudioFiles(Path.Combine(parentDirectory, name)).Count > 0)))
             ?? requestedName;
 
         _resolvedDirectoryNames[cacheKey] = resolved;
@@ -890,7 +921,7 @@ public sealed class SortPlanner
 
             if (claims.TryGetValue(candidate, out var claimant))
             {
-                if (string.Equals(claimant, owner, StringComparison.OrdinalIgnoreCase))
+                if (SourceComparer.Equals(claimant, owner))
                 {
                     return new Claim(candidate, AlreadyOwned: true);
                 }

@@ -14,6 +14,8 @@ public class PathSanitizerTests
     [InlineData("Pipe|Test", "PipeTest")]
     [InlineData("Trailing dots...", "Trailing dots")]
     [InlineData("Trailing space   ", "Trailing space")]
+    [InlineData("...And Ladies of the Club", "And Ladies of the Club")]
+    [InlineData(". . . Hidden", "Hidden")]
     public void SanitizeSegment_removes_characters_that_are_invalid_on_any_supported_platform(string input, string expected)
     {
         Assert.Equal(expected, PathSanitizer.SanitizeSegment(input));

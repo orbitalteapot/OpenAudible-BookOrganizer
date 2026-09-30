@@ -88,9 +88,14 @@ public sealed class SortService : IHostedService
     /// Completes with this run's own final status — never the shared one, which a later run may
     /// already have replaced. When a run was already going, it is that run's.
     /// </param>
+    /// <param name="confirmUnmounted">
+    /// A person was told the destination no longer holds the marker earlier sorts left in it (see
+    /// <see cref="SettingsService.CheckUnattended"/>) and chose to sort into it anyway. Unattended runs
+    /// never do.
+    /// </param>
     /// <returns>False when a sort is already running.</returns>
     /// <exception cref="SortPathException">The paths cannot be used; nothing was started.</exception>
-    public bool TryStartSort(RunTrigger trigger, SortOptions options, out Task<RunStatus> run)
+    public bool TryStartSort(RunTrigger trigger, SortOptions options, out Task<RunStatus> run, bool confirmUnmounted = false)
     {
         // Checked before validating as well as after: a second Start while a run is going should
         // hear "already running", not a complaint about paths it never got to use.
@@ -101,9 +106,13 @@ public sealed class SortService : IHostedService
 
         // Outside the lock: on a sleeping network share this can take a while, and polling for
         // progress must not wait on it.
+        // A person pressing Start is asked too: the empty stand-in for an unmounted drive looks like
+        // the library to them as well, and the copy would be hidden under the mount point once the
+        // drive is back. Agreeing to create a missing destination already answered that question.
         var settings = _settings.Effective;
+        var askedAboutDestination = trigger == RunTrigger.Manual && (confirmUnmounted || options.CreateDestination);
         var problem = _settings.CheckForSort(settings, options.CreateDestination) ??
-                      (trigger == RunTrigger.Scheduled ? _settings.CheckUnattended(settings) : null);
+                      (askedAboutDestination ? null : _settings.CheckUnattended(settings));
         if (problem is not null)
         {
             throw new SortPathException(problem);

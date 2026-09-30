@@ -32,7 +32,8 @@ public enum SortPathProblemCode
     /// <summary>
     /// The destination no longer holds the marker a finished sort left in it (see
     /// <see cref="SortPathValidator.MarkerFileName"/>), as when the drive or share it lives on is not
-    /// mounted and the empty folder underneath stands in for it. Only unattended runs refuse it.
+    /// mounted and the empty folder underneath stands in for it. Unattended runs refuse it; a person
+    /// starting a sort is asked first.
     /// </summary>
     DestinationUnmounted
 }

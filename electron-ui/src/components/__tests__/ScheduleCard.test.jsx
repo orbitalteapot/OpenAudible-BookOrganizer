@@ -83,6 +83,18 @@ describe('ScheduleCard', () => {
     expect(screen.queryByText(/The first sort starts now/)).toBeNull();
   });
 
+  it('says a slot due during a manual sort is covered by it, instead of promising another sort now', () => {
+    render(
+      <Harness
+        initial={scheduleResponse({ intervalMinutes: 1440, nextRunUtc: new Date(Date.now() - 60_000).toISOString() })}
+        runStatus={runningStatus({ trigger: 'manual' })}
+      />
+    );
+
+    expect(screen.getByText('Covered by the sort that is running.')).toBeTruthy();
+    expect(screen.queryByText('Now')).toBeNull();
+  });
+
   it('reports the last automatic run in the same words as the Progress card', () => {
     render(
       <Harness

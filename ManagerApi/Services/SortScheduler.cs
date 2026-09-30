@@ -141,9 +141,14 @@ public sealed class SortScheduler : BackgroundService
         // Cancelling the manual sort this slot waited for is not declining the slot, though: the
         // rest of the library would otherwise wait a whole interval.
         var succeeded = record.Error is null && !(joinedManualRun && record.IsCanceled);
+
+        // The retry of a joined run that fell short is timed from when it ended, which may be hours
+        // after the slot joined it: timed from the slot, it was due at once, and a person's Cancel
+        // started a whole new sort straight away.
+        var attemptUtc = joinedManualRun && !succeeded ? UtcNow() : startedUtc;
         _settings.UpdateSchedule(state => state with
         {
-            LastAttemptUtc = startedUtc,
+            LastAttemptUtc = attemptUtc,
             LastSuccessUtc = succeeded ? startedUtc : state.LastSuccessUtc,
             LastRun = record
         });

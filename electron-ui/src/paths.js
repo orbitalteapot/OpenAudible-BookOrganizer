@@ -37,6 +37,12 @@ export const PATH_FIELDS = [
 export const CSV_FIELD = PATH_FIELDS[0];
 
 /**
+ * Why no path can be picked while a sort runs: the run goes on with the ones it started with, and
+ * the page would show new paths beside a sort of the old ones.
+ */
+export const RUN_ACTIVE_PATH_REASON = "Folders can't be changed while a sort is running.";
+
+/**
  * One path's status, as `{ tone, text }`: the last error the backend gave for it, otherwise what the
  * backend sees there now. The one wording for this, used by the Folders card and by the Library, where
  * the app opens. A path the container's environment sets is fixed in its volumes and variables, so the
@@ -56,6 +62,11 @@ export function describePath({ status, kind, variable }, settings, error, isElec
       };
     case 'notWritable':
       return { tone: 'critical', text: "Can't write to this folder" };
+    case 'unmounted':
+      return {
+        tone: 'critical',
+        text: settings.pathMessages?.[status] ?? 'The file earlier sorts left here is gone. Is the drive connected?',
+      };
     default:
       return { tone: 'neutral', text: isElectron ? 'Not set' : `Not set — set ${variable} in the container` };
   }

@@ -154,10 +154,9 @@ async function onPageGone({ reason }) {
       cancelId: 0,
       noLink: true,
     });
-    if (response === 1) {
-      quitWhenSafe();
-      return;
-    }
+    // Quit can still be called off ("A sort is still running": Cancel, or Keep running), or be
+    // asked already; the window must not be left blank, with no title bar to close it, when it is.
+    if (response === 1 && (await quitWhenSafe())) return;
   }
 
   if (hasWindow()) mainWindow.loadURL(appUrl());
@@ -310,26 +309,30 @@ async function askAboutRunningSort() {
   return ['keep', 'stop', 'cancel'][response];
 }
 
-/** Quits, but asks first when a sort is running, because quitting stops it partway through. */
+/**
+ * Quits, but asks first when a sort is running, because quitting stops it partway through. Resolves
+ * to whether the app is quitting: false when the user kept it running or called it off.
+ */
 async function quitWhenSafe() {
   // A second click on close or Quit while the question is up must not ask twice.
-  if (quitPromptOpen) return;
+  if (quitPromptOpen) return false;
   quitPromptOpen = true;
 
   try {
     if (await backend.isSortRunning()) {
       const choice = await askAboutRunningSort();
-      if (choice === 'cancel') return;
+      if (choice === 'cancel') return false;
       if (choice === 'keep') {
         keepRunningThisSession = true;
         hideToTray();
-        return;
+        return false;
       }
       await backend.cancelSortAndWait(CANCEL_WAIT_MS);
     }
 
     quitting = true;
     app.quit();
+    return true;
   } finally {
     quitPromptOpen = false;
   }

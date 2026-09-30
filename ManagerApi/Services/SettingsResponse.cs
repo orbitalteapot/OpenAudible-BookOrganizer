@@ -24,7 +24,7 @@ public sealed record SettingsResponse(
     {
         var settings = service.Effective;
         var config = service.Config;
-        var pathProblems = PathProblems.For(settings);
+        var pathProblems = PathProblems.For(settings, service);
 
         return new SettingsResponse(
             settings.CsvPath,

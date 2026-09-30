@@ -517,6 +517,84 @@ public class FileSorterTests
     }
 
     [Fact]
+    public async Task Sort_never_files_a_book_loose_in_the_folder_of_a_series_that_has_left_the_export()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("first.m4b", "first");
+        workspace.WriteSourceFile("second.m4b", "second");
+        workspace.WriteSourceFile("standalone.m4b", "standalone");
+        await Sort(
+            workspace,
+            TempWorkspace.Book(title: "First", filename: "first", seriesName: "Witcher", seriesSequence: "1"),
+            TempWorkspace.Book(title: "Second", filename: "second", seriesName: "Witcher", seriesSequence: "2"));
+
+        // The series is gone from the export, and a book titled like it is new.
+        var summary = await Sort(workspace, TempWorkspace.Book(title: "Witcher", filename: "standalone"));
+        var again = await Sort(workspace, TempWorkspace.Book(title: "Witcher", filename: "standalone"));
+
+        // Loose beside "Book 1" and "Book 2", Audiobookshelf would read the whole series as this book.
+        Assert.Equal(
+            ["An Author/Witcher (2)/Witcher.m4b", "An Author/Witcher/Book 1/First.m4b", "An Author/Witcher/Book 2/Second.m4b"],
+            workspace.DestinationFiles());
+        Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, again.Counts);
+    }
+
+    [Fact]
+    public async Task Sort_moves_a_book_out_of_a_series_folder_it_was_filed_loose_in()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("standalone.m4b", "standalone");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Witcher", "Book 1", "First.m4b"), "first");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Witcher", "Witcher.m4b"), "standalone");
+
+        var summary = await Sort(workspace, TempWorkspace.Book(title: "Witcher", filename: "standalone"));
+
+        Assert.Equal(
+            ["An Author/Witcher (2)/Witcher.m4b", "An Author/Witcher/Book 1/First.m4b"],
+            workspace.DestinationFiles());
+        Assert.Equal(SortCounts.Empty with { Moved = 1 }, summary.Counts);
+    }
+
+    [Fact]
+    public async Task Sort_never_files_a_series_in_the_folder_of_a_book_that_has_left_the_export()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("blood-of-elves.m4b", "elves");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Witcher", "Witcher.m4b"), "standalone");
+
+        await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Blood of Elves", filename: "blood-of-elves", seriesName: "The Witcher", seriesSequence: "1"));
+
+        Assert.Equal(
+            ["An Author/The Witcher/Book 1/Blood of Elves.m4b", "An Author/Witcher/Witcher.m4b"],
+            workspace.DestinationFiles());
+    }
+
+    [Fact]
+    public async Task Sort_copies_two_books_whose_files_differ_only_in_case_on_a_case_sensitive_disk()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("It.m4b", "king");
+        workspace.WriteSourceFile("IT.m4b", "other");
+        if (File.ReadAllText(Path.Combine(workspace.Source, "It.m4b")) != "king")
+        {
+            // A case-insensitive disk (Windows, macOS) cannot hold both files.
+            return;
+        }
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "It", author: "Stephen King", filename: "It"),
+            TempWorkspace.Book(title: "IT: Sisters", author: "Someone Else", filename: "IT"));
+
+        Assert.Equal(SortCounts.Empty with { New = 2 }, summary.Counts);
+        Assert.Equal("king", ReadDestination(workspace, "Stephen King", "It", "It.m4b"));
+        Assert.Equal("other", ReadDestination(workspace, "Someone Else", "IT Sisters", "IT Sisters.m4b"));
+    }
+
+    [Fact]
     public async Task Sort_never_replaces_a_good_copy_with_an_empty_source_file()
     {
         using var workspace = new TempWorkspace();

@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using ManagerApi.Services;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AudioFileSorter.Tests;
@@ -38,9 +40,12 @@ public sealed class TestBackend : IDisposable
             time);
     }
 
+    /// <summary>What the scheduler created by <see cref="CreateScheduler"/> has logged, so a test can see it join a run.</summary>
+    public RecordingLogger<SortScheduler> SchedulerLog { get; } = new();
+
     public SortScheduler CreateScheduler()
     {
-        return new SortScheduler(Sort, Settings, Time, NullLogger<SortScheduler>.Instance);
+        return new SortScheduler(Sort, Settings, Time, SchedulerLog);
     }
 
     public void Dispose()
@@ -84,5 +89,22 @@ public sealed class TestLifetime : IHostApplicationLifetime, IDisposable
         _started.Dispose();
         _stopping.Dispose();
         _stopped.Dispose();
+    }
+}
+
+/// <summary>A logger that keeps every message, for tests that wait on something only the log shows.</summary>
+public sealed class RecordingLogger<T> : ILogger<T>
+{
+    private readonly ConcurrentQueue<string> _messages = new();
+
+    public IReadOnlyCollection<string> Messages => _messages;
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+    {
+        _messages.Enqueue(formatter(state, exception));
     }
 }
