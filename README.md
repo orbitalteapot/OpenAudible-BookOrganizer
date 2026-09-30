@@ -176,10 +176,13 @@ How closely it compares is up to you, using the **Update check** setting on the 
 
 Two things worth knowing about re-releases:
 
-- **Nothing is ever deleted from your destination folder.** If a re-release changes a book's title
-  enough to be filed under a different name, the new file is written alongside the old one and
-  removing the old copy is up to you. A title differing only in punctuation or spacing still
-  resolves to the existing file and is replaced in place.
+- **A book the organiser has filed keeps one copy.** If a re-release changes its title (or author,
+  series or number), the copy it filed is moved to the new folder and renamed, then replaced if the
+  download changed, and the old folder is removed if that leaves it empty. Keep a copy of the old
+  version elsewhere first if you want it. Only a book the organiser has no record of filing (say,
+  after its record file was deleted) gets a new copy next to the old one, and removing that is up to
+  you. A title differing only in punctuation or spacing still resolves to the existing file and is
+  replaced in place.
 - **Replacing a book is atomic.** The new version is written beside the old one and renamed over
   it, so an interrupted update leaves you with either the old copy or the new one, never half of
   each.
@@ -225,7 +228,10 @@ export, so a different book with the same title that comes along later gets a `(
 own and never replaces what may be the only copy of the first. When a book's author, series, number in
 the series or title changes, it is moved to its new folder, PDF and all (even one no longer in the
 source, and its audio in a format it is no longer downloaded in), renamed if its title changed,
-and counted as **Moved**; the old folder is removed if that leaves it empty. A file its new folder
+and counted as **Moved**, or as **Updated** when its download changed too and the moved copy was
+replaced; the old folder is removed if that leaves it empty. It only ever moves into a folder that
+holds no audio or its own: a folder of its new name holding another book's file is left alone, and
+it gets a `(2)` folder instead. A file its new folder
 already has one of the same name for is never written over: it stays in the old folder, which is
 then still set aside for the book, and the problems list names it.
 
@@ -238,7 +244,8 @@ are only ever moved within the destination folder, and never over another file. 
 in your export could have left a loose file, it is that book's: it is moved, and then replaced if you
 have downloaded the book again since. Once a sort has run to the end in the destination, though,
 any loose file still there was left on purpose, and it is only moved into a book whose audio it
-holds. A file inside another book's folder is always left alone. When several books share its name (older versions told them
+holds; the same goes for an old `Book N` folder no book is on record for, which a new book only
+takes when it holds that book's audio. A file inside another book's folder is always left alone. When several books share its name (older versions told them
 apart as `Title (2)`), a file is moved only into the book whose audio it holds; any other may be the
 only copy of a book you have returned or not downloaded again, so it is left where it is and the
 problems list names it: delete it yourself if it is an old copy. A companion PDF left loose beside its

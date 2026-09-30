@@ -112,7 +112,8 @@ public sealed class LibraryManifest
     /// a missing file is an empty record, and one that is not a manifest (the plain marker earlier
     /// versions of this branch left, a damaged or hand-edited file, a newer version's) is an empty
     /// record with a <see cref="Problem"/>, kept aside when it is saved over. Either way the planner
-    /// finds the books in their folders again.
+    /// finds the books in the export in their folders again; only the record of books that have left
+    /// it, which kept their folders from other books, is lost with it.
     ///
     /// Only what is still true is kept: an entry that leads outside the destination is ignored, a
     /// book whose folder or files are all gone (the person deleted it) is dropped, and a folder
@@ -179,7 +180,8 @@ public sealed class LibraryManifest
         var problem =
             $"Its record of which book is in which folder (the {FileName} file) could not be read, so it was rebuilt " +
             $"from the books found in their folders, and the old file kept as {Path.GetFileName(keepAs)}. " +
-            "This is expected once after updating from an older version.";
+            "The folders of books that have left the export are no longer set aside for them, so a new book of the same " +
+            "name may be filed in one, until that file is repaired and put back.";
 
         return new LibraryManifest(root, existed: true, problem) { _keepAs = keepAs };
     }

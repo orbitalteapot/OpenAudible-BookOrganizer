@@ -92,6 +92,10 @@ public class LibraryManifestTests
         Assert.True(manifest.Existed);
         Assert.Empty(manifest.Books);
         Assert.Contains("rebuilt", manifest.Problem);
+
+        // No released version wrote this file, so a damaged one is never "expected": what it cost is said instead.
+        Assert.DoesNotContain("expected", manifest.Problem);
+        Assert.Contains("books that have left the export are no longer set aside", manifest.Problem);
     }
 
     [Fact]

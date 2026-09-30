@@ -304,17 +304,27 @@ public sealed class SortPlanner
     /// Whether <paramref name="folder"/>, which no other book has, may be this book's: it holds no audio,
     /// or its only recording is under this book's name, as a sort that crashed before saving its manifest
     /// left it, or an older version's "Book N" folder. The update check then replaces the file if the
-    /// download changed. But the export cannot tell a changed download from another book's only copy:
-    /// when another book the manifest does not know could have been filed there too, or the folder holds
-    /// more than one recording, only this book's own audio makes it this book's.
+    /// download changed. But the export cannot tell a changed download from another book's only copy, so
+    /// the name alone decides only where nothing else can (see <see cref="MayGoByName"/>); elsewhere only
+    /// this book's own audio makes the folder this book's.
     /// </summary>
     private bool MayTake(Book book, string folder, bool contested)
     {
         var audio = _disk.AudioFiles(folder);
         return !_disk.HoldsBookFolders(folder) &&
                (audio.Count == 0 ||
-                (NamedAudioFiles(book, folder).Any() && ((!contested && audio.Count == 1) || HoldsCopyOf(book, folder))));
+                (NamedAudioFiles(book, folder).Any() && ((MayGoByName(book, contested) && audio.Count == 1) || HoldsCopyOf(book, folder))));
     }
+
+    /// <summary>
+    /// Whether a folder's one recording under this book's name may be taken as the book's without its
+    /// audio matching. Only the first sort of an older version's library needs that, and only for a book
+    /// no other book the manifest does not know shares a folder name and title with. Never for a book on
+    /// record, whose files are known: a folder of its name that it did not write is another book's. Nor
+    /// once a sort has finished here (see <see cref="_sortedBefore"/>): an unrecorded folder left since
+    /// is no book's in the export of the time, so may be a departed or returned book's only copy.
+    /// </summary>
+    private bool MayGoByName(Book book, bool contested) => !contested && book.Record is null && !_sortedBefore;
 
     /// <summary>
     /// Whether <paramref name="folder"/> is a book's folder with this book's audio under its name. Never
@@ -396,8 +406,10 @@ public sealed class SortPlanner
     private HashSet<string> AdoptOldFiles(List<Book> books, LibraryManifest manifest, CancellationToken cancellationToken)
     {
         var newBooks = books.Where(book => book.Record is null).ToList();
+        // The book that keeps an old "Book N" folder is one of them too: that folder is not an old one of
+        // its own, but a second file of its name in it may be that book's as much as a later one's.
         var possibleOwners = newBooks
-            .SelectMany(book => OldFileFolders(book).Select(folder => (Key: OldFileKey(folder, book), Book: book)))
+            .SelectMany(book => UnownedOldFolders(book).Select(folder => (Key: OldFileKey(folder, book), Book: book)))
             .ToLookup(pair => pair.Key, pair => pair.Book, FolderComparer);
         var untouchable = SpokenFor(books, manifest);
         var adopted = new HashSet<string>(FolderComparer);
@@ -530,8 +542,13 @@ public sealed class SortPlanner
     /// </summary>
     private IEnumerable<string> OldFileFolders(Book book)
     {
-        return new[] { book.Parent, _disk.Spelled(book.Parent, book.BaseName) }
-            .Where(folder => !FolderComparer.Equals(folder, book.Folder) && !_folderOwners.ContainsKey(folder));
+        return UnownedOldFolders(book).Where(folder => !FolderComparer.Equals(folder, book.Folder));
+    }
+
+    /// <summary>The <see cref="OldFileFolders"/> of a book, and the book's own folder when it is one of them.</summary>
+    private IEnumerable<string> UnownedOldFolders(Book book)
+    {
+        return new[] { book.Parent, _disk.Spelled(book.Parent, book.BaseName) }.Where(folder => !_folderOwners.ContainsKey(folder));
     }
 
     /// <summary>
