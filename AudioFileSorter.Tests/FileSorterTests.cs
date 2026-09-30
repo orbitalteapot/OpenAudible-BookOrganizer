@@ -759,6 +759,22 @@ public class FileSorterTests
     }
 
     [Fact]
+    public async Task Sort_files_a_book_listed_twice_under_two_titles_once_and_keeps_it_that_way()
+    {
+        // The same book from two accounts or regions, one listing's title spelled differently.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b");
+        OpenAudible[] books = [TempWorkspace.Book(title: "Alpha"), TempWorkspace.Book(title: "Beta")];
+
+        var first = await Sort(workspace, books);
+        var second = await Sort(workspace, books);
+
+        Assert.Equal(SortCounts.Empty with { New = 1, UpToDate = 1 }, first.Counts);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 2 }, second.Counts);
+        Assert.Equal(["An Author/Alpha/Alpha.m4b"], workspace.DestinationFiles());
+    }
+
+    [Fact]
     public async Task Sort_handles_a_large_library_across_many_authors_without_duplicating_folders()
     {
         using var workspace = new TempWorkspace();

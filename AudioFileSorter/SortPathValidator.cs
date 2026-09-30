@@ -11,6 +11,15 @@ public static class SortPathValidator
     private const string WriteProbePrefix = ".oabo-write-test-";
 
     /// <summary>
+    /// Left in the destination by every sort that finishes. A folder that exists and can be written
+    /// is not proof of the library: Docker recreates a bind-mounted host folder that is missing (an
+    /// unplugged drive, a NAS share not mounted yet) as an empty one on the system disk, and a Linux
+    /// mount point is an empty folder while nothing is mounted on it. Where a marker was left before,
+    /// its absence says the folder is such a stand-in (see <see cref="InspectMarker"/>).
+    /// </summary>
+    public const string MarkerFileName = ".openaudible-organizer";
+
+    /// <summary>
     /// Checks the paths in the order a person fixes them: CSV, source, destination. Returns the
     /// first problem, or null when a sort can go ahead.
     ///
@@ -82,6 +91,35 @@ public static class SortPathValidator
             : Destination(
                 SortPathProblemCode.DestinationMissing,
                 "The destination folder does not exist. Is the drive connected?");
+    }
+
+    /// <summary>
+    /// Whether the destination still holds the marker a finished sort left in it (see
+    /// <see cref="MarkerFileName"/>). Only meaningful for a folder a marker was left in before.
+    /// </summary>
+    public static SortPathProblem? InspectMarker(string destinationPath)
+    {
+        return File.Exists(Path.Combine(destinationPath, MarkerFileName))
+            ? null
+            : Destination(
+                SortPathProblemCode.DestinationUnmounted,
+                $"The destination folder {destinationPath} no longer holds the {MarkerFileName} file earlier sorts left in it, " +
+                "as happens when the drive or share it is on is not mounted and an empty folder stands in for it. " +
+                "Automatic sorts wait for it rather than copy the whole library there. " +
+                "If the folder was emptied on purpose, press Start sorting to sort into it again.");
+    }
+
+    /// <summary>Leaves the marker (see <see cref="MarkerFileName"/>) in the destination, unless it is there already.</summary>
+    public static void MarkDestination(string destinationPath)
+    {
+        var marker = Path.Combine(destinationPath, MarkerFileName);
+        if (!File.Exists(marker))
+        {
+            File.WriteAllText(
+                marker,
+                "OpenAudible Book Organizer sorts into this folder. Automatic sorts look for this file, so " +
+                "that an empty folder standing in for an unmounted drive is not filled with the library.\n");
+        }
     }
 
     private static SortPathProblem? ValidateDestination(string sourcePath, string? destinationPath, bool createDestination)

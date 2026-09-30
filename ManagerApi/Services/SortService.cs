@@ -102,7 +102,9 @@ public sealed class SortService : IHostedService
         // Outside the lock: on a sleeping network share this can take a while, and polling for
         // progress must not wait on it.
         var settings = _settings.Effective;
-        if (_settings.CheckForSort(settings, options.CreateDestination) is { } problem)
+        var problem = _settings.CheckForSort(settings, options.CreateDestination) ??
+                      (trigger == RunTrigger.Scheduled ? _settings.CheckUnattended(settings) : null);
+        if (problem is not null)
         {
             throw new SortPathException(problem);
         }
@@ -192,6 +194,7 @@ public sealed class SortService : IHostedService
             var progress = new InlineProgress<SortProgressInfo>(info => Update(run, status => status.With(info)));
             var summary = await _fileSorter.SortAudioFiles(sourcePath, destinationPath, books, options, progress, token);
 
+            MarkDestination(destinationPath);
             final = Finish(run, status => status.Completed(summary, UtcNow()));
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -223,6 +226,25 @@ public sealed class SortService : IHostedService
 
         _logger.LogInformation("{Summary}", RunSummary.Describe(final));
         return final;
+    }
+
+    /// <summary>
+    /// Leaves the marker automatic sorts look for (see <see cref="SettingsService.CheckUnattended"/>).
+    /// A run that finished has just proved this folder is the library, whoever started it, so a
+    /// person who emptied it on purpose re-arms automatic sorting by sorting once by hand.
+    /// </summary>
+    private void MarkDestination(string destinationPath)
+    {
+        try
+        {
+            SortPathValidator.MarkDestination(destinationPath);
+            _settings.RecordMarkedDestination(destinationPath);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Unmarked, the folder is sorted into as before; only the check for a stand-in is lost.
+            _logger.LogWarning(ex, "Could not leave the marker in the destination {Path}", destinationPath);
+        }
     }
 
     private bool IsClosingApp(ActiveRun run)

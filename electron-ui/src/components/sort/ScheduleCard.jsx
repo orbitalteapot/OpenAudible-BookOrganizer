@@ -29,6 +29,15 @@ function describeNextRun(nextRunUtc) {
   return `${formatDateTime(nextRunUtc, now)} (${formatRelative(nextRunUtc, now)})`;
 }
 
+/**
+ * Why the last automatic attempt did not sort the library. A slot that came due during a manual sort
+ * is retried when that sort is cancelled, which leaves no error to quote ("Sort canceled after 88 books.").
+ */
+function describeFailedAttempt(lastRun) {
+  if (lastRun?.error) return lastRun.error;
+  return lastRun?.isCanceled ? summariseRun(lastRun).headline : 'unknown error';
+}
+
 function ScheduleFacts({ isOn, schedule, runStatus }) {
   const { nextRunUtc, lastRun, retrying } = schedule;
   const runningNow = isRunning(runStatus) && runStatus.trigger === 'scheduled';
@@ -39,7 +48,7 @@ function ScheduleFacts({ isOn, schedule, runStatus }) {
   } else if (isOn && nextRunUtc) {
     facts.push(
       retrying
-        ? ['Retrying', `${formatDateTime(nextRunUtc)} — last attempt failed: ${lastRun?.error ?? 'unknown error'}`]
+        ? ['Retrying', `${formatDateTime(nextRunUtc)} — last attempt failed: ${describeFailedAttempt(lastRun)}`]
         : ['Next sort', describeNextRun(nextRunUtc)]
     );
   }

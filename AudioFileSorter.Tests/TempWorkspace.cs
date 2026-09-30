@@ -60,7 +60,11 @@ public sealed class TempWorkspace : IDisposable
         return path;
     }
 
-    /// <summary>All files under the destination, as paths relative to it, using '/' separators.</summary>
+    /// <summary>
+    /// All files under the destination, as paths relative to it, using '/' separators. Not the marker
+    /// a finished sort leaves at the top (see <see cref="SortPathValidator.MarkerFileName"/>), which is
+    /// no part of the library; the tests about it look for it themselves.
+    /// </summary>
     public string[] DestinationFiles()
     {
         if (!Directory.Exists(Destination))
@@ -70,6 +74,7 @@ public sealed class TempWorkspace : IDisposable
 
         return Directory.GetFiles(Destination, "*", SearchOption.AllDirectories)
             .Select(path => Path.GetRelativePath(Destination, path).Replace(Path.DirectorySeparatorChar, '/'))
+            .Where(path => path != SortPathValidator.MarkerFileName)
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
     }

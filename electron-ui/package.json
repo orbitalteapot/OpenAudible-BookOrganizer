@@ -54,7 +54,8 @@
     "productName": "OpenAudible Book Organizer",
     "files": [
       "dist/**/*",
-      "electron/**/*"
+      "electron/**/*",
+      "!electron/**/*.test.js"
     ],
     "directories": {
       "output": "release"

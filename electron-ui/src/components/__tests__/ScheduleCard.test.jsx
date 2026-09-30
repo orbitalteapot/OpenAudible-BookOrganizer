@@ -135,6 +135,30 @@ describe('ScheduleCard', () => {
     expect(screen.queryByText('Last sort')).toBeNull();
   });
 
+  it('says a slot is retried because the manual sort it waited for was canceled', () => {
+    render(
+      <Harness
+        initial={scheduleResponse({
+          intervalMinutes: 1440,
+          retrying: true,
+          nextRunUtc: new Date(Date.now() + 15 * 60_000).toISOString(),
+          lastRun: {
+            startedUtc: new Date().toISOString(),
+            finishedUtc: new Date().toISOString(),
+            trigger: 'manual',
+            counts: counts({ new: 88 }),
+            problemCount: 0,
+            isCanceled: true,
+            error: null,
+            errorCode: null,
+          },
+        })}
+      />
+    );
+
+    expect(screen.getByText(/— last attempt failed: Sort canceled after 88 books\.$/)).toBeTruthy();
+  });
+
   it('lets the arrow keys look through the choices without turning automatic sorting on', async () => {
     const changes = [];
     render(

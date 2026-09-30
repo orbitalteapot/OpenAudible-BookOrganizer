@@ -60,7 +60,7 @@ public sealed class SortScheduler : BackgroundService
             SortSchedule.NextRunUtc(settings.ScheduleIntervalMinutes, state, UtcNow()),
             state.LastRun,
             isOn && SortSchedule.LastAttemptFailed(state),
-            isOn ? PathStatus.BlockedReason(settings, _settings.Config) : null);
+            isOn ? PathStatus.BlockedReason(settings, _settings.Config) ?? _settings.CheckUnattended(settings)?.Message : null);
     }
 
     public override void Dispose()
@@ -116,14 +116,15 @@ public sealed class SortScheduler : BackgroundService
         var options = _settings.SortOptionsFor(createDestination: false);
 
         RunRecord record;
+        var joinedManualRun = false;
         try
         {
             if (!_sortService.TryStartSort(RunTrigger.Scheduled, options, out var run))
             {
-                // A manual sort is doing the same job, so this slot counts as done.
-                _logger.LogInformation("Scheduled sort skipped: a sort was already running");
-                _settings.UpdateSchedule(state => state with { LastAttemptUtc = startedUtc, LastSuccessUtc = startedUtc });
-                return;
+                // A manual sort is doing the same job, so this slot is done when that sort is: its
+                // outcome, not the fact that it was running, says whether the library got sorted.
+                _logger.LogInformation("Scheduled sort waits for the sort already running");
+                joinedManualRun = true;
             }
 
             record = RunRecord.From(await run);
@@ -137,7 +138,9 @@ public sealed class SortScheduler : BackgroundService
 
         // A run that ended with an error (including one cut short by the app closing) did not sort
         // the library, so it is tried again soon; one a person cancelled is left until next time.
-        var succeeded = record.Error is null;
+        // Cancelling the manual sort this slot waited for is not declining the slot, though: the
+        // rest of the library would otherwise wait a whole interval.
+        var succeeded = record.Error is null && !(joinedManualRun && record.IsCanceled);
         _settings.UpdateSchedule(state => state with
         {
             LastAttemptUtc = startedUtc,

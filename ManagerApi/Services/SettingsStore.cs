@@ -211,7 +211,8 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
             EnabledAtUtc = ReadTime(element, "enabledAtUtc"),
             LastAttemptUtc = ReadTime(element, "lastAttemptUtc"),
             LastSuccessUtc = ReadTime(element, "lastSuccessUtc"),
-            LastRun = ReadLastRun(element)
+            LastRun = ReadLastRun(element),
+            MarkedDestinationPath = ReadString(element, "markedDestinationPath")
         };
     }
 

@@ -93,6 +93,13 @@ public sealed record ScheduleState
 
     /// <summary>How the last automatic run went.</summary>
     public RunRecord? LastRun { get; init; }
+
+    /// <summary>
+    /// The destination a finished sort last left its marker in. Automatic sorts refuse it once the
+    /// marker is gone (see <see cref="AudioFileSorter.SortPathValidator.MarkerFileName"/>); a folder
+    /// never marked, such as one chosen since, is sorted into as it is.
+    /// </summary>
+    public string? MarkedDestinationPath { get; init; }
 }
 
 /// <summary>

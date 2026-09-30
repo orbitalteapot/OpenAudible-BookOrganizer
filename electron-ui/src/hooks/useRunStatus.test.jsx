@@ -138,6 +138,42 @@ describe('useRunStatus', () => {
     expect(result.current.status).toBeNull();
   });
 
+  it('gives the network a moment to come back after the laptop wakes', async () => {
+    vi.mocked(getRunStatus).mockResolvedValue(runningStatus());
+    const { result } = renderHook(() => useRunStatus());
+    await advance(0);
+
+    // An hour asleep, in which no poll could run; on waking the Wi-Fi is still reconnecting.
+    vi.setSystemTime(Date.now() + 3_600_000);
+    vi.mocked(getRunStatus).mockRejectedValue(new ApiError('unreachable', { code: 'unreachable' }));
+    await advance(RUNNING_POLL_MS * 5);
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.status.state).toBe('running');
+
+    // Contact that stays lost is still reported.
+    await advance(LOST_CONTACT_MS.running);
+    expect(result.current.error).not.toBeNull();
+  });
+
+  it('does not count the sleep against a poll that was under way when the laptop slept', async () => {
+    vi.mocked(getRunStatus).mockResolvedValueOnce(runningStatus());
+    const { result } = renderHook(() => useRunStatus());
+    await advance(0);
+
+    // The next poll is sent, and the laptop sleeps for an hour before it fails.
+    let failInFlight;
+    vi.mocked(getRunStatus).mockReturnValueOnce(new Promise((_, reject) => (failInFlight = reject)));
+    await advance(RUNNING_POLL_MS);
+    vi.setSystemTime(Date.now() + 3_600_000);
+    vi.mocked(getRunStatus).mockRejectedValue(new ApiError('unreachable', { code: 'unreachable' }));
+    await act(async () => failInFlight(new ApiError('unreachable', { code: 'unreachable' })));
+    await advance(RUNNING_POLL_MS * 2);
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.status.state).toBe('running');
+  });
+
   it('passes any other refusal on to the page', async () => {
     const { result } = renderHook(() => useRunStatus());
     await advance(0);

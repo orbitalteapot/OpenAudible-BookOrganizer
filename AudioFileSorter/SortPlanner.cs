@@ -115,9 +115,17 @@ public sealed class SortPlanner
             audioSources.Add(SourceFileLocator.FindAudioFile(book, sourceRoot));
         }
 
+        // A file listed again (the book is in two accounts or regions, say) is the same book, so
+        // only its first listing is planned, whatever title the others give it: a second title
+        // would otherwise get a folder and a copy of its own, and the next run, finding the first
+        // listing's folder, would move that copy in beside it and double the book's length.
+        var seenSources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var isRepeat = audioSources.Select(source => source is not null && !seenSources.Add(source)).ToList();
+        var listedPlans = namingPlans.Where((_, index) => !isRepeat[index]).ToList();
+
         // Known before any series folder is resolved, so a series never settles on a folder that
         // is a standalone book's own (see ResolveDirectoryName).
-        foreach (var plan in namingPlans.Where(plan => plan.SeriesName is null))
+        foreach (var plan in listedPlans.Where(plan => plan.SeriesName is null))
         {
             _standaloneBookFolders.Add(BookFolderKey(ResolveAuthorDirectory(fullDestinationRoot, plan), plan.FileStem));
         }
@@ -125,18 +133,22 @@ public sealed class SortPlanner
         // Reserve every series folder first, so a standalone book titled like a series ("Bobiverse")
         // gets a "Bobiverse (2)" folder of its own instead of being dropped loose into the series,
         // wherever it happens to sit in the list.
-        foreach (var plan in namingPlans.Where(plan => plan.SeriesName is not null))
+        foreach (var plan in listedPlans.Where(plan => plan.SeriesName is not null))
         {
             _claimedBookDirectories.TryAdd(ResolveParentDirectory(fullDestinationRoot, plan), SeriesFolderClaim);
         }
 
-        KeepBookFolders(namingPlans, audioSources, fullDestinationRoot, cancellationToken);
+        KeepBookFolders(namingPlans, audioSources, isRepeat, fullDestinationRoot, cancellationToken);
 
         var planned = books
             .Select((book, index) =>
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                return PlanBook(book, namingPlans[index], index, audioSources[index], sourceRoot, fullDestinationRoot);
+
+                // Nothing to write and no warning: the sort counts it as up to date, as the first listing copies it.
+                return isRepeat[index]
+                    ? new PlannedBook(new PlannedCopy { Book = book, Title = BuildTitle(book, namingPlans[index]) }, [])
+                    : PlanBook(book, namingPlans[index], index, audioSources[index], sourceRoot, fullDestinationRoot);
             })
             .ToList();
 
@@ -329,13 +341,14 @@ public sealed class SortPlanner
     private void KeepBookFolders(
         List<BookSortPlan> plans,
         List<string?> audioSources,
+        List<bool> isRepeat,
         string destinationRoot,
         CancellationToken cancellationToken)
     {
         for (var i = 0; i < plans.Count; i++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (audioSources[i] is { } source && KeepBookFolder(plans[i], source, destinationRoot))
+            if (isRepeat[i] || (audioSources[i] is { } source && KeepBookFolder(plans[i], source, destinationRoot)))
             {
                 continue;
             }
@@ -356,12 +369,6 @@ public sealed class SortPlanner
     /// <summary>Claims the folder of this book's title or number that already holds its audio, if there is one.</summary>
     private bool KeepBookFolder(BookSortPlan plan, string audioSource, string destinationRoot)
     {
-        // The same file listed twice keeps the one folder.
-        if (_keptBookDirectories.ContainsKey(audioSource))
-        {
-            return true;
-        }
-
         var (parentDirectory, baseName) = BookFolder(destinationRoot, plan);
         var fileName = plan.FileStem + Path.GetExtension(audioSource);
         foreach (var folder in ExistingBookFolders(parentDirectory, baseName))

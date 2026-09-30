@@ -27,7 +27,14 @@ public enum SortPathProblemCode
     DestinationInsideSource,
 
     /// <summary>The destination folder exists (or was just created) but cannot be written to.</summary>
-    NotWritable
+    NotWritable,
+
+    /// <summary>
+    /// The destination no longer holds the marker a finished sort left in it (see
+    /// <see cref="SortPathValidator.MarkerFileName"/>), as when the drive or share it lives on is not
+    /// mounted and the empty folder underneath stands in for it. Only unattended runs refuse it.
+    /// </summary>
+    DestinationUnmounted
 }
 
 /// <summary>Why a sort cannot use the paths it was given, worded for the person who chose them.</summary>

@@ -40,8 +40,16 @@ services:
       # Replace the left-hand side with your actual audiobook source directory. It is only read.
       # Without this line the Sort page shows the source folder as not found inside the container.
       - /path/to/your/audiobooks:/source
-      # Replace the left-hand side with the directory you want books sorted into. Without this line
+      # Replace the source path with the directory you want books sorted into. Without this entry
       # nothing is sorted: the Sort page shows the destination folder as not found, rather than
-      # copying the library somewhere inside the container where it would be lost.
-      - /path/to/your/organized:/destination
+      # copying the library somewhere inside the container where it would be lost. Written out in
+      # full because the short "host:container" form creates a host folder that is missing as an
+      # empty one: with the drive or NAS share it lives on not mounted (after a reboot, or with a USB
+      # disk unplugged), the library would be copied onto the system disk instead. This form refuses
+      # to start the container until the folder is there.
+      - type: bind
+        source: /path/to/your/organized
+        target: /destination
+        bind:
+          create_host_path: false
     restart: unless-stopped

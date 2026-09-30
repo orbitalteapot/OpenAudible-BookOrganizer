@@ -272,6 +272,32 @@ public sealed class SettingsService
     }
 
     /// <summary>
+    /// What an unattended run checks on top of <see cref="CheckForSort"/>: that a destination a
+    /// finished sort marked still holds its marker. Otherwise an unmounted drive's empty stand-in
+    /// passes every other check, and nobody is there to see the whole library copied onto the
+    /// system disk. Null when a sort can go ahead.
+    /// </summary>
+    public SortPathProblem? CheckUnattended(AppSettings settings)
+    {
+        var marked = Schedule.MarkedDestinationPath;
+        if (marked is null || !SettingText.Same(marked, settings.DestinationPath))
+        {
+            return null;
+        }
+
+        return SortPathValidator.InspectMarker(settings.DestinationPath!) is { } problem ? _config.Explain(problem) : null;
+    }
+
+    /// <summary>Remembers that a finished sort marked <paramref name="destinationPath"/> (see <see cref="CheckUnattended"/>).</summary>
+    public void RecordMarkedDestination(string destinationPath)
+    {
+        if (!SettingText.Same(Schedule.MarkedDestinationPath, destinationPath))
+        {
+            UpdateSchedule(state => state with { MarkedDestinationPath = SettingText.Normalize(destinationPath) });
+        }
+    }
+
+    /// <summary>
     /// Refuses a source and destination that overlap under the folder the person just picked, and
     /// names it: blaming the destination they never touched for the source they just chose sends
     /// them to fix the wrong one, while the folder they picked vanishes without a word.

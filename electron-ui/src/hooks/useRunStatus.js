@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { cancelSort, getRunStatus, startSort } from '../api';
+import { cancelSort, getRunStatus, PROGRESS_TIMEOUT_MS, startSort } from '../api';
 import { unreachableMessage } from '../mode';
 
 // Fast enough for a progress bar to move smoothly while a sort runs; slow enough otherwise that
@@ -37,8 +37,8 @@ export default function useRunStatus() {
   useEffect(() => {
     let active = true;
     let timer = null;
-    let failures = 0;
-    let lastAnswer = Date.now();
+    // When the first poll of the current run of failures was sent; null while polls are answered.
+    let failingSince = null;
     let running = false;
     // Polls can overlap when one is asked for early. Only the newest applies its answer and
     // schedules the next, so there is only ever one timer and an older reply never wins.
@@ -47,20 +47,23 @@ export default function useRunStatus() {
     const poll = async () => {
       clearTimeout(timer);
       const id = ++latest;
+      const sentAt = Date.now();
       try {
         const next = await getRunStatus();
         if (!active || id !== latest) return;
-        failures = 0;
-        lastAnswer = Date.now();
+        failingSince = null;
         running = isRunning(next);
         setStatus(next);
         setError(null);
       } catch (err) {
         if (!active || id !== latest) return;
-        failures += 1;
-        // Never on one failure alone: the first poll after a laptop wakes can fail, long after the last answer.
-        const silentFor = Date.now() - lastAnswer;
-        if (failures > 1 && silentFor >= (running ? LOST_CONTACT_MS.running : LOST_CONTACT_MS.idle)) {
+        // Timed from the first failed poll, not the last answer: after a laptop sleeps that answer is
+        // an hour old, though the page has only just started trying again while the network comes
+        // back. A poll that was under way when it went to sleep counts from no earlier than its
+        // timeout allows, as no poll takes longer to fail.
+        failingSince ??= Math.max(sentAt, Date.now() - PROGRESS_TIMEOUT_MS);
+        const silentFor = Date.now() - failingSince;
+        if (silentFor >= (running ? LOST_CONTACT_MS.running : LOST_CONTACT_MS.idle)) {
           setError(unreachableMessage());
         }
       }

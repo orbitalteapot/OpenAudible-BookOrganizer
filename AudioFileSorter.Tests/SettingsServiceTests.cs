@@ -228,6 +228,19 @@ public class SettingsServiceTests
     }
 
     [Fact]
+    public void The_marked_destination_survives_a_restart()
+    {
+        // Forgotten, an unmounted drive's empty stand-in would pass for the library after every restart.
+        using var workspace = new TempWorkspace();
+        var path = Path.Combine(workspace.Root, "settings.json");
+        var store = new SettingsStore(path, NullLogger<SettingsStore>.Instance);
+        Assert.True(store.TrySave(
+            new SavedState(new AppSettings(), new ScheduleState { MarkedDestinationPath = "/destination" }), out _));
+
+        Assert.Equal("/destination", new SettingsStore(path, NullLogger<SettingsStore>.Instance).Load().Schedule.MarkedDestinationPath);
+    }
+
+    [Fact]
     public void A_change_that_cannot_be_saved_is_refused_with_the_reason_and_not_kept()
     {
         using var workspace = new TempWorkspace();

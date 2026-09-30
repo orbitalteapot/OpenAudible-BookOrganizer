@@ -92,7 +92,7 @@ const REQUEST_TIMEOUT_MS = 60_000;
  * The run's progress only reads the organizer's memory, so it never needs long. Polls that hang for
  * a minute each (a paused container, a dropped VPN) would take half an hour to add up to "lost contact".
  */
-const PROGRESS_TIMEOUT_MS = 5_000;
+export const PROGRESS_TIMEOUT_MS = 5_000;
 
 async function request(path, { method = 'GET', body, timeoutMs = REQUEST_TIMEOUT_MS } = {}) {
   const options = { method, signal: AbortSignal.timeout(timeoutMs) };

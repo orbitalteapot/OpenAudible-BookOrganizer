@@ -131,6 +131,54 @@ public class SortScheduleTests
         Assert.Equal(RunTrigger.Scheduled, state.LastRun!.Trigger);
         Assert.Equal(1, state.LastRun.Counts.New);
         Assert.Equal(["Tolkien/The Hobbit/The Hobbit.m4b"], workspace.DestinationFiles());
+        Assert.True(File.Exists(Path.Combine(workspace.Destination, SortPathValidator.MarkerFileName)));
+        Assert.Equal(workspace.Destination, state.MarkedDestinationPath);
+    }
+
+    [Fact]
+    public async Task An_automatic_run_leaves_an_empty_stand_in_for_an_unmounted_destination_alone()
+    {
+        // Docker recreated the unmounted drive behind /destination as an empty folder on the system disk.
+        using var workspace = new TempWorkspace();
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(20), 1440, time: time);
+        backend.Settings.UpdateSchedule(_ => Succeeded(Now.AddDays(-1)) with { MarkedDestinationPath = workspace.Destination });
+        using var scheduler = backend.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastAttemptUtc == Now, "the regular run");
+        await scheduler.StopAsync(CancellationToken.None);
+
+        var status = scheduler.GetStatus();
+        Assert.Equal("destinationUnmounted", status.LastRun!.ErrorCode);
+        Assert.True(status.Retrying);
+        Assert.Contains(SortPathValidator.MarkerFileName, status.BlockedReason);
+        Assert.Empty(workspace.DestinationFiles());
+
+        // A person who emptied it on purpose sorts once by hand, which marks it again.
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var manual));
+        Assert.Null((await manual).Error);
+        Assert.Equal(20, workspace.DestinationFiles().Length);
+        Assert.Null(scheduler.GetStatus().BlockedReason);
+    }
+
+    [Fact]
+    public async Task An_automatic_run_sorts_into_a_destination_chosen_since_the_last_one_was_marked()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), 1440, time: time);
+        backend.Settings.UpdateSchedule(_ => Succeeded(Now.AddDays(-1)) with { MarkedDestinationPath = workspace.Root });
+        using var scheduler = backend.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastAttemptUtc == Now, "the regular run");
+        await scheduler.StopAsync(CancellationToken.None);
+
+        Assert.Null(backend.Settings.Schedule.LastRun!.Error);
+        Assert.Equal(["Tolkien/The Hobbit/The Hobbit.m4b"], workspace.DestinationFiles());
+        Assert.Equal(workspace.Destination, backend.Settings.Schedule.MarkedDestinationPath);
     }
 
     [Fact]
@@ -287,6 +335,53 @@ public class SortScheduleTests
         Assert.Equal("Canceled because the app closed.", state.LastRun!.Error);
         Assert.True(SortSchedule.LastAttemptFailed(state));
         Assert.Null(state.LastSuccessUtc);
+    }
+
+    [Fact]
+    public async Task A_run_due_during_a_manual_sort_counts_as_done_when_that_sort_finishes()
+    {
+        using var workspace = new TempWorkspace();
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(20), 1440, time: time);
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var manual));
+        using var scheduler = backend.CreateScheduler();
+
+        // Due at once, the scheduler finds the manual sort running and waits for it.
+        await scheduler.StartAsync(CancellationToken.None);
+        await manual;
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastRun is not null, "the slot to be recorded");
+        await scheduler.StopAsync(CancellationToken.None);
+
+        var state = backend.Settings.Schedule;
+        Assert.Equal(RunTrigger.Manual, state.LastRun!.Trigger);
+        Assert.Equal(Now, state.LastSuccessUtc);
+        Assert.False(SortSchedule.LastAttemptFailed(state));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_run_due_during_a_manual_sort_that_is_cut_short_is_tried_again(bool appClosing)
+    {
+        using var workspace = new TempWorkspace();
+        var time = new FakeTimeProvider(Now);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time);
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out _));
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out _));
+        using var scheduler = backend.CreateScheduler();
+
+        await scheduler.StartAsync(CancellationToken.None);
+        await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the manual run to start");
+        Assert.True(backend.Sort.CancelSort(appClosing));
+        await TestBackend.WaitUntil(() => backend.Settings.Schedule.LastRun is not null, "the slot to be recorded");
+        await scheduler.StopAsync(CancellationToken.None);
+
+        // Counted as done, the rest of the library would wait a whole interval.
+        var state = backend.Settings.Schedule;
+        Assert.True(state.LastRun!.IsCanceled);
+        Assert.True(SortSchedule.LastAttemptFailed(state));
+        Assert.Null(state.LastSuccessUtc);
+        Assert.Equal(Now.AddMinutes(15), scheduler.GetStatus().NextRunUtc);
     }
 
     [Fact]

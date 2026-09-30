@@ -22,16 +22,36 @@ function quoteDesktopExecArg(arg) {
   return `"${arg.replace(/(["`$\\])/g, '\\$1')}"`.replace(/\\/g, '\\\\');
 }
 
+/** What the sign-in entry starts. An AppImage runs from a mount point that changes every launch; APPIMAGE is the file itself. */
+function loginExecutable() {
+  return process.env.APPIMAGE || process.execPath;
+}
+
+/**
+ * Remembers what was last registered with the OS. The saved setting is applied at every launch, and
+ * registering it again each time would undo a person turning the entry off in Windows' Startup apps
+ * or their desktop's autostart settings, with nothing in the app to say why it came back.
+ */
+function appliedFile() {
+  return path.join(app.getPath('userData'), 'login-item.json');
+}
+
+function readApplied() {
+  try {
+    return JSON.parse(fs.readFileSync(appliedFile(), 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
 /** Electron's login items cover Windows and macOS only; Linux desktops read XDG autostart entries. */
-function setLinuxAutostart(enabled) {
+function setLinuxAutostart(enabled, executable) {
   const file = path.join(app.getPath('appData'), 'autostart', `${desktopName}.desktop`);
   if (!enabled) {
     fs.rmSync(file, { force: true });
     return;
   }
 
-  // An AppImage runs from a mount point that changes every launch; APPIMAGE is the file itself.
-  const executable = process.env.APPIMAGE || process.execPath;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(
     file,
@@ -54,12 +74,18 @@ function setOpenAtLogin(enabled) {
     return;
   }
 
+  // Registered again only when the setting changes, or the app has moved and the entry would start nothing.
+  const executable = loginExecutable();
+  const applied = readApplied();
+  if (applied?.enabled === enabled && applied?.executable === executable) return;
+
   try {
     if (process.platform === 'linux') {
-      setLinuxAutostart(enabled);
+      setLinuxAutostart(enabled, executable);
     } else {
       app.setLoginItemSettings({ openAtLogin: enabled, args: [HIDDEN_ARG] });
     }
+    fs.writeFileSync(appliedFile(), JSON.stringify({ enabled, executable }));
   } catch (err) {
     console.error('[login] Could not change "Start when I sign in":', err.message);
   }
