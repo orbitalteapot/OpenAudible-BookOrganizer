@@ -172,7 +172,7 @@ function outcomeNotes(counts) {
     // organizer filed itself whose details have changed since. The note names both rather than
     // blaming an older version the user may never have had.
     moved > 0 &&
-      `${pluralBooks(moved)} already in the destination folder ${moved === 1 ? 'was' : 'were'} moved to where ${moved === 1 ? 'it now belongs' : 'they now belong'}: left loose by an older version, or filed before ${moved === 1 ? 'its' : 'their'} series, number or title changed.`,
+      `${pluralBooks(moved)} already in the destination folder ${moved === 1 ? 'was' : 'were'} moved to where ${moved === 1 ? 'it now belongs' : 'they now belong'}: left loose by an older version, or filed before ${moved === 1 ? 'its' : 'their'} author, series, number or title changed.`,
     notFound > 0 &&
       (noneFound(counts)
         ? `None of the books in the export were found in the source folder. ${sourceFolderAdvice()}`

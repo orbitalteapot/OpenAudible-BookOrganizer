@@ -14,7 +14,7 @@ namespace AudioFileSorter.Model;
 /// <param name="Moved">
 /// Books already in the destination but not where they now belong, moved there and otherwise
 /// already up to date: left loose in an author or series folder by an older version, or filed
-/// before their series details changed.
+/// before their author, series, number or title changed.
 /// </param>
 /// <param name="UpToDate">Books already present and current, so nothing was written.</param>
 /// <param name="NotFound">

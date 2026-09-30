@@ -55,7 +55,10 @@ public class LibraryManifestTests
         var root = document.RootElement;
         Assert.Equal("openaudible-organizer-manifest", root.GetProperty("format").GetString());
         Assert.Equal(1, root.GetProperty("version").GetInt32());
-        Assert.False(string.IsNullOrWhiteSpace(root.GetProperty("note").GetString()));
+        // For whoever finds the file: deleting it is not free.
+        var note = root.GetProperty("note").GetString();
+        Assert.Contains("never given to another", note);
+        Assert.Contains("automatic sorts pause", note);
         var book = root.GetProperty("books").GetProperty("b01");
         Assert.Equal("An Author/Saga/Book 1", book.GetProperty("folder").GetString());
         Assert.Equal("A Book.m4b", Assert.Single(book.GetProperty("files").EnumerateArray()).GetString());
@@ -89,6 +92,47 @@ public class LibraryManifestTests
         Assert.True(manifest.Existed);
         Assert.Empty(manifest.Books);
         Assert.Contains("rebuilt", manifest.Problem);
+    }
+
+    [Fact]
+    public void A_file_that_cannot_be_read_right_now_is_not_taken_for_an_empty_record()
+    {
+        // As when a virus scanner or a backup tool has it open: it may be a good record, which a
+        // rebuilt one saved over it would lose.
+        using var workspace = new TempWorkspace();
+        LibraryManifest.Load(workspace.Destination).Save();
+        var path = Path.Combine(workspace.Destination, LibraryManifest.FileName);
+
+        using var locked = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var error = Assert.Throws<IOException>(() => LibraryManifest.Load(workspace.Destination));
+
+        Assert.Contains(LibraryManifest.FileName, error.Message);
+        Assert.Contains("nothing was sorted", error.Message);
+    }
+
+    [Fact]
+    public void A_book_whose_folder_cannot_be_looked_into_right_now_is_kept()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        {
+            return;
+        }
+
+        using var workspace = new TempWorkspace();
+        var folder = Path.Combine(workspace.Destination, "An Author", "A Book");
+        workspace.WriteDestinationFile(Path.Combine(folder, "A Book.m4b"), "audio");
+        WriteManifest(workspace, ("b01", "An Author/A Book", ["A Book.m4b"]));
+
+        File.SetUnixFileMode(folder, UnixFileMode.None);
+        try
+        {
+            var entry = Assert.Single(LibraryManifest.Load(workspace.Destination).Books);
+            Assert.Equal(["A Book.m4b"], entry.Value.Files);
+        }
+        finally
+        {
+            File.SetUnixFileMode(folder, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
     }
 
     [Theory]

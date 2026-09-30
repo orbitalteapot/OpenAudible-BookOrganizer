@@ -146,7 +146,7 @@ Every book lands in exactly one of six counters, so they add up to the books pro
 | --- | --- |
 | **New** | Not in your library yet; copied in. |
 | **Updated** | Replaced an out-of-date copy at the destination. |
-| **Moved** | Already in the destination but not where it now belongs — left loose by an older version of this app, or filed before its series, number or title changed — and moved there (see [below](#how-your-books-get-organised)). |
+| **Moved** | Already in the destination but not where it now belongs — left loose by an older version of this app, or filed before its author, series, number or title changed — and moved there (see [below](#how-your-books-get-organised)). |
 | **Up to date** | Already at the destination and unchanged, so nothing was written. |
 | **Not found** | Listed in the export, but no audio file for it in the source folder — usually books you have not downloaded. A PDF on its own is not copied; it comes along once the audio is there. |
 | **Failed** | Could not be copied. The problems list says why. |
@@ -209,8 +209,11 @@ the file is present.
 
 The organiser remembers which book it put in which folder, in a small hidden file called
 `.openaudible-organizer` at the top of the destination folder. Leave it there: library servers
-ignore it. If it is deleted, nothing is lost — the next sort finds your books in their folders
-again and writes a new one.
+ignore it. If it is deleted, the next sort finds the books in your export in their folders again and
+writes a new one, but two things are lost until then. The folders of books that have left your export
+are no longer set aside, so a later book with the same name can be filed in one, over the copy there.
+And automatic sorts pause, taking the folder for an unmounted drive, until you press **Start sorting**
+once and confirm (see [Sorting automatically](#sorting-automatically)).
 
 Because of that record, a book keeps its folder from one sort to the next. Two books with the same
 title, or the same number in a series (two narrations of one book, say), get folders such as
@@ -218,8 +221,8 @@ title, or the same number in a series (two narrations of one book, say), get fol
 export later.
 A folder stays its book's as long as the book's files are in it, even after the book has left your
 export, so a different book with the same title that comes along later gets a `(2)` folder of its
-own and never replaces what may be the only copy of the first. When a book's series, number in the
-series or title changes, it is moved to its new folder, PDF and all, renamed if its title changed,
+own and never replaces what may be the only copy of the first. When a book's author, series, number in
+the series or title changes, it is moved to its new folder, PDF and all, renamed if its title changed,
 and counted as **Moved**; the old folder is removed if that leaves it empty.
 
 Libraries sorted by an older version, which left standalone books loose in the author folder and
@@ -228,7 +231,9 @@ file is moved into its book's new folder rather than copied a second time, and c
 This always happens: a loose file next to a book folder is exactly what breaks Audiobookshelf. Files
 are only ever moved within the destination folder, and never over another file. When only one book
 in your export could have left a loose file, it is that book's: it is moved, and then replaced if you
-have downloaded the book again since. When several books share its name (older versions told them
+have downloaded the book again since. Once a book of that name has been sorted into a folder beside
+it, though, an earlier sort left the file there on purpose, and it is only moved into a book whose
+audio it holds. A file inside another book's folder is always left alone. When several books share its name (older versions told them
 apart as `Title (2)`), a file is moved only into the book whose audio it holds; any other may be the
 only copy of a book you have returned or not downloaded again, so it is left where it is and the
 problems list names it: delete it yourself if it is an old copy.
@@ -311,6 +316,7 @@ operating system's setting and changes with it.
 | Books show as **Failed** | Open **Problems** under the counters: each book is listed with the reason, such as a full disk or a folder you cannot write to. |
 | *"The destination folder doesn't exist. Is the drive connected?"* | The drive or network share holding your library is not connected. Connect it and start again. |
 | *"The destination folder … no longer holds the .openaudible-organizer file…"* | Automatic sorting found the destination folder, but not the record of your books earlier sorts left in it: usually the drive or share is not mounted, and the empty folder it is mounted on stands in for it. Mount it. If you emptied the folder on purpose, press **Start sorting** once and choose *Sort into it anyway*. |
+| *"Could not read its record of which book is in which folder (the .openaudible-organizer file), so nothing was sorted"* | Another program had the file open (a virus scanner, a backup or sync tool, a second copy of the app), or a network drive hiccuped. Nothing was changed; sort again. If it keeps happening, check that you can open the file. |
 | The destination says **Can't write to this folder** | You do not have permission to write there, or the drive is read-only. Pick another folder, or fix the permissions. |
 | **Start sorting** is greyed out: *"A sort is already running."* | A sort — possibly an automatic one — is still going. Follow it in the Progress card, or cancel it there. |
 | **Automatic sorting** is greyed out | Choose all three paths first; the card says which are missing. |

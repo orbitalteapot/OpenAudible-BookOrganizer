@@ -22,6 +22,17 @@ public class RunStatusTests
     }
 
     [Fact]
+    public void The_log_calls_moved_books_moved_whatever_moved_them()
+    {
+        // Books are moved for a new author, series, number or title too, not only from an older layout.
+        var summary = new SortSummary(3, SortCounts.Empty with { Moved = 2, UpToDate = 1 }, [], 0);
+
+        var text = RunSummary.Describe(RunStatus.Starting(RunTrigger.Manual, Now).Completed(summary, Now));
+
+        Assert.StartsWith("Manual sort finished: 2 moved, 1 up to date", text);
+    }
+
+    [Fact]
     public void The_page_is_told_that_a_run_is_preparing()
     {
         var json = JsonSerializer.SerializeToElement(RunStatus.Starting(RunTrigger.Scheduled, Now), JsonSerializerOptions.Web);

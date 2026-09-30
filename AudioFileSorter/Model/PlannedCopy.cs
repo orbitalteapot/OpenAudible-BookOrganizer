@@ -31,7 +31,7 @@ public sealed record PlannedCopy
     /// <summary>
     /// A copy of the audio already in the destination, to be moved to <see cref="AudioDestination"/>
     /// before the update check: the book's own file from the folder the manifest records, when the
-    /// book has moved (its series, number or title changed), or one an older version left loose that
+    /// book has moved (its author, series, number or title changed), or one an older version left loose that
     /// is this book's (see <see cref="SortPlanner"/>). Null when there is none.
     /// </summary>
     public string? AudioMoveFrom { get; init; }

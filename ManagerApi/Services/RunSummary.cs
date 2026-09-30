@@ -35,7 +35,7 @@ public static class RunSummary
             {
                 (counts.New, "new"),
                 (counts.Updated, "updated"),
-                (counts.Moved, "moved from an older layout"),
+                (counts.Moved, "moved"),
                 (counts.UpToDate, "up to date"),
                 (counts.NotFound, "not found"),
                 (counts.Failed, "failed")

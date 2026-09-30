@@ -21,9 +21,9 @@ namespace AudioFileSorter;
 /// <list type="number">
 /// <item>series folders are reserved, so no book is ever filed loose among a series' book folders;</item>
 /// <item>
-/// each book gets its folder, in export order (see <see cref="ClaimFolder"/>): a book on record keeps
-/// its folder, or moves when its series, number or title changed; a new book claims the first free
-/// "Title", "Title (2)"...;
+/// each book gets its folder (see <see cref="ClaimFolder"/>): first the books on record, which keep
+/// their folders, or move when their author, series, number or title changed; then the new books,
+/// in export order, each claiming the first free "Title", "Title (2)"...;
 /// </item>
 /// <item>files an older version left where library tools trip over them move to the book they belong to.</item>
 /// </list>
@@ -51,6 +51,15 @@ public sealed class SortPlanner
     /// <summary>The folders given out in this run, to series and to books.</summary>
     private readonly HashSet<string> _claimedFolders = new(FolderComparer);
 
+    /// <summary>The folders on record (see <see cref="LibraryManifest"/>), and whose each is.</summary>
+    private Dictionary<string, string> _folderOwners = new(FolderComparer);
+
+    /// <summary>
+    /// The folders on record for books this run does not sort (gone from the export or from the
+    /// source), which therefore stay where they are, in the way of anything else.
+    /// </summary>
+    private readonly HashSet<string> _heldFolders = new(FolderComparer);
+
     private string _root = string.Empty;
 
     /// <summary>Builds the copy plan for every book in <paramref name="books"/>.</summary>
@@ -72,6 +81,9 @@ public sealed class SortPlanner
         ArgumentNullException.ThrowIfNull(manifest);
 
         _root = Path.GetFullPath(destinationRoot);
+        _folderOwners = manifest.Books
+            .DistinctBy(pair => pair.Value.Folder, FolderComparer)
+            .ToDictionary(pair => pair.Value.Folder, pair => pair.Key, FolderComparer);
         var rows = ResolveBooks(books, sourceRoot, manifest, cancellationToken);
         var unique = rows.Where(book => !book.IsRepeat).ToList();
         var inSource = unique.Where(book => book.AudioSource is not null).ToList();
@@ -80,14 +92,13 @@ public sealed class SortPlanner
         // "Bobiverse (2)" folder of its own instead of lying loose in the series, wherever it is listed.
         _claimedFolders.UnionWith(unique.Where(book => book.Naming.SeriesName is not null).Select(book => book.Parent));
 
-        var folderOwners = manifest.Books
-            .DistinctBy(pair => pair.Value.Folder, FolderComparer)
-            .ToDictionary(pair => pair.Value.Folder, pair => pair.Key, FolderComparer);
+        // The books on record first, whatever the export's order: their files are provably theirs, so
+        // a new book listed before one that moved must not take the folder it moves to.
         var sharingFolderName = unique.Where(book => book.Record is null).ToLookup(SharedFolderKey, FolderComparer);
-        foreach (var book in inSource)
+        foreach (var book in inSource.OrderBy(book => book.Record is null))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ClaimFolder(book, folderOwners, contested: sharingFolderName[SharedFolderKey(book)].Any(other => other != book));
+            ClaimFolder(book, contested: sharingFolderName[SharedFolderKey(book)].Any(other => other != book));
         }
 
         inSource.Where(book => book.Folder is not null).ToList().ForEach(PlanFiles);
@@ -130,40 +141,60 @@ public sealed class SortPlanner
     /// <summary>Works out every row's identity, files and wanted folder, and which rows repeat a book listed before.</summary>
     private List<Book> ResolveBooks(IReadOnlyList<OpenAudible> rows, string sourceRoot, LibraryManifest manifest, CancellationToken cancellationToken)
     {
-        var seenIds = new HashSet<string>(StringComparer.Ordinal);
-        var seenSources = new HashSet<string>(SourceComparer);
         var books = new List<Book>(rows.Count);
-
         foreach (var row in rows)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
             var naming = BookNaming.BuildPlan(row);
             var audioSource = SourceFileLocator.FindAudioFile(row, sourceRoot);
-            var book = new Book(row, naming, BuildTitle(row, naming)) { Id = BookIdFor(row, audioSource), AudioSource = audioSource };
-            if (audioSource is null && SourceFileLocator.HasEmptyAudioFile(row, sourceRoot))
+            books.Add(new Book(row, naming, BuildTitle(row, naming)) { Id = BookIdFor(row, audioSource), AudioSource = audioSource });
+        }
+
+        MarkRepeats(books);
+        var sortedIds = books.Where(book => !book.IsRepeat && book.AudioSource is not null).Select(book => book.Id!).ToHashSet(StringComparer.Ordinal);
+        _heldFolders.UnionWith(_folderOwners.Where(pair => !sortedIds.Contains(pair.Value)).Select(pair => pair.Key));
+
+        foreach (var book in books.Where(book => !book.IsRepeat))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (book.AudioSource is null && SourceFileLocator.HasEmptyAudioFile(book.Row, sourceRoot))
             {
                 book.Warnings.Add(EmptySourceMessage);
             }
 
-            // A book listed again (in two accounts or regions, say) is the same book whatever
-            // title the other listing gives it: planning it again would give it a second folder
-            // and a second copy. '|' so both are remembered.
-            book.IsRepeat = audioSource is not null && (!seenSources.Add(audioSource) | !seenIds.Add(book.Id!));
-            if (!book.IsRepeat)
-            {
-                book.PdfSource = audioSource is null ? null : SourceFileLocator.FindPdfFile(row, sourceRoot);
-                book.Parent = ResolveParentDirectory(naming);
-                book.BaseName = naming.SeriesSequence is null
-                    ? ResolveDirectoryName(book.Parent, naming.FileStem, isSeries: false)
-                    : $"Book {naming.SeriesSequence}";
-                book.Record = book.Id is null ? null : manifest.Get(book.Id);
-            }
-
-            books.Add(book);
+            book.PdfSource = book.AudioSource is null ? null : SourceFileLocator.FindPdfFile(book.Row, sourceRoot);
+            book.Parent = ResolveParentDirectory(book.Naming);
+            book.BaseName = book.Naming.SeriesSequence is null
+                ? ResolveDirectoryName(book.Parent, book.Naming.FileStem, isSeries: false)
+                : $"Book {book.Naming.SeriesSequence}";
+            book.Record = book.Id is null ? null : manifest.Get(book.Id);
         }
 
         return books;
+    }
+
+    /// <summary>
+    /// A book listed again (in two accounts or regions, say) is the same book whatever title the
+    /// other listing gives it: planning it again would give it a second folder and a second copy.
+    /// Of the rows listing one book, the first with its audio in the source is the book, and one
+    /// without only when no row has it, so a book is never reported both sorted and missing. Only a
+    /// row with neither an id nor a file is a book of its own whatever else is listed.
+    /// </summary>
+    private static void MarkRepeats(List<Book> books)
+    {
+        var idsInSource = books.Where(book => book.AudioSource is not null).Select(book => book.Id!).ToHashSet(StringComparer.Ordinal);
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        var seenSources = new HashSet<string>(SourceComparer);
+
+        foreach (var book in books)
+        {
+            // '|' so both are remembered.
+            book.IsRepeat = book.AudioSource is not null
+                ? !seenSources.Add(book.AudioSource) | !seenIds.Add(book.Id!)
+                : book.Id is not null && (idsInSource.Contains(book.Id) || !seenIds.Add(book.Id));
+        }
     }
 
     /// <summary>
@@ -193,15 +224,15 @@ public sealed class SortPlanner
     /// </list>
     /// </summary>
     /// <param name="contested">Another book the manifest does not know wants a folder of this name, for a book of this title.</param>
-    private void ClaimFolder(Book book, Dictionary<string, string> folderOwners, bool contested)
+    private void ClaimFolder(Book book, bool contested)
     {
         var free = Enumerable.Range(1, MaxDisambiguationAttempts)
             .Select(attempt => _disk.Spelled(book.Parent, book.BaseName + Suffix(attempt)))
-            .Where(folder => !_claimedFolders.Contains(folder) && !(folderOwners.TryGetValue(folder, out var owner) && owner != book.Id))
+            .Where(folder => !_claimedFolders.Contains(folder) && !(_folderOwners.TryGetValue(folder, out var owner) && owner != book.Id))
             .ToList();
 
         // Other books' recorded folders are not free, so a recorded one left is this book's own.
-        var folder = free.FirstOrDefault(folderOwners.ContainsKey)
+        var folder = free.FirstOrDefault(_folderOwners.ContainsKey)
                      ?? free.FirstOrDefault(folder => _disk.Folders(book.Parent).ContainsKey(Path.GetFileName(folder)) && HoldsCopyOf(book, folder))
                      ?? free.FirstOrDefault(folder => MayTake(book, folder, contested));
         if (folder is null)
@@ -338,7 +369,7 @@ public sealed class SortPlanner
                     .ToList();
                 candidates.ForEach(candidate => firstSeenBy.TryAdd(candidate, book));
 
-                var onlyOwner = candidates.Count == 1 && possibleOwners[OldFileKey(folder, book)].Count() == 1;
+                var onlyOwner = candidates.Count == 1 && possibleOwners[OldFileKey(folder, book)].Count() == 1 && !NamesakeOnRecord(book);
                 var match = candidates.FirstOrDefault(file => !adopted.Contains(file) && (onlyOwner || FileComparison.AreSameQuick(source, file)));
                 if (match is not null)
                 {
@@ -356,11 +387,26 @@ public sealed class SortPlanner
     /// books in the author folder, series books without a number in the series folder), and in the
     /// plain "Title" or "Book N" folder when the book now has a "(2)" one, as every book with one
     /// number shared "Book N", and a series named like a standalone book may now have its folder.
+    /// Never a folder on record for another book: what is in it is that book's, or put there by hand.
     /// </summary>
     private IEnumerable<string> OldFileFolders(Book book)
     {
-        var shared = _disk.Spelled(book.Parent, book.BaseName);
-        return FolderComparer.Equals(book.Folder, shared) ? [book.Parent] : [book.Parent, shared];
+        return new[] { book.Parent, _disk.Spelled(book.Parent, book.BaseName) }
+            .Where(folder => !FolderComparer.Equals(folder, book.Folder) && !_folderOwners.ContainsKey(folder));
+    }
+
+    /// <summary>
+    /// Whether a book of this one's folder name is on record beside where it goes. Then a sort that
+    /// kept a record has been through the folder, and a loose file of the name still there is one it
+    /// left because it matched no book in the export: it may be a returned book's only copy, and only
+    /// this book's own audio makes it this book's.
+    /// </summary>
+    private bool NamesakeOnRecord(Book book)
+    {
+        var nameKey = NameKey(book.BaseName);
+        return _folderOwners.Keys.Any(folder =>
+            FolderComparer.Equals(Path.GetDirectoryName(folder), book.Parent) &&
+            NameKey(WithoutSuffix(Path.GetFileName(folder)) ?? Path.GetFileName(folder)) == nameKey);
     }
 
     /// <summary>The files in <paramref name="folder"/> named after a book, the plain name first, then "Title (2)"...</summary>
@@ -434,9 +480,29 @@ public sealed class SortPlanner
                 isSeries && PathSanitizer.NormalizeSeriesKey(name) == normalized && !_disk.IsBookFolder(Path.Combine(parentDirectory, name)))
             ?? requestedName;
 
+        if (isSeries)
+        {
+            resolved = UnheldFolderName(parentDirectory, resolved);
+        }
+
         _resolvedDirectoryNames.TryAdd(sharedKey, resolved);
         _resolvedDirectoryNames[spellingKey] = resolved;
         return resolved;
+    }
+
+    /// <summary>
+    /// <paramref name="name"/>, or else the first "name (2)"... that is not another book's folder, when
+    /// <paramref name="name"/> is the folder of a book on record that this run leaves where it is (see
+    /// <see cref="_heldFolders"/>). A series filed in it would lie beside that book's audio, and library
+    /// tools would read the whole folder as that one book. A book this run sorts moves out of the way instead.
+    /// </summary>
+    private string UnheldFolderName(string parentDirectory, string name)
+    {
+        return Enumerable.Range(1, MaxDisambiguationAttempts)
+            .Select(attempt => (Attempt: attempt, Folder: _disk.Spelled(parentDirectory, name + Suffix(attempt))))
+            .Where(candidate => !_heldFolders.Contains(candidate.Folder) && (candidate.Attempt == 1 || !_disk.IsBookFolder(candidate.Folder)))
+            .Select(candidate => Path.GetFileName(candidate.Folder))
+            .FirstOrDefault() ?? name;
     }
 
     /// <summary>"", " (2)", " (3)"...: what tells apart the folders of books that share a name.</summary>

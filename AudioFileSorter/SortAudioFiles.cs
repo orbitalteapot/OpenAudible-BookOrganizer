@@ -33,6 +33,10 @@ public class FileSorter
     /// </param>
     /// <param name="cancellationToken">Token used to abort the run.</param>
     /// <exception cref="SortPathException">The paths cannot be used; see <see cref="SortPathValidator"/>.</exception>
+    /// <exception cref="IOException">
+    /// The destination's record of its books cannot be read right now (see <see cref="LibraryManifest.Load"/>).
+    /// Nothing was sorted, and the record is left as it is.
+    /// </exception>
     public async Task<SortSummary> SortAudioFiles(
         string source,
         string destination,
@@ -109,16 +113,25 @@ public class FileSorter
     /// Records where each book sorted in this run is, beside what earlier runs recorded, and writes
     /// the manifest. Not being able to write it costs no book anything, so it is reported rather than
     /// allowed to fail the run: the next sort finds the books in their folders again.
+    ///
+    /// A book that stayed in its folder keeps the files on record that are still there beside the
+    /// ones written this run: a PDF no longer in the source, or the audio in a format it has since
+    /// changed from, is still its own, and must not look like a stray file another book may take.
     /// </summary>
     private static void SaveManifest(LibraryManifest manifest, IEnumerable<PlannedCopy> sorted, RunTally tally)
     {
         foreach (var item in sorted.Where(item => item.BookId is not null))
         {
+            var kept = manifest.Get(item.BookId!) is { } recorded && string.Equals(recorded.Folder, item.TargetDirectory, StringComparison.OrdinalIgnoreCase)
+                ? recorded.Files.Select(name => Path.Combine(item.TargetDirectory!, name))
+                : [];
             var files = new[] { item.AudioDestination, item.PdfDestination }
                 .OfType<string>()
+                .Concat(kept)
                 .Where(File.Exists)
                 .Select(Path.GetFileName)
                 .OfType<string>()
+                .Distinct(StringComparer.FromComparison(PathSanitizer.PathComparison))
                 .ToList();
 
             if (files.Count > 0)

@@ -27,13 +27,9 @@ public sealed class LibraryManifest
     private const int FormatVersion = 1;
 
     private const string Note =
-        "Written by OpenAudible Book Organizer. It records which book owns which folder. " +
-        "Deleting it only makes the next sort re-check the library.";
-
-    private const string RebuiltMessage =
-        $"Its record of which book is in which folder (the {FileName} file) could not be read, so it was rebuilt " +
-        "from the books found in their folders. This is expected once after updating from an older version. " +
-        "Nothing in the library was changed because of it.";
+        "Written by OpenAudible Book Organizer. It records which book owns which folder, so that the folder of a book " +
+        "that has left the export is never given to another. Deleting it loses that, and automatic sorts pause until " +
+        "a sort is started by hand and confirmed.";
 
     private static readonly JsonSerializerOptions WriteOptions = new()
     {
@@ -44,6 +40,12 @@ public sealed class LibraryManifest
     };
 
     private readonly Dictionary<string, ManifestEntry> _books = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Where <see cref="Save"/> keeps the file it found that was not a manifest before writing over it,
+    /// as it may be a newer version's record or one a person wants back. Null when there is none to keep.
+    /// </summary>
+    private string? _keepAs;
 
     private LibraryManifest(string root, bool existed, string? problem)
     {
@@ -92,13 +94,20 @@ public sealed class LibraryManifest
     /// <summary>
     /// Reads the manifest in <paramref name="destinationRoot"/>. Never throws for what the file holds:
     /// a missing file is an empty record, and one that is not a manifest (the plain marker earlier
-    /// versions of this branch left, a damaged or hand-edited file) is an empty record with a
-    /// <see cref="Problem"/>. Either way the planner finds the books in their folders again.
+    /// versions of this branch left, a damaged or hand-edited file, a newer version's) is an empty
+    /// record with a <see cref="Problem"/>, kept aside when it is saved over. Either way the planner
+    /// finds the books in their folders again.
     ///
     /// Only what is still true is kept: an entry that leads outside the destination is ignored, a
     /// book whose folder or files are all gone (the person deleted it) is dropped, and a folder
     /// recorded twice keeps its first owner, as one folder is one book.
     /// </summary>
+    /// <exception cref="IOException">
+    /// The file is there but cannot be read right now: another program has it open, a network drive
+    /// hiccuped, or its permissions changed. Unlike a file that is not a manifest, it may be a good
+    /// record, and one rebuilt and saved over it would forget every book that has left the export,
+    /// whose folders a later book could then be given. The message is worded for the person sorting.
+    /// </exception>
     public static LibraryManifest Load(string destinationRoot)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationRoot);
@@ -116,7 +125,7 @@ public sealed class LibraryManifest
             using var document = JsonDocument.Parse(stream);
             if (!TryGetBooks(document.RootElement, out var books))
             {
-                return new LibraryManifest(root, existed: true, RebuiltMessage);
+                return Rebuilt(root, path);
             }
 
             var manifest = new LibraryManifest(root, existed: true, problem: null);
@@ -131,13 +140,35 @@ public sealed class LibraryManifest
 
             return manifest;
         }
-        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        catch (JsonException)
         {
-            return new LibraryManifest(root, existed: true, RebuiltMessage);
+            return Rebuilt(root, path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException(
+                $"Could not read its record of which book is in which folder (the {FileName} file), so nothing was sorted: " +
+                $"{ex.Message} Sort again once the file can be read.",
+                ex);
         }
     }
 
-    /// <summary>Writes the manifest to the destination, atomically (see <see cref="AtomicFile.Write"/>).</summary>
+    /// <summary>An empty record in place of the file at <paramref name="path"/>, which is not a manifest.</summary>
+    private static LibraryManifest Rebuilt(string root, string path)
+    {
+        var keepAs = $"{path}.unreadable-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
+        var problem =
+            $"Its record of which book is in which folder (the {FileName} file) could not be read, so it was rebuilt " +
+            $"from the books found in their folders, and the old file kept as {Path.GetFileName(keepAs)}. " +
+            "This is expected once after updating from an older version.";
+
+        return new LibraryManifest(root, existed: true, problem) { _keepAs = keepAs };
+    }
+
+    /// <summary>
+    /// Writes the manifest to the destination, atomically (see <see cref="AtomicFile.Write"/>), first
+    /// keeping a copy of a file there that was not a manifest (see <see cref="Load"/>).
+    /// </summary>
     /// <exception cref="IOException">It could not be written; the one on disk, if any, is untouched.</exception>
     /// <exception cref="UnauthorizedAccessException">The destination cannot be written.</exception>
     public void Save()
@@ -150,7 +181,16 @@ public sealed class LibraryManifest
         }
 
         var file = new { format = FormatName, version = FormatVersion, note = Note, books };
-        AtomicFile.Write(Path.Combine(Root, FileName), stream => JsonSerializer.Serialize(stream, file, WriteOptions));
+        var path = Path.Combine(Root, FileName);
+
+        // Copied rather than moved, so the destination keeps its marker if the write fails.
+        if (_keepAs is not null && File.Exists(path))
+        {
+            File.Copy(path, _keepAs, overwrite: false);
+        }
+
+        _keepAs = null;
+        AtomicFile.Write(path, stream => JsonSerializer.Serialize(stream, file, WriteOptions));
     }
 
     private static bool TryGetBooks(JsonElement root, out JsonElement books)
@@ -180,10 +220,13 @@ public sealed class LibraryManifest
             return null;
         }
 
+        // A folder that is there but cannot be looked into right now (its permissions, a network
+        // hiccup) is not a book the person deleted: it stays the book's, with the files on record.
+        var canLook = CanList(folder);
         var files = filesElement.EnumerateArray()
             .Where(file => file.ValueKind == JsonValueKind.String)
             .Select(file => file.GetString()!)
-            .Where(name => IsPlainFileName(name) && IsInside(Path.Combine(folder, name)) && File.Exists(Path.Combine(folder, name)))
+            .Where(name => IsPlainFileName(name) && IsInside(Path.Combine(folder, name)) && (!canLook || File.Exists(Path.Combine(folder, name))))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -232,6 +275,20 @@ public sealed class LibraryManifest
     }
 
     private bool IsInside(string path) => PathSanitizer.IsWithin(Root, path);
+
+    private static bool CanList(string folder)
+    {
+        try
+        {
+            using var entries = Directory.EnumerateFileSystemEntries(folder).GetEnumerator();
+            entries.MoveNext();
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
 
     private static bool IsPlainFileName(string name)
     {
