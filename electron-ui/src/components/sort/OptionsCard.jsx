@@ -102,9 +102,10 @@ export default function OptionsCard({ settings, update, saving, fieldErrors, run
             <p>
               Books in a numbered series go in Author / Series / Book N; other books in Author / Title. A hidden
               .openaudible-organizer file in the destination records which book is in which folder, so each book keeps
-              its folder, and moves to a new one with its files when its author, series, number or title changes. Files left loose by
-              older versions of this app are moved into their books&apos; folders. When several books share a loose
-              file&apos;s name, it is moved only into the one with the same audio; otherwise it is left where it is and
+              its folder, and moves to a new one with its files when its author, series, number or title changes. Files left loose, or
+              in a Book N folder two books shared, by older versions of this app are moved into their books&apos;
+              folders. When several books share a loose file&apos;s name, or a sort has already been through the folder,
+              it is moved only into the one with the same audio. Any loose audio file not moved is left where it is and
               listed under Problems.
             </p>
           </div>

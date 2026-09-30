@@ -39,6 +39,9 @@ public sealed class LibraryManifest
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
 
+    /// <summary>What <see cref="IsPlainName"/> refuses in a name.</summary>
+    private static readonly char[] ForbiddenNameCharacters = OperatingSystem.IsWindows() ? ['/', '\\', ':', '\0'] : ['/', '\0'];
+
     private readonly Dictionary<string, ManifestEntry> _books = new(StringComparer.Ordinal);
 
     /// <summary>
@@ -80,7 +83,7 @@ public sealed class LibraryManifest
         ArgumentException.ThrowIfNullOrWhiteSpace(bookId);
         ArgumentNullException.ThrowIfNull(entry);
 
-        if (RelativeFolder(entry.Folder) is null || !entry.Files.All(name => IsPlainFileName(name) && IsInside(Path.Combine(entry.Folder, name))))
+        if (RelativeFolder(entry.Folder) is null || !entry.Files.All(name => IsPlainName(name) && IsInside(Path.Combine(entry.Folder, name))))
         {
             return false;
         }
@@ -181,7 +184,15 @@ public sealed class LibraryManifest
         }
 
         var file = new { format = FormatName, version = FormatVersion, note = Note, books };
+        var content = JsonSerializer.SerializeToUtf8Bytes(file, WriteOptions);
         var path = Path.Combine(Root, FileName);
+
+        // Not written again when nothing changed: sorts run as often as every quarter of an hour,
+        // and backup and sync tools, folder watchers and a sleeping disk should see no change then.
+        if (_keepAs is null && HoldsAlready(path, content))
+        {
+            return;
+        }
 
         // Copied rather than moved, so the destination keeps its marker if the write fails.
         if (_keepAs is not null && File.Exists(path))
@@ -190,7 +201,20 @@ public sealed class LibraryManifest
         }
 
         _keepAs = null;
-        AtomicFile.Write(path, stream => JsonSerializer.Serialize(stream, file, WriteOptions));
+        AtomicFile.Write(path, stream => stream.Write(content));
+    }
+
+    /// <summary>Whether the file at <paramref name="path"/> holds exactly <paramref name="content"/>. False when it cannot be read.</summary>
+    private static bool HoldsAlready(string path, byte[] content)
+    {
+        try
+        {
+            return File.Exists(path) && new FileInfo(path).Length == content.Length && File.ReadAllBytes(path).AsSpan().SequenceEqual(content);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static bool TryGetBooks(JsonElement root, out JsonElement books)
@@ -215,18 +239,18 @@ public sealed class LibraryManifest
         }
 
         var folder = FullFolder(folderElement.GetString()!);
-        if (folder is null || !Directory.Exists(folder))
+        if (folder is null || IsGone(folder))
         {
             return null;
         }
 
-        // A folder that is there but cannot be looked into right now (its permissions, a network
+        // A folder that cannot be looked into right now (its permissions, or its parent's, a network
         // hiccup) is not a book the person deleted: it stays the book's, with the files on record.
-        var canLook = CanList(folder);
+        var canLook = Directory.Exists(folder) && ListNames(folder) is not null;
         var files = filesElement.EnumerateArray()
             .Where(file => file.ValueKind == JsonValueKind.String)
             .Select(file => file.GetString()!)
-            .Where(name => IsPlainFileName(name) && IsInside(Path.Combine(folder, name)) && (!canLook || File.Exists(Path.Combine(folder, name))))
+            .Where(name => IsPlainName(name) && IsInside(Path.Combine(folder, name)) && (!canLook || File.Exists(Path.Combine(folder, name))))
             .Distinct(StringComparer.Ordinal)
             .ToList();
 
@@ -245,8 +269,7 @@ public sealed class LibraryManifest
     private string? FullFolder(string relative)
     {
         var segments = relative.Split('/');
-        if (Path.IsPathRooted(relative) || relative.IndexOfAny(['\\', ':', '\0']) >= 0 ||
-            segments.Any(segment => string.IsNullOrWhiteSpace(segment) || segment is "." or ".."))
+        if (Path.IsPathRooted(relative) || !segments.All(IsPlainName))
         {
             return null;
         }
@@ -276,22 +299,49 @@ public sealed class LibraryManifest
 
     private bool IsInside(string path) => PathSanitizer.IsWithin(Root, path);
 
-    private static bool CanList(string folder)
+    /// <summary>
+    /// Whether <paramref name="folder"/> is certainly not there: its parent can be listed and does not
+    /// hold it. Not when that cannot be told, as when a parent cannot be looked into right now: a
+    /// book dropped from the record then would have its folder, maybe its only copy, given to another.
+    /// </summary>
+    private bool IsGone(string folder)
     {
-        try
-        {
-            using var entries = Directory.EnumerateFileSystemEntries(folder).GetEnumerator();
-            entries.MoveNext();
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        if (Directory.Exists(folder))
         {
             return false;
         }
+
+        var parent = Path.GetDirectoryName(folder);
+        if (parent is null)
+        {
+            return false;
+        }
+
+        return Directory.Exists(parent)
+            ? ListNames(parent) is { } names && !names.Contains(Path.GetFileName(folder), StringComparer.FromComparison(PathSanitizer.PathComparison))
+            : IsInside(parent) && IsGone(parent);
     }
 
-    private static bool IsPlainFileName(string name)
+    /// <summary>The names of what is in <paramref name="folder"/>, or null when it cannot be listed right now.</summary>
+    private static string[]? ListNames(string folder)
     {
-        return !string.IsNullOrWhiteSpace(name) && name is not ("." or "..") && name.IndexOfAny(['/', '\\', ':', '\0']) < 0;
+        try
+        {
+            return Directory.EnumerateFileSystemEntries(folder).Select(Path.GetFileName).OfType<string>().ToArray();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is one plain folder or file name: not "." or "..", and nothing that
+    /// separates folders or names a drive. Only what does that on this system: ':' and '\' are ordinary
+    /// characters on Linux and macOS, where folders spelled with them are books like any other.
+    /// </summary>
+    private static bool IsPlainName(string name)
+    {
+        return !string.IsNullOrWhiteSpace(name) && name is not ("." or "..") && name.IndexOfAny(ForbiddenNameCharacters) < 0;
     }
 }

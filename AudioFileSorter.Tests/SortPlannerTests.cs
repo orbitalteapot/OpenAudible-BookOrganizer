@@ -369,6 +369,23 @@ public class SortPlannerTests
     }
 
     [Fact]
+    public void Plan_moves_a_recorded_books_pdf_along_when_the_pdf_has_left_the_source()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a.m4b", "audio");
+        var oldAudio = workspace.WriteDestinationFile(Path.Combine("An Author", "Foo", "Foo.m4b"), "audio");
+        var oldPdf = workspace.WriteDestinationFile(Path.Combine("An Author", "Foo", "Foo.pdf"), "pdf");
+        Record(workspace, "a", Path.Combine("An Author", "Foo"), "Foo.m4b", "Foo.pdf");
+
+        var planned = Plan(workspace, TempWorkspace.Book(title: "Foo", filename: "a", asin: "A", seriesName: "Saga", seriesSequence: "1"));
+
+        var folder = Path.Combine(workspace.Destination, "An Author", "Saga", "Book 1");
+        Assert.Equal(oldAudio, planned[0].AudioMoveFrom);
+        Assert.Null(planned[0].PdfDestination);
+        Assert.Equal((oldPdf, Path.Combine(folder, "Foo.pdf")), Assert.Single(planned[0].OtherMoves));
+    }
+
+    [Fact]
     public void Plan_renames_a_recorded_series_book_whose_title_changed_in_the_folder_it_keeps()
     {
         using var workspace = new TempWorkspace();

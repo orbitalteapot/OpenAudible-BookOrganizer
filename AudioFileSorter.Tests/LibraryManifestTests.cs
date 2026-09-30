@@ -136,6 +136,77 @@ public class LibraryManifestTests
     }
 
     [Theory]
+    [InlineData(UnixFileMode.UserRead)]
+    [InlineData(UnixFileMode.None)]
+    public void A_book_whose_parent_folder_cannot_be_looked_into_right_now_is_kept(UnixFileMode parentMode)
+    {
+        // As a NAS permission change or a network hiccup leaves it: the book's folder cannot be told
+        // from a deleted one, and dropping it would let another book be given its folder, and its copy.
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        {
+            return;
+        }
+
+        using var workspace = new TempWorkspace();
+        var author = Path.Combine(workspace.Destination, "An Author");
+        workspace.WriteDestinationFile(Path.Combine(author, "A Book", "A Book.m4b"), "audio");
+        WriteManifest(workspace, ("b01", "An Author/A Book", ["A Book.m4b"]));
+
+        File.SetUnixFileMode(author, parentMode);
+        try
+        {
+            var entry = Assert.Single(LibraryManifest.Load(workspace.Destination).Books);
+            Assert.Equal(["A Book.m4b"], entry.Value.Files);
+        }
+        finally
+        {
+            File.SetUnixFileMode(author, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+    }
+
+    [Fact]
+    public void A_folder_spelled_with_characters_the_system_allows_is_recorded()
+    {
+        // ':' and '\' separate nothing on Linux and macOS, where a folder spelled with them is a book like any other.
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        using var workspace = new TempWorkspace();
+        var folder = Path.Combine(workspace.Destination, "An Author", "Foo: Bar \\ Baz");
+        workspace.WriteDestinationFile(Path.Combine(folder, "Foo: Bar.m4b"), "audio");
+        var manifest = LibraryManifest.Load(workspace.Destination);
+
+        Assert.True(manifest.Set("b01", new ManifestEntry(folder, ["Foo: Bar.m4b"], "Foo: Bar")));
+        manifest.Save();
+
+        var entry = Assert.Single(LibraryManifest.Load(workspace.Destination).Books).Value;
+        Assert.Equal((folder, "Foo: Bar.m4b"), (entry.Folder, Assert.Single(entry.Files)));
+    }
+
+    [Fact]
+    public void Saving_what_is_already_there_leaves_the_file_alone()
+    {
+        using var workspace = new TempWorkspace();
+        var folder = Path.Combine(workspace.Destination, "An Author", "A Book");
+        workspace.WriteDestinationFile(Path.Combine(folder, "A Book.m4b"), "audio");
+        var manifest = LibraryManifest.Load(workspace.Destination);
+        manifest.Set("b01", new ManifestEntry(folder, ["A Book.m4b"], "A Book"));
+        manifest.Save();
+        var path = Path.Combine(workspace.Destination, LibraryManifest.FileName);
+        var written = new DateTime(2001, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, written);
+
+        LibraryManifest.Load(workspace.Destination).Save();
+        Assert.Equal(written, File.GetLastWriteTimeUtc(path));
+
+        manifest.Remove("b01");
+        manifest.Save();
+        Assert.NotEqual(written, File.GetLastWriteTimeUtc(path));
+    }
+
+    [Theory]
     [InlineData("../Outside")]
     [InlineData("An Author/../../Outside")]
     [InlineData("/etc")]

@@ -68,7 +68,13 @@ public class FileSorter
         var vacatedFolders = new ConcurrentBag<string>();
         try
         {
-            var planned = new SortPlanner().Plan(books, source, destinationRoot, manifest, cancellationToken);
+            var planner = new SortPlanner();
+            var planned = planner.Plan(books, source, destinationRoot, manifest, cancellationToken);
+
+            foreach (var warning in planner.Warnings)
+            {
+                tally.AddProblem(new SortProblem(SortProblemKind.Warning, DestinationProblemSubject, warning));
+            }
 
             foreach (var item in planned.Where(item => item.HasWork && item.Warning is not null))
             {
@@ -114,18 +120,20 @@ public class FileSorter
     /// the manifest. Not being able to write it costs no book anything, so it is reported rather than
     /// allowed to fail the run: the next sort finds the books in their folders again.
     ///
-    /// A book that stayed in its folder keeps the files on record that are still there beside the
-    /// ones written this run: a PDF no longer in the source, or the audio in a format it has since
-    /// changed from, is still its own, and must not look like a stray file another book may take.
+    /// A book keeps on record every file of its own that is still there beside the ones written this
+    /// run: a PDF no longer in the source, or the audio in a format it has since changed from, is still
+    /// its own, and must not look like a stray file another book may take. That holds for a file a
+    /// book that moved could not take along too (see <see cref="KeepLeftBehind"/>).
     /// </summary>
     private static void SaveManifest(LibraryManifest manifest, IEnumerable<PlannedCopy> sorted, RunTally tally)
     {
         foreach (var item in sorted.Where(item => item.BookId is not null))
         {
-            var kept = manifest.Get(item.BookId!) is { } recorded && string.Equals(recorded.Folder, item.TargetDirectory, StringComparison.OrdinalIgnoreCase)
-                ? recorded.Files.Select(name => Path.Combine(item.TargetDirectory!, name))
-                : [];
+            var recorded = manifest.Get(item.BookId!);
+            var moved = recorded is not null && !string.Equals(recorded.Folder, item.TargetDirectory, StringComparison.OrdinalIgnoreCase);
+            var kept = recorded is not null && !moved ? recorded.Files.Select(name => Path.Combine(item.TargetDirectory!, name)) : [];
             var files = new[] { item.AudioDestination, item.PdfDestination }
+                .Concat(item.OtherMoves.Where(move => !File.Exists(move.From)).Select(move => move.To))
                 .OfType<string>()
                 .Concat(kept)
                 .Where(File.Exists)
@@ -136,7 +144,12 @@ public class FileSorter
 
             if (files.Count > 0)
             {
-                manifest.Set(item.BookId!, new ManifestEntry(item.TargetDirectory!, files, item.Title));
+                Record(manifest, item.BookId!, new ManifestEntry(item.TargetDirectory!, files, item.Title), tally);
+            }
+
+            if (moved)
+            {
+                KeepLeftBehind(manifest, item, recorded!, tally);
             }
         }
 
@@ -151,6 +164,41 @@ public class FileSorter
                 DestinationProblemSubject,
                 $"Could not save its record of which book is in which folder (the {LibraryManifest.FileName} file): {ex.Message} " +
                 "The next sort finds the books in their folders again."));
+        }
+    }
+
+    /// <summary>
+    /// Keeps on record, apart from the book, the files a book that moved left in its old folder (its
+    /// new folder already had a file of the name, which is never replaced), so that folder is still
+    /// given to no other book, and names them in the problems for the person to sort out.
+    /// </summary>
+    private static void KeepLeftBehind(LibraryManifest manifest, PlannedCopy item, ManifestEntry recorded, RunTally tally)
+    {
+        var left = recorded.Files.Where(name => File.Exists(Path.Combine(recorded.Folder, name))).ToList();
+        if (left.Count == 0)
+        {
+            return;
+        }
+
+        var relativeFolder = Path.GetRelativePath(manifest.Root, recorded.Folder);
+        Record(manifest, $"{item.BookId} left in {relativeFolder.Replace(Path.DirectorySeparatorChar, '/')}", recorded with { Files = left }, tally);
+        tally.AddProblem(new SortProblem(
+            SortProblemKind.Warning,
+            item.Title,
+            $"Left {string.Join(", ", left.Select(name => $"\"{Path.Combine(relativeFolder, name)}\""))} in the folder the book moved out of, " +
+            "as its new folder already has a file of that name. No other book is filed in that folder; if it is an old copy, delete it."));
+    }
+
+    /// <summary>Records a book's entry, and says so when it cannot be: then nothing keeps another book out of its folder.</summary>
+    private static void Record(LibraryManifest manifest, string bookId, ManifestEntry entry, RunTally tally)
+    {
+        if (!manifest.Set(bookId, entry))
+        {
+            tally.AddProblem(new SortProblem(
+                SortProblemKind.Warning,
+                entry.Title,
+                $"Could not record that the book is in \"{Path.GetRelativePath(manifest.Root, entry.Folder)}\", so a later book of " +
+                "the same title could be filed in that folder."));
         }
     }
 
@@ -264,6 +312,10 @@ public class FileSorter
         // Both files, whatever happens to the first: '|' does not short-circuit.
         var moved = MoveIntoPlace(item.AudioMoveFrom, item.AudioDestination, vacatedFolders) |
                     MoveIntoPlace(item.PdfMoveFrom, item.PdfDestination, vacatedFolders);
+        foreach (var (from, to) in item.OtherMoves)
+        {
+            moved |= MoveIntoPlace(from, to, vacatedFolders);
+        }
 
         var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, cancellationToken);
         var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, cancellationToken);

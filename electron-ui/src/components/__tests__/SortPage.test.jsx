@@ -184,7 +184,7 @@ describe('SortPage', () => {
 
     const card = progressCard();
     expect(await within(card).findByText('Sort complete: 1 new, 2 moved, 5 up to date, 1 not found.')).toBeTruthy();
-    expect(within(card).getByText('2 books already in the destination folder were moved to where they now belong: left loose by an older version, or filed before their author, series, number or title changed.')).toBeTruthy();
+    expect(within(card).getByText('2 books already in the destination folder were moved to where they now belong: left by an older version (loose, or sharing a Book N folder), or filed before their author, series, number or title changed.')).toBeTruthy();
 
     fireEvent.click(within(card).getByRole('button', { name: 'Problems (1)' }));
     expect(within(card).getByText('No file in the source folder')).toBeTruthy();

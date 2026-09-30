@@ -43,6 +43,12 @@ public sealed record PlannedCopy
     public string? PdfMoveFrom { get; init; }
 
     /// <summary>
+    /// The book's other files on record, moving with it to its new folder under its new name: a PDF no
+    /// longer in the source, or its audio in a format it has changed from. Empty unless the book moves.
+    /// </summary>
+    public IReadOnlyList<(string From, string To)> OtherMoves { get; init; } = [];
+
+    /// <summary>
     /// Why this book cannot be written (when <see cref="HasWork"/> is false), or an issue worth
     /// surfacing about one that can. Null when all is well.
     /// </summary>
