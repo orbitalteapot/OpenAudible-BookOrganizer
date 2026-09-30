@@ -64,17 +64,12 @@ public class FileSorter
             tally.AddProblem(new SortProblem(SortProblemKind.Warning, DestinationProblemSubject, manifest.Problem));
         }
 
-        var sorted = new ConcurrentBag<PlannedCopy>();
+        var attempted = new ConcurrentBag<PlannedCopy>();
         var vacatedFolders = new ConcurrentBag<string>();
         try
         {
             var planner = new SortPlanner();
             var planned = planner.Plan(books, source, destinationRoot, manifest, cancellationToken);
-
-            foreach (var warning in planner.Warnings)
-            {
-                tally.AddProblem(new SortProblem(SortProblemKind.Warning, DestinationProblemSubject, warning));
-            }
 
             foreach (var item in planned.Where(item => item.HasWork && item.Warning is not null))
             {
@@ -92,14 +87,26 @@ public class FileSorter
 
             await Parallel.ForEachAsync(planned, parallelOptions, async (item, ct) =>
             {
-                var (outcome, problem) = await SortBookAsync(item, options.ComparisonMode, vacatedFolders, ct);
-                if (item.HasWork && outcome is not (BookOutcome.Failed or BookOutcome.NotFound))
+                // Before its files move, whatever then comes of it: a book whose copy fails or is
+                // cancelled once its files are in its new folder is in that folder, and the record
+                // has to say so, or a later book of its title may be given it.
+                if (item.HasWork)
                 {
-                    sorted.Add(item);
+                    attempted.Add(item);
                 }
 
+                var (outcome, problem) = await SortBookAsync(item, options.ComparisonMode, vacatedFolders, ct);
                 tally.Finish(item.Title, outcome, problem);
             });
+
+            // After every book's outcome: the problems list keeps only the first few hundred, and a
+            // library with hundreds of loose files must not crowd out why a book failed.
+            foreach (var warning in planner.Warnings)
+            {
+                tally.AddProblem(new SortProblem(SortProblemKind.Warning, DestinationProblemSubject, warning));
+            }
+
+            manifest.MarkSortFinished();
         }
         finally
         {
@@ -109,14 +116,14 @@ public class FileSorter
 
             // Whatever ended the run: the books sorted before a cancel or a failure are where they
             // are, and the next sort has to know they are theirs.
-            SaveManifest(manifest, sorted, tally);
+            SaveManifest(manifest, attempted, tally);
         }
 
         return tally.ToSummary();
     }
 
     /// <summary>
-    /// Records where each book sorted in this run is, beside what earlier runs recorded, and writes
+    /// Records where each book this run worked on is, beside what earlier runs recorded, and writes
     /// the manifest. Not being able to write it costs no book anything, so it is reported rather than
     /// allowed to fail the run: the next sort finds the books in their folders again.
     ///
@@ -124,10 +131,14 @@ public class FileSorter
     /// run: a PDF no longer in the source, or the audio in a format it has since changed from, is still
     /// its own, and must not look like a stray file another book may take. That holds for a file a
     /// book that moved could not take along too (see <see cref="KeepLeftBehind"/>).
+    ///
+    /// Where the book's files are is what counts, not whether its copy succeeded: one that failed or was
+    /// cancelled after its files moved is in its new folder. Only a book none of whose files reached
+    /// its folder keeps what was recorded for it.
     /// </summary>
-    private static void SaveManifest(LibraryManifest manifest, IEnumerable<PlannedCopy> sorted, RunTally tally)
+    private static void SaveManifest(LibraryManifest manifest, IEnumerable<PlannedCopy> attempted, RunTally tally)
     {
-        foreach (var item in sorted.Where(item => item.BookId is not null))
+        foreach (var item in attempted.Where(item => item.BookId is not null))
         {
             var recorded = manifest.Get(item.BookId!);
             var moved = recorded is not null && !string.Equals(recorded.Folder, item.TargetDirectory, StringComparison.OrdinalIgnoreCase);
@@ -142,11 +153,12 @@ public class FileSorter
                 .Distinct(StringComparer.FromComparison(PathSanitizer.PathComparison))
                 .ToList();
 
-            if (files.Count > 0)
+            if (files.Count == 0)
             {
-                Record(manifest, item.BookId!, new ManifestEntry(item.TargetDirectory!, files, item.Title), tally);
+                continue;
             }
 
+            Record(manifest, item.BookId!, new ManifestEntry(item.TargetDirectory!, files, item.Title), tally);
             if (moved)
             {
                 KeepLeftBehind(manifest, item, recorded!, tally);

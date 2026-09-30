@@ -1553,6 +1553,173 @@ public class FileSorterTests
         Assert.Equal(written, File.GetLastWriteTimeUtc(path));
     }
 
+    [Fact]
+    public async Task A_book_whose_update_fails_after_it_moved_is_recorded_in_its_new_folder()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a.m4b", "a-only-copy");
+        workspace.WriteSourceFile("a.pdf", "a-pdf");
+        await Sort(workspace, TempWorkspace.Book(title: "Title", filename: "a", pdf: "a.pdf", asin: "A1"));
+
+        // It joins a series and its PDF was re-released; a folder where the PDF's partial copy goes fails that copy.
+        workspace.WriteSourceFile("a.pdf", "a-pdf-re-released");
+        var obstacle = Directory.CreateDirectory(Path.Combine(workspace.Destination, "An Author", "S", "Title", "Title.pdf.oabo-partial"));
+        var failed = await Sort(workspace, TempWorkspace.Book(title: "Title", filename: "a", pdf: "a.pdf", asin: "A1", seriesName: "S"));
+        obstacle.Delete();
+        Assert.Equal(SortCounts.Empty with { Failed = 1 }, failed.Counts);
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "S", "Title"), LibraryManifest.Load(workspace.Destination).Get("a1")?.Folder);
+
+        // It leaves the export, and a different book of its title in the series arrives.
+        File.Delete(Path.Combine(workspace.Source, "a.m4b"));
+        workspace.WriteSourceFile("b.m4b", "b-audio");
+        await Sort(workspace, TempWorkspace.Book(title: "Title", filename: "b", asin: "B1", seriesName: "S"));
+
+        Assert.Equal("a-only-copy", ReadDestination(workspace, "An Author", "S", "Title", "Title.m4b"));
+        Assert.Equal("b-audio", ReadDestination(workspace, "An Author", "S", "Title (2)", "Title.m4b"));
+    }
+
+    [Fact]
+    public async Task A_new_book_whose_pdf_cannot_be_copied_is_recorded_with_the_audio_it_has()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        workspace.WriteSourceFile("a-book.pdf", "pdf");
+        Directory.CreateDirectory(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.pdf.oabo-partial"));
+
+        var summary = await Sort(workspace, TempWorkspace.Book(pdf: "a-book.pdf", asin: "A1"));
+
+        Assert.Equal(SortCounts.Empty with { Failed = 1 }, summary.Counts);
+        var entry = LibraryManifest.Load(workspace.Destination).Get("a1");
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "A Book"), entry?.Folder);
+        Assert.Equal(["A Book.m4b"], entry?.Files);
+    }
+
+    [Fact]
+    public async Task A_book_whose_sort_is_cancelled_after_it_moved_is_recorded_where_its_files_are()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a.m4b", "a-audio");
+        workspace.WriteSourceFile("s.m4b", "small");
+        var small = TempWorkspace.Book(title: "Small", filename: "s", asin: "S1");
+        await Sort(workspace, TempWorkspace.Book(title: "Title", filename: "a", asin: "A1"), small);
+
+        // It joins a series and its download changed, big enough that the other book finishes, and
+        // cancels the run, while it is still being copied.
+        workspace.WriteSourceFile("a.m4b", new string('z', 40_000_000));
+        workspace.WriteSourceFile("s.m4b", "small-changed");
+        using var cancellation = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new FileSorter().SortAudioFiles(
+            workspace.Source, workspace.Destination,
+            [TempWorkspace.Book(title: "Title", filename: "a", asin: "A1", seriesName: "S"), small],
+            new SortOptions { MaxParallelism = 2 }, new CancelOnFirstReport(cancellation), cancellation.Token));
+
+        // Wherever the cancel caught it, the record says where its audio is.
+        var entry = LibraryManifest.Load(workspace.Destination).Get("a1");
+        Assert.NotNull(entry);
+        Assert.True(File.Exists(Path.Combine(entry.Folder, "Title.m4b")));
+    }
+
+    [Fact]
+    public async Task A_cancelled_first_sort_still_lets_the_next_move_a_changed_loose_book_only_it_could_have_left()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Title.m4b"), "old-release");
+        workspace.WriteSourceFile("t.m4b", "new-release!");
+        var book = TempWorkspace.Book(title: "Title", filename: "t", asin: "T1");
+
+        using var cancellation = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new FileSorter().SortAudioFiles(
+            workspace.Source, workspace.Destination, [book],
+            progress: new InlineProgress(_ => cancellation.Cancel()), cancellationToken: cancellation.Token));
+        Assert.True(File.Exists(Path.Combine(workspace.Destination, LibraryManifest.FileName)));
+
+        var summary = await Sort(workspace, book);
+
+        Assert.Equal(["An Author/Title/Title.m4b"], workspace.DestinationFiles());
+        Assert.Equal("new-release!", ReadDestination(workspace, "An Author", "Title", "Title.m4b"));
+        Assert.Empty(summary.Problems);
+    }
+
+    [Fact]
+    public async Task Upgrade_moves_loose_pdfs_along_with_their_books_and_names_a_departed_books()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Title.m4b"), "t");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Title.pdf"), "t-pdf");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Saga", "Other.m4b"), "o");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Saga", "Other.pdf"), "o-pdf");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Returned.m4b"), "r");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Returned.pdf"), "r-pdf");
+        workspace.WriteSourceFile("t.m4b", "t");
+        workspace.WriteSourceFile("o.m4b", "o");
+        OpenAudible[] books =
+        [
+            TempWorkspace.Book(title: "Title", filename: "t", asin: "T1"),
+            TempWorkspace.Book(title: "Other", filename: "o", asin: "O1", seriesName: "Saga")
+        ];
+
+        var summary = await Sort(workspace, books);
+        var again = await Sort(workspace, books);
+
+        Assert.Equal(
+            [
+                "An Author/Returned.m4b", "An Author/Returned.pdf", "An Author/Saga/Other/Other.m4b", "An Author/Saga/Other/Other.pdf",
+                "An Author/Title/Title.m4b", "An Author/Title/Title.pdf"
+            ],
+            workspace.DestinationFiles());
+        Assert.Equal(["Title.m4b", "Title.pdf"], LibraryManifest.Load(workspace.Destination).Get("t1")?.Files);
+        string[] expected = ["Returned.m4b", "Returned.pdf"];
+        Assert.Equal(
+            expected.Select(name => $"Left \"{Path.Combine("An Author", name)}\" where it was: it matches none of the books in the export. If it is an old copy, delete it."),
+            summary.Problems.Select(problem => problem.Message));
+        Assert.Equal(summary.Problems.Select(problem => problem.Message), again.Problems.Select(problem => problem.Message));
+    }
+
+    [Fact]
+    public async Task Warnings_about_loose_files_never_crowd_out_why_a_book_failed()
+    {
+        using var workspace = new TempWorkspace();
+        for (var i = 0; i < SortSummary.MaxReportedProblems + 20; i++)
+        {
+            workspace.WriteDestinationFile(Path.Combine("An Author", $"Loose {i:D3}.m4b"), "loose");
+        }
+
+        workspace.WriteSourceFile("good.m4b");
+        workspace.WriteSourceFile("blocked.m4b");
+        Directory.CreateDirectory(Path.Combine(workspace.Destination, "An Author", "Blocked Book", "Blocked Book.m4b"));
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Good Book", filename: "good"),
+            TempWorkspace.Book(title: "Blocked Book", filename: "blocked"));
+
+        Assert.Equal(SortSummary.MaxReportedProblems + 21, summary.ProblemCount);
+        Assert.Contains(summary.Problems, problem => problem is { Kind: SortProblemKind.Failed, Book: "Blocked Book — An Author" });
+    }
+
+    [Fact]
+    public async Task A_loose_file_of_a_book_missing_from_the_source_is_never_called_nobodys()
+    {
+        // While OpenAudible downloads it again, the loose copy main left may be the book's only one.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("kept.m4b", "kept");
+        workspace.WriteSourceFile("gone.m4b", string.Empty);
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Gone.m4b"), "gone-only-copy");
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Kept", filename: "kept"),
+            TempWorkspace.Book(title: "Gone", filename: "gone"));
+
+        Assert.Equal(SortCounts.Empty with { New = 1, NotFound = 1 }, summary.Counts);
+        Assert.Equal("gone-only-copy", ReadDestination(workspace, "An Author", "Gone.m4b"));
+        var warning = Assert.Single(summary.Problems, problem => problem.Kind == SortProblemKind.Warning);
+        Assert.Equal(
+            $"Left \"{Path.Combine("An Author", "Gone.m4b")}\" where it was: it is named like \"Gone — An Author\", which is not in the " +
+            "source folder, so it may be that book's only copy.",
+            warning.Message);
+    }
+
     /// <summary>Cancels as soon as the first book is done (not at the report made when the run starts).</summary>
     private sealed class CancelOnFirstReport(CancellationTokenSource cancellation) : IProgress<SortProgressInfo>
     {

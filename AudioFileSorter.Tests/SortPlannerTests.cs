@@ -879,6 +879,94 @@ public class SortPlannerTests
     }
 
     [Fact]
+    public void Upgrade_never_gives_a_book_titled_with_a_number_the_loose_file_of_a_second_same_titled_book()
+    {
+        // Main's layout: "Dune (2).m4b" is the second "Dune", whose edition has left the export; "Dune 2" is a sequel.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("dune.m4b", "dune-first");
+        workspace.WriteSourceFile("sequel.m4b", "sequel");
+        var first = workspace.WriteDestinationFile(Path.Combine("An Author", "Dune.m4b"), "dune-first");
+        var second = workspace.WriteDestinationFile(Path.Combine("An Author", "Dune (2).m4b"), "dune-second-only-copy");
+
+        var planned = Plan(
+            workspace,
+            TempWorkspace.Book(title: "Dune", filename: "dune", asin: "D1"),
+            TempWorkspace.Book(title: "Dune 2", filename: "sequel", asin: "D3"));
+
+        Assert.Equal(first, planned[0].AudioMoveFrom);
+        Assert.Null(planned[1].AudioMoveFrom);
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "Dune 2", "Dune 2.m4b"), planned[1].AudioDestination);
+        Assert.Contains(planned, copy => copy.Warning?.Contains(Path.GetRelativePath(workspace.Destination, second)) == true);
+    }
+
+    [Fact]
+    public void Plan_never_files_a_book_titled_with_a_number_in_the_folder_of_a_second_same_titled_book()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("sequel.m4b", "sequel");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Dune", "Dune.m4b"), "dune-first");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Dune (2)", "Dune.m4b"), "dune-second");
+        Record(workspace, "d1", Path.Combine("An Author", "Dune"), "Dune.m4b");
+        Record(workspace, "d2", Path.Combine("An Author", "Dune (2)"), "Dune.m4b");
+
+        var planned = Plan(workspace, TempWorkspace.Book(title: "Dune 2", filename: "sequel", asin: "D3"));
+
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "Dune 2", "Dune 2.m4b"), planned[0].AudioDestination);
+    }
+
+    [Fact]
+    public void Upgrade_still_moves_a_loose_file_only_one_book_could_have_left_after_the_first_sort_was_cancelled()
+    {
+        // A cancelled first sort saves a record, but offered the loose files to nobody.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "new-download");
+        var loose = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "old-download");
+        LibraryManifest.Load(workspace.Destination).Save();
+
+        var planned = Plan(workspace, TempWorkspace.Book());
+
+        Assert.Equal(loose, planned[0].AudioMoveFrom);
+        Assert.Null(planned[0].Warning);
+    }
+
+    [Fact]
+    public void Upgrade_moves_a_loose_pdf_along_with_its_book_when_the_source_has_none()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        var looseAudio = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "audio");
+        var loosePdf = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.pdf"), "pdf");
+
+        var planned = Plan(workspace, TempWorkspace.Book());
+
+        Assert.Equal(looseAudio, planned[0].AudioMoveFrom);
+        Assert.Null(planned[0].PdfDestination);
+        Assert.Equal([(loosePdf, Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.pdf"))], planned[0].OtherMoves);
+    }
+
+    [Fact]
+    public void Upgrade_leaves_a_loose_pdf_that_may_be_a_same_titled_books_and_names_it()
+    {
+        // Main numbered each type of file on its own: this "Collected Works.pdf" is the second book's.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("first.m4b", "first-book");
+        var looseAudio = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "first-book");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works (2).m4b"), "second-book");
+        var loosePdf = workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.pdf"), "second-pdf");
+        var planner = new SortPlanner();
+
+        var planned = planner.Plan(
+            [TempWorkspace.Book(title: "Collected Works", filename: "first")],
+            workspace.Source,
+            workspace.Destination,
+            LibraryManifest.Load(workspace.Destination));
+
+        Assert.Equal(looseAudio, planned[0].AudioMoveFrom);
+        Assert.Empty(planned[0].OtherMoves);
+        Assert.Contains(planner.Warnings, warning => warning.Contains(Path.GetRelativePath(workspace.Destination, loosePdf)));
+    }
+
+    [Fact]
     public void Plan_keeps_a_traversal_attempt_inside_the_destination()
     {
         using var workspace = new TempWorkspace();

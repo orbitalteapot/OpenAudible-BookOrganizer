@@ -27,7 +27,7 @@ namespace AudioFileSorter;
 /// </item>
 /// <item>
 /// files an older version left where library tools trip over them move to the book they belong to,
-/// and every audio file still loose beside book folders is named in the problems.
+/// and every audio or PDF file still loose beside book folders is named in the problems.
 /// </item>
 /// </list>
 /// </summary>
@@ -64,8 +64,8 @@ public sealed class SortPlanner
     private readonly HashSet<string> _heldFolders = new(FolderComparer);
 
     /// <summary>
-    /// Whether a sort that kept a readable record has been through this destination before. Then it
-    /// offered every loose file still here to every book in the export of the time, and left it
+    /// Whether a sort has run to its end in this destination before (see <see cref="LibraryManifest.SortFinished"/>).
+    /// Then it offered every loose file still here to every book in the export of the time, and left it
     /// because it matched none: it may be a returned book's only copy, and only a book's own audio
     /// makes it that book's, however few books of its name there are now.
     /// </summary>
@@ -97,7 +97,7 @@ public sealed class SortPlanner
         ArgumentNullException.ThrowIfNull(manifest);
 
         _root = Path.GetFullPath(destinationRoot);
-        _sortedBefore = manifest.Existed && manifest.Problem is null;
+        _sortedBefore = manifest.SortFinished;
         _folderOwners = manifest.Books
             .DistinctBy(pair => pair.Value.Folder, FolderComparer)
             .ToDictionary(pair => pair.Value.Folder, pair => pair.Key, FolderComparer);
@@ -328,7 +328,7 @@ public sealed class SortPlanner
     /// <summary>The audio files in <paramref name="folder"/> under the book's own name: "Title.m4b", not "Title (2).m4b".</summary>
     private IEnumerable<string> NamedAudioFiles(Book book, string folder)
     {
-        return _disk.AudioFiles(folder).Where(file => NameKey(Path.GetFileNameWithoutExtension(file)) == book.StemKey);
+        return _disk.AudioFiles(folder).Where(file => SameName(Path.GetFileNameWithoutExtension(file), book.Naming.FileStem));
     }
 
     /// <summary>The book's files in its folder, and the files the manifest records for it elsewhere, which move there with it.</summary>
@@ -408,17 +408,35 @@ public sealed class SortPlanner
             cancellationToken.ThrowIfCancellationRequested();
             book.AudioMoveFrom = Adopt(book, book.AudioSource, book.AudioDestination);
             book.PdfMoveFrom = Adopt(book, book.PdfSource, book.PdfDestination);
+            if (book.PdfSource is null && book.AudioMoveFrom is not null && CompanionPdf(book) is { } pdf)
+            {
+                adopted.Add(pdf.From);
+                book.OtherMoves.Add(pdf);
+            }
         }
 
         // Once per file, however many books could have left it.
         foreach (var (file, book) in firstSeenBy.Where(pair => !adopted.Contains(pair.Key)))
         {
-            book.Warnings.Add(
-                $"Left \"{Path.GetRelativePath(_root, file)}\" where it was: it matches none of the books in the export. " +
-                "If it is an old copy, delete it.");
+            book.Warnings.Add(LeftInPlaceWarning(file, books));
         }
 
         return firstSeenBy.Keys.ToHashSet(FolderComparer);
+
+        // The PDF an older version wrote beside the audio the book adopts, which is the book's too though
+        // the source no longer has one: left, it would lie loose beside book folders, cut off from its book.
+        // Only when nothing else there carries the book's name, as older versions numbered each type of
+        // file on its own: beside a "Title (2).m4b", "Title.pdf" may be the other book's.
+        (string From, string To)? CompanionPdf(Book book)
+        {
+            var folder = Path.GetDirectoryName(book.AudioMoveFrom)!;
+            var named = OldFiles(folder, book, extension: null).ToList();
+            var pdf = named.FirstOrDefault(file => string.Equals(file, Path.ChangeExtension(book.AudioMoveFrom, ".pdf"), StringComparison.OrdinalIgnoreCase));
+            var destination = DestinationFile(book.Folder!, book.Naming.FileStem, ".pdf");
+            return named.Count == 2 && pdf is not null && !untouchable.Contains(pdf) && !adopted.Contains(pdf) && !File.Exists(destination)
+                ? (pdf, destination)
+                : null;
+        }
 
         string? Adopt(Book book, string? source, string? destination)
         {
@@ -429,7 +447,7 @@ public sealed class SortPlanner
 
             foreach (var folder in OldFileFolders(book))
             {
-                var candidates = OldFiles(folder, book.StemKey, Path.GetExtension(destination))
+                var candidates = OldFiles(folder, book, Path.GetExtension(destination))
                     .Where(file => !untouchable.Contains(file) && PathSanitizer.IsWithin(_root, file))
                     .ToList();
                 candidates.ForEach(candidate => firstSeenBy.TryAdd(candidate, book));
@@ -448,8 +466,8 @@ public sealed class SortPlanner
     }
 
     /// <summary>
-    /// Names each audio file still loose in an author or series folder a book is filed into in this
-    /// run that no book was offered (see <see cref="AdoptOldFiles"/>): one a book that has left the
+    /// Names each audio or PDF file still loose in an author or series folder a book is filed into in
+    /// this run that no book was offered (see <see cref="AdoptOldFiles"/>): one a book that has left the
     /// export left, or one from before a book's title or format changed. Beside book folders it makes
     /// library tools read the whole author or series folder as one book, so it is not left unsaid.
     /// </summary>
@@ -463,13 +481,30 @@ public sealed class SortPlanner
             .OfType<string>()
             .Where(folder => PathSanitizer.IsWithin(_root, folder))
             .Distinct(FolderComparer)
-            .SelectMany(_disk.AudioFiles)
+            .SelectMany(_disk.BookFiles)
             .Where(file => !spokenFor.Contains(file))
             .Order(StringComparer.Ordinal);
 
-        _warnings.AddRange(looseFiles.Select(file =>
-            $"Left \"{Path.GetRelativePath(_root, file)}\" where it was: it matches none of the books in the export. " +
-            "If it is an old copy, delete it."));
+        _warnings.AddRange(looseFiles.Select(file => LeftInPlaceWarning(file, books)));
+    }
+
+    /// <summary>
+    /// What the problems list says about a file left where it was. One named like a book missing from
+    /// the source, where an older version would have left that book's file, may be its only copy: it
+    /// is never called nobody's, nor is deleting it suggested.
+    /// </summary>
+    private string LeftInPlaceWarning(string file, List<Book> books)
+    {
+        var path = Path.GetRelativePath(_root, file);
+        var missing = books.FirstOrDefault(book =>
+            book.AudioSource is null &&
+            OldFileFolders(book).Contains(Path.GetDirectoryName(file), FolderComparer) &&
+            IsNamedAfter(Path.GetFileNameWithoutExtension(file), book.Naming.FileStem));
+
+        return missing is null
+            ? $"Left \"{path}\" where it was: it matches none of the books in the export. If it is an old copy, delete it."
+            : $"Left \"{path}\" where it was: it is named like \"{missing.Title}\", which is not in the source folder, " +
+              "so it may be that book's only copy.";
     }
 
     /// <summary>
@@ -499,13 +534,15 @@ public sealed class SortPlanner
             .Where(folder => !FolderComparer.Equals(folder, book.Folder) && !_folderOwners.ContainsKey(folder));
     }
 
-    /// <summary>The files in <paramref name="folder"/> named after a book, the plain name first, then "Title (2)"...</summary>
-    private IEnumerable<string> OldFiles(string folder, string stemKey, string extension)
+    /// <summary>
+    /// The files in <paramref name="folder"/> named after a book, of one <paramref name="extension"/> or
+    /// (null) any, the plain name first, then "Title (2)"...
+    /// </summary>
+    private IEnumerable<string> OldFiles(string folder, Book book, string? extension)
     {
         return _disk.Files(folder)
-            .Where(name => string.Equals(Path.GetExtension(name), extension, StringComparison.OrdinalIgnoreCase))
-            .Where(name => NameKey(Path.GetFileNameWithoutExtension(name)) == stemKey ||
-                           (WithoutSuffix(Path.GetFileNameWithoutExtension(name)) is { } unnumbered && NameKey(unnumbered) == stemKey))
+            .Where(name => extension is null || string.Equals(Path.GetExtension(name), extension, StringComparison.OrdinalIgnoreCase))
+            .Where(name => IsNamedAfter(Path.GetFileNameWithoutExtension(name), book.Naming.FileStem))
             .OrderBy(name => name.Length)
             .ThenBy(name => name, StringComparer.Ordinal)
             .Select(name => Path.Combine(folder, name));
@@ -523,6 +560,18 @@ public sealed class SortPlanner
         var key = PathSanitizer.NormalizeComparisonKey(name);
         return key.Length > 0 ? key : name.Trim().ToLowerInvariant();
     }
+
+    /// <summary>
+    /// Whether <paramref name="name"/> is <paramref name="stem"/>, spelling and punctuation aside. A " (2)"
+    /// is no mere punctuation: "Dune (2)" is the second "Dune", not a book called "Dune 2".
+    /// </summary>
+    private static bool SameName(string name, string stem) => NameKey(name) == NameKey(stem) && NumberedAlike(name, stem);
+
+    /// <summary>Whether <paramref name="name"/> is a book's, as an older version named it: "Title", or "Title (2)"... for a later book of the title.</summary>
+    private static bool IsNamedAfter(string name, string stem) => SameName(name, stem) || (WithoutSuffix(name) is { } unnumbered && SameName(unnumbered, stem));
+
+    /// <summary>Whether both names, or neither, end in a <see cref="Suffix"/>.</summary>
+    private static bool NumberedAlike(string name, string other) => (WithoutSuffix(name) is null) == (WithoutSuffix(other) is null);
 
     /// <summary>The author folder, or the series folder in it.</summary>
     private string ResolveParentDirectory(BookSortPlan plan)
@@ -562,8 +611,12 @@ public sealed class SortPlanner
         // The folder spelled like this name comes first, then the folder another spelling was given
         // in this run, so a new series listed under two spellings gets one folder. Only then the
         // looser series match ("Wheel of Time" for "The Wheel of Time Series"), which never takes a
-        // book's own folder: "The Witcher" must not settle in the folder of a book called "Witcher".
-        var existingNames = _disk.Folders(parentDirectory).Values.Order(StringComparer.Ordinal).ToList();
+        // book's own folder: "The Witcher" must not settle in the folder of a book called "Witcher". Never
+        // a folder whose "(2)" the name lacks: "Dune (2)" is the second "Dune", not the folder of "Dune 2".
+        var existingNames = _disk.Folders(parentDirectory).Values
+            .Where(name => NumberedAlike(name, requestedName))
+            .Order(StringComparer.Ordinal)
+            .ToList();
         var resolved = existingNames.FirstOrDefault(name => PathSanitizer.NormalizeComparisonKey(name) == exactKey)
             ?? _resolvedDirectoryNames.GetValueOrDefault(sharedKey)
             ?? existingNames.FirstOrDefault(name =>

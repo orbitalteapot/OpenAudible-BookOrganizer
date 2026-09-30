@@ -207,8 +207,9 @@ a loose audio file in an author folder makes them treat that whole folder as one
 series inside it. A companion PDF is copied next to its audiobook when the export mentions one and
 the file is present.
 
-The organiser remembers which book it put in which folder, in a small hidden file called
-`.openaudible-organizer` at the top of the destination folder. Leave it there: library servers
+The organiser remembers which book it put in which folder, in a small file called
+`.openaudible-organizer` at the top of the destination folder (hidden on macOS and Linux, shown on
+Windows). Leave it there: library servers
 ignore it. If it is deleted, the next sort finds the books in your export in their folders again and
 writes a new one, but two things are lost until then. The folders of books that have left your export
 are no longer set aside, so a later book with the same name can be filed in one, over the copy there.
@@ -235,14 +236,16 @@ folder rather than copied a second time, and counted as **Moved**.
 This always happens: a loose file next to a book folder is exactly what breaks Audiobookshelf. Files
 are only ever moved within the destination folder, and never over another file. When only one book
 in your export could have left a loose file, it is that book's: it is moved, and then replaced if you
-have downloaded the book again since. Once a sort has kept its record in the destination, though,
+have downloaded the book again since. Once a sort has run to the end in the destination, though,
 any loose file still there was left on purpose, and it is only moved into a book whose audio it
 holds. A file inside another book's folder is always left alone. When several books share its name (older versions told them
 apart as `Title (2)`), a file is moved only into the book whose audio it holds; any other may be the
 only copy of a book you have returned or not downloaded again, so it is left where it is and the
-problems list names it: delete it yourself if it is an old copy. The problems list also names every
-other audio file left loose beside book folders, such as a returned book's or one from before a title
-or format changed, on every sort until it is gone.
+problems list names it: delete it yourself if it is an old copy. A companion PDF left loose beside its
+book's audio moves into the book's folder with it. The problems list also names every other audio or
+PDF file left loose beside book folders, such as a returned book's or one from before a title or
+format changed, on every sort until it is gone; one named like a book in your export that is not in
+the source folder is named as possibly that book's only copy, so keep it.
 
 A file in the source folder that is empty, as it is while OpenAudible downloads or converts a book, is
 counted as **Not found** and never replaces the copy in your library; nor does a file that changes

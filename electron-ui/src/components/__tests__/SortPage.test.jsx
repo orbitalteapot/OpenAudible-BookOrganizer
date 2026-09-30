@@ -137,6 +137,15 @@ describe('SortPage', () => {
     expect(screen.getByText(/The source folder is never changed\./)).toBeTruthy();
   });
 
+  it('says the record of folders is hidden only where a leading dot hides it', async () => {
+    await openSortPage();
+
+    // Windows shows .openaudible-organizer, so calling it hidden would send people looking for nothing.
+    const text = screen.getByText(/records which book is in which folder/).textContent;
+    expect(text).toContain('(hidden on macOS and Linux)');
+    expect(text).not.toMatch(/A hidden/);
+  });
+
   it('asks for the folder statuses again when the window comes back into view', async () => {
     await openSortPage();
     const destination = screen.getByLabelText('Destination folder');

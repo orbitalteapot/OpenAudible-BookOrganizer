@@ -17,13 +17,10 @@ internal sealed class DestinationListing
     /// <summary>The names of the files in <paramref name="folder"/>, in ordinal order.</summary>
     public string[] Files(string folder) => List(folder).Files;
 
-    public List<string> AudioFiles(string folder)
-    {
-        return Files(folder)
-            .Where(name => SourceFileLocator.AudioExtensions.Contains(Path.GetExtension(name), StringComparer.OrdinalIgnoreCase))
-            .Select(name => Path.Combine(folder, name))
-            .ToList();
-    }
+    public List<string> AudioFiles(string folder) => FilesOfType(folder, SourceFileLocator.AudioExtensions);
+
+    /// <summary>The files in <paramref name="folder"/> library tools take for a book's: its audio, and PDFs.</summary>
+    public List<string> BookFiles(string folder) => FilesOfType(folder, [.. SourceFileLocator.AudioExtensions, ".pdf"]);
 
     /// <summary>Whether <paramref name="folder"/> holds other books' folders, as a series folder does, even one that has left the export.</summary>
     public bool HoldsBookFolders(string folder) => Folders(folder).Values.Any(name => AudioFiles(Path.Combine(folder, name)).Count > 0);
@@ -33,6 +30,14 @@ internal sealed class DestinationListing
 
     /// <summary><paramref name="name"/> inside <paramref name="parent"/>, spelled as the folder on disk is when there is one.</summary>
     public string Spelled(string parent, string name) => Path.Combine(parent, Folders(parent).GetValueOrDefault(name) ?? name);
+
+    private List<string> FilesOfType(string folder, string[] extensions)
+    {
+        return Files(folder)
+            .Where(name => extensions.Contains(Path.GetExtension(name), StringComparer.OrdinalIgnoreCase))
+            .Select(name => Path.Combine(folder, name))
+            .ToList();
+    }
 
     private (Dictionary<string, string> Folders, string[] Files) List(string folder)
     {
