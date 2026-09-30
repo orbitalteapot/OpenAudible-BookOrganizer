@@ -230,7 +230,9 @@ once and confirm (see [Sorting automatically](#sorting-automatically)).
 **Libraries sorted by an older version** — standalone books loose in the author folder, books without
 a number loose in the series folder, two books sharing one `Book N` folder — are tidied up on the next
 sort. Each file is moved into its book's new folder rather than copied a second time, and counted as
-**Moved**. A companion PDF lying beside its audiobook moves with it.
+**Moved**. A PDF moves with its audiobook only when it is identical to the book's PDF in the source
+folder. Older versions could leave one book's PDF beside a same-titled book's audio, so a PDF that
+merely has the book's name stays where it is, and the problems list names it.
 
 **Nothing is written over unless it is provably the book's own copy.** A file already in the
 destination is moved or replaced only when the record says it belongs to that book, or when its

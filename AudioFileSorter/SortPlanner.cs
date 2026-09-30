@@ -436,16 +436,14 @@ public sealed class SortPlanner
         var adopted = new HashSet<string>(FolderComparer);
         var firstSeenBy = new Dictionary<string, Book>(FolderComparer);
 
+        // Only a file with the book's own download to compare it with: a PDF named like the book beside
+        // the audio it adopts is not the book's for that (see FileSorter.FileOwnership.MayMove), and is
+        // left where it is and named in the problems (see WarnAboutLooseFiles).
         foreach (var book in newBooks.Where(book => book.Folder is not null))
         {
             cancellationToken.ThrowIfCancellationRequested();
             book.AudioMoveFrom = Adopt(book, book.AudioSource, book.AudioDestination);
             book.PdfMoveFrom = Adopt(book, book.PdfSource, book.PdfDestination);
-            if (book.PdfSource is null && book.AudioMoveFrom is not null && CompanionPdf(book) is { } pdf)
-            {
-                adopted.Add(pdf.From);
-                book.OtherMoves.Add(pdf);
-            }
         }
 
         // Once per file, however many books could have left it.
@@ -455,21 +453,6 @@ public sealed class SortPlanner
         }
 
         return firstSeenBy.Keys.ToHashSet(FolderComparer);
-
-        // The PDF an older version wrote beside the audio the book adopts, which is the book's too though
-        // the source no longer has one: left, it would lie loose beside book folders, cut off from its book.
-        // Only when nothing else there carries the book's name, as older versions numbered each type of
-        // file on its own: beside a "Title (2).m4b", "Title.pdf" may be the other book's.
-        (string From, string To)? CompanionPdf(Book book)
-        {
-            var folder = Path.GetDirectoryName(book.AudioMoveFrom)!;
-            var named = OldFiles(folder, book, extension: null).ToList();
-            var pdf = named.FirstOrDefault(file => string.Equals(file, Path.ChangeExtension(book.AudioMoveFrom, ".pdf"), StringComparison.OrdinalIgnoreCase));
-            var destination = DestinationFile(book.Folder!, book.Naming.FileStem, ".pdf");
-            return named.Count == 2 && pdf is not null && !untouchable.Contains(pdf) && !adopted.Contains(pdf) && !File.Exists(destination)
-                ? (pdf, destination)
-                : null;
-        }
 
         string? Adopt(Book book, string? source, string? destination)
         {
@@ -535,22 +518,34 @@ public sealed class SortPlanner
     }
 
     /// <summary>
-    /// What the problems list says about a file left where it was. One named like a book missing from
-    /// the source, where an older version would have left that book's file, may be its only copy: it
-    /// is never called nobody's, nor is deleting it suggested.
+    /// What the problems list says about a file left where it was, by the books named like it where an
+    /// older version would have left their files. One named like a book missing from the source may be
+    /// its only copy: it is never called nobody's, nor is deleting it suggested. Nor is it for a PDF
+    /// named like a book this run sorts without a PDF download to compare it with: it may be that
+    /// book's, or a same-titled book's only copy, and only the person can tell.
     /// </summary>
     private string LeftInPlaceWarning(string file, List<Book> books)
     {
         var path = Path.GetRelativePath(_root, file);
-        var missing = books.FirstOrDefault(book =>
-            book.AudioSource is null &&
-            OldFileFolders(book).Contains(Path.GetDirectoryName(file), FolderComparer) &&
-            IsNamedAfter(Path.GetFileNameWithoutExtension(file), book.Naming.FileStem));
+        var namedLike = books
+            .Where(book =>
+                OldFileFolders(book).Contains(Path.GetDirectoryName(file), FolderComparer) &&
+                IsNamedAfter(Path.GetFileNameWithoutExtension(file), book.Naming.FileStem))
+            .ToList();
+        var missing = namedLike.FirstOrDefault(book => book.AudioSource is null);
+        var unproven = string.Equals(Path.GetExtension(file), ".pdf", StringComparison.OrdinalIgnoreCase)
+            ? namedLike.FirstOrDefault(book => book.Folder is not null && book.PdfSource is null)
+            : null;
 
-        return missing is null
-            ? $"Left \"{path}\" where it was: it matches none of the books in the export. If it is an old copy, delete it."
-            : $"Left \"{path}\" where it was: it is named like \"{missing.Title}\", which is not in the source folder, " +
-              "so it may be that book's only copy.";
+        return (missing, unproven) switch
+        {
+            ({ } book, _) => $"Left \"{path}\" where it was: it is named like \"{book.Title}\", which is not in the source folder, " +
+                             "so it may be that book's only copy.",
+            (_, { } book) => $"Left \"{path}\" where it was: it is named like \"{book.Title}\", but the source folder has no PDF of " +
+                             "that book to compare it with, so it may as well be another book's. If it is this book's, move it into " +
+                             $"\"{Path.GetRelativePath(_root, book.Folder!)}\" yourself.",
+            _ => $"Left \"{path}\" where it was: it matches none of the books in the export. If it is an old copy, delete it."
+        };
     }
 
     /// <summary>

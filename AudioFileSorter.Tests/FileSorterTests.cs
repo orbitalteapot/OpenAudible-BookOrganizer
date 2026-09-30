@@ -448,6 +448,37 @@ public class FileSorterTests
         Assert.Contains(summary.Problems, problem => problem.Message.Contains("A Book.m4b"));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Upgrade_never_takes_a_loose_pdf_for_the_book_by_its_name_alone(bool otherBookListed)
+    {
+        // Main numbered each type of file on its own. A same-titled book that had only its PDF when main
+        // ran left "Foo.pdf" beside the first book's "Foo.m4b", and no "Foo (2)" of any kind: named like
+        // the first book's PDF, it is the other book's only copy. Nothing but its name ties it to the audio.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a.m4b", "a-audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Foo.m4b"), "a-audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Foo.pdf"), "b-pdf-only-copy");
+        var first = TempWorkspace.Book(title: "Foo", filename: "a");
+        OpenAudible[] export = otherBookListed ? [first, TempWorkspace.Book(title: "Foo", filename: "b")] : [first];
+
+        var summary = await Sort(workspace, export);
+
+        Assert.Equal(["An Author/Foo.pdf", "An Author/Foo/Foo.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["Foo.m4b"], LibraryManifest.Load(workspace.Destination).Get("file:a.m4b")!.Files);
+        Assert.Contains(summary.Problems, problem => problem.Message.Contains(Path.Combine("An Author", "Foo.pdf")));
+
+        // The first book's own PDF arrives: it is copied into the book's folder, and the other one stays.
+        workspace.WriteSourceFile("a.pdf", "a-pdf");
+        export[0] = TempWorkspace.Book(title: "Foo", filename: "a", pdf: "Yes");
+        await Sort(workspace, export);
+
+        Assert.Equal(["An Author/Foo.pdf", "An Author/Foo/Foo.m4b", "An Author/Foo/Foo.pdf"], workspace.DestinationFiles());
+        Assert.Equal("b-pdf-only-copy", ReadDestination(workspace, "An Author", "Foo.pdf"));
+        Assert.Equal("a-pdf", ReadDestination(workspace, "An Author", "Foo", "Foo.pdf"));
+    }
+
     [Fact]
     public async Task Upgrade_tidies_up_the_layout_an_older_version_left()
     {
@@ -1669,8 +1700,10 @@ public class FileSorterTests
     }
 
     [Fact]
-    public async Task Upgrade_moves_loose_pdfs_along_with_their_books_and_names_a_departed_books()
+    public async Task Upgrade_leaves_loose_pdfs_it_cannot_prove_are_the_books_and_names_them()
     {
+        // With no PDF in the source to compare with, a PDF named like the book beside its audio may as
+        // well be a same-titled book's (see Upgrade_never_takes_a_loose_pdf_for_the_book_by_its_name_alone).
         using var workspace = new TempWorkspace();
         workspace.WriteDestinationFile(Path.Combine("An Author", "Title.m4b"), "t");
         workspace.WriteDestinationFile(Path.Combine("An Author", "Title.pdf"), "t-pdf");
@@ -1691,16 +1724,24 @@ public class FileSorterTests
 
         Assert.Equal(
             [
-                "An Author/Returned.m4b", "An Author/Returned.pdf", "An Author/Saga/Other/Other.m4b", "An Author/Saga/Other/Other.pdf",
-                "An Author/Title/Title.m4b", "An Author/Title/Title.pdf"
+                "An Author/Returned.m4b", "An Author/Returned.pdf", "An Author/Saga/Other.pdf", "An Author/Saga/Other/Other.m4b",
+                "An Author/Title.pdf", "An Author/Title/Title.m4b"
             ],
             workspace.DestinationFiles());
-        Assert.Equal(["Title.m4b", "Title.pdf"], LibraryManifest.Load(workspace.Destination).Get("t1")?.Files);
-        string[] expected = ["Returned.m4b", "Returned.pdf"];
+        Assert.Equal(["Title.m4b"], LibraryManifest.Load(workspace.Destination).Get("t1")?.Files);
         Assert.Equal(
-            expected.Select(name => $"Left \"{Path.Combine("An Author", name)}\" where it was: it matches none of the books in the export. If it is an old copy, delete it."),
+            [
+                .. new[] { "Returned.m4b", "Returned.pdf" }.Select(name =>
+                    $"Left \"{Path.Combine("An Author", name)}\" where it was: it matches none of the books in the export. If it is an old copy, delete it."),
+                Unproven(Path.Combine("An Author", "Saga", "Other.pdf"), "Other", Path.Combine("An Author", "Saga", "Other")),
+                Unproven(Path.Combine("An Author", "Title.pdf"), "Title", Path.Combine("An Author", "Title"))
+            ],
             summary.Problems.Select(problem => problem.Message));
         Assert.Equal(summary.Problems.Select(problem => problem.Message), again.Problems.Select(problem => problem.Message));
+
+        static string Unproven(string path, string title, string folder) =>
+            $"Left \"{path}\" where it was: it is named like \"{title} — An Author\", but the source folder has no PDF of that book " +
+            $"to compare it with, so it may as well be another book's. If it is this book's, move it into \"{folder}\" yourself.";
     }
 
     [Fact]

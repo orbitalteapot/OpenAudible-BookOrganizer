@@ -326,16 +326,15 @@ public class FileSorter
 
         /// <summary>
         /// Whether <paramref name="file"/> may be moved into place for the book whose download is
-        /// <paramref name="source"/>. A companion such as the book's PDF may also go when it lies beside
-        /// audio already proven to be the book's (<paramref name="provenAudioFolder"/>): older versions
-        /// filed the two side by side, and a PDF often has no download left to compare with.
+        /// <paramref name="source"/>. Never by its name or where it lies alone, not even a PDF named
+        /// like the book beside the book's own audio: older versions numbered each type of file on its
+        /// own, so beside one book's "Title.m4b" lies the "Title.pdf" of a same-titled book that had only
+        /// its PDF then, and that may be its only copy. Moved in, it would go on record as the book's,
+        /// and the book's next download of its PDF would replace it.
         /// </summary>
-        public bool MayMove(string? bookId, string file, string? source, string? provenAudioFolder)
+        public bool MayMove(string? bookId, string file, string? source)
         {
-            return IsRecordedFor(bookId, file) ||
-                   (source is not null && FileComparison.AreSameQuick(source, file)) ||
-                   (provenAudioFolder is not null &&
-                    string.Equals(Path.GetDirectoryName(Path.GetFullPath(file)), provenAudioFolder, PathSanitizer.PathComparison));
+            return IsRecordedFor(bookId, file) || (source is not null && FileComparison.AreSameQuick(source, file));
         }
     }
 
@@ -393,7 +392,6 @@ public class FileSorter
 
         var movedHere = new List<string>();
         var leftAlone = new List<string>();
-        string? provenAudioFolder = null;
         var moves = new List<(string? From, string? To, string? Source)>
         {
             (item.AudioMoveFrom, item.AudioDestination, item.AudioSource),
@@ -408,9 +406,7 @@ public class FileSorter
                 continue;
             }
 
-            // The audio comes first in the list, so its companions can go with it.
-            var isAudio = from == item.AudioMoveFrom;
-            if (!ownership.MayMove(item.BookId, from, source, isAudio ? null : provenAudioFolder))
+            if (!ownership.MayMove(item.BookId, from, source))
             {
                 leftAlone.Add(from);
                 continue;
@@ -419,10 +415,6 @@ public class FileSorter
             MoveIntoPlace(from, to, vacatedFolders);
             movedHere.Add(to);
             attempt.Proven.Add(to);
-            if (isAudio)
-            {
-                provenAudioFolder = Path.GetDirectoryName(Path.GetFullPath(from));
-            }
         }
 
         // A file moved in above is provably this book's; anything else already there has to be on record as its.

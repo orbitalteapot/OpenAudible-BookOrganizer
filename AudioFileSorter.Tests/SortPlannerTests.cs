@@ -901,18 +901,50 @@ public class SortPlannerTests
     }
 
     [Fact]
-    public void Upgrade_moves_a_loose_pdf_along_with_its_book_when_the_source_has_none()
+    public void Upgrade_leaves_a_loose_pdf_beside_its_books_audio_when_the_source_has_none_to_compare_it_with()
     {
+        // Main numbered each type of file on its own: beside this book's audio, "A Book.pdf" may be the only
+        // copy of a same-titled book that had only its PDF then. Its name alone does not make it this book's.
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "audio");
         var looseAudio = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "audio");
         var loosePdf = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.pdf"), "pdf");
+        var planner = new SortPlanner();
 
-        var planned = Plan(workspace, TempWorkspace.Book());
+        var planned = planner.Plan([TempWorkspace.Book()], workspace.Source, workspace.Destination, LibraryManifest.Load(workspace.Destination));
 
         Assert.Equal(looseAudio, planned[0].AudioMoveFrom);
         Assert.Null(planned[0].PdfDestination);
-        Assert.Equal([(loosePdf, Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.pdf"))], planned[0].OtherMoves);
+        Assert.Empty(planned[0].OtherMoves);
+        Assert.Equal(
+            $"Left \"{Path.GetRelativePath(workspace.Destination, loosePdf)}\" where it was: it is named like \"A Book — An Author\", " +
+            "but the source folder has no PDF of that book to compare it with, so it may as well be another book's. If it is this " +
+            $"book's, move it into \"{Path.Combine("An Author", "A Book")}\" yourself.",
+            Assert.Single(planner.Warnings));
+    }
+
+    [Fact]
+    public void Upgrade_says_a_loose_pdf_named_like_a_book_missing_from_the_source_may_be_its_only_copy()
+    {
+        // The reverse of the above, as main left it for a book that had only its PDF: the same-titled book
+        // listed but missing from the source may be the one whose only copy it is, which counts for more.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a.m4b", "a-audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Foo.m4b"), "a-audio");
+        var loosePdf = workspace.WriteDestinationFile(Path.Combine("An Author", "Foo.pdf"), "b-pdf");
+        var planner = new SortPlanner();
+
+        var planned = planner.Plan(
+            [TempWorkspace.Book(title: "Foo", filename: "a"), TempWorkspace.Book(title: "Foo", filename: "b")],
+            workspace.Source,
+            workspace.Destination,
+            LibraryManifest.Load(workspace.Destination));
+
+        Assert.Empty(planned[0].OtherMoves);
+        Assert.Equal(
+            $"Left \"{Path.GetRelativePath(workspace.Destination, loosePdf)}\" where it was: it is named like \"Foo — An Author\", " +
+            "which is not in the source folder, so it may be that book's only copy.",
+            Assert.Single(planner.Warnings));
     }
 
     [Fact]
