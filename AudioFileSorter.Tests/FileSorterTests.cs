@@ -124,16 +124,17 @@ public class FileSorterTests
     [Fact]
     public async Task Sort_never_overwrites_a_different_file_that_is_not_on_record_as_the_books()
     {
-        // Whatever put it there, and whatever the planner makes of its name, it is not provably this
-        // book's, so it may be someone's only copy of another book.
+        // Even in the book's own folder: a PDF someone put there before the export listed one is not
+        // provably the book's, so the book's new PDF does not go over it.
         using var workspace = new TempWorkspace();
-        workspace.WriteSourceFile("a-book.m4b", "new-audio");
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "another-book");
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        await Sort(workspace, TempWorkspace.Book());
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.pdf"), "someone-elses-notes");
+        workspace.WriteSourceFile("a-book.pdf", "the-books-pdf");
 
-        var summary = await Sort(workspace, TempWorkspace.Book());
+        var summary = await Sort(workspace, TempWorkspace.Book(pdf: "a-book.pdf"));
 
-        Assert.Equal("another-book", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
-        Assert.Equal(SortCounts.Empty with { Failed = 1 }, summary.Counts);
+        Assert.Equal("someone-elses-notes", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.pdf")));
         Assert.Contains("delete it and sort again", Assert.Single(summary.Problems).Message);
     }
 
@@ -363,6 +364,23 @@ public class FileSorterTests
 
         Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
         Assert.Equal(["J.K. Rowling/A Book/A Book.m4b"], workspace.DestinationFiles());
+    }
+
+    [Fact]
+    public async Task A_book_moves_out_of_its_recorded_folder_once_book_folders_are_in_it()
+    {
+        // As a sort cancelled after filing a series "Saga" inside the standalone "Saga"'s folder, before
+        // that book moved out, leaves it. Staying would leave its audio loose beside a book folder.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("saga.m4b", "saga");
+        var saga = TempWorkspace.Book(title: "Saga", filename: "saga", asin: "S1");
+        await Sort(workspace, saga);
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Saga", "Foo", "Foo.m4b"), "foo");
+
+        var summary = await Sort(workspace, saga);
+
+        Assert.Equal(["An Author/Saga (2)/Saga.m4b", "An Author/Saga/Foo/Foo.m4b"], workspace.DestinationFiles());
+        Assert.Equal(SortCounts.Empty with { Moved = 1 }, summary.Counts);
     }
 
     [Fact]
@@ -1947,12 +1965,12 @@ public class FileSorterTests
         workspace.WriteSourceFile("y.m4b", "new-edition");
         var summary = await Sort(workspace, other, TempWorkspace.Book(title: "Title", filename: "y", asin: "Y1", seriesName: "Saga", seriesSequence: "1"));
 
-        // It cannot tell a departed book's only copy from this book's older download, so it touches
-        // neither and asks.
+        // It cannot tell a departed book's only copy from this book's older download, so it leaves the
+        // folder alone, gives the new edition its own, and says so.
         Assert.Equal("old-edition-only-copy", ReadDestination(workspace, "An Author", "Saga", "Book 1", "Title.m4b"));
-        Assert.Equal(SortCounts.Empty with { Failed = 1, UpToDate = 1 }, summary.Counts);
-        Assert.Contains(summary.Problems, problem => problem.Message.Contains("delete it and sort again"));
-        Assert.Contains(Path.Combine("An Author", "Saga", "Book 1", "Title.m4b"), Assert.Single(summary.Problems).Message);
+        Assert.Equal("new-edition", ReadDestination(workspace, "An Author", "Saga", "Book 1 (2)", "Title.m4b"));
+        Assert.Equal(SortCounts.Empty with { New = 1, UpToDate = 1 }, summary.Counts);
+        Assert.Contains($"Left \"{Path.Combine("An Author", "Saga", "Book 1")}\" alone", Assert.Single(summary.Problems).Message);
     }
 
     [Fact]
@@ -2004,10 +2022,10 @@ public class FileSorterTests
     }
 
     [Fact]
-    public async Task A_file_the_sort_refuses_is_never_recorded_as_the_books_so_the_next_sort_leaves_it_too()
+    public async Task A_folder_holding_a_different_recording_of_the_books_name_is_left_alone_on_every_sort()
     {
         // Main left the only copy of an unnumbered "Foo" of the series "Foo", which has left the export, in
-        // "Ann Author/Foo". A different, standalone "Foo" arrives, and takes that folder by its name.
+        // "Ann Author/Foo". A different, standalone "Foo" arrives: the name alone does not make it its.
         using var workspace = new TempWorkspace();
         workspace.WriteDestinationFile(Path.Combine("Ann Author", "Foo", "Foo.m4b"), "book-0-only-copy");
         workspace.WriteSourceFile("src-1.m4b", "book-1-download");
@@ -2016,18 +2034,18 @@ public class FileSorterTests
         var first = await Sort(workspace, book);
         var second = await Sort(workspace, book);
 
-        Assert.Equal(SortCounts.Empty with { Failed = 1 }, first.Counts);
-        Assert.Equal(SortCounts.Empty with { Failed = 1 }, second.Counts);
-        Assert.Contains("not on record as this book's", Assert.Single(second.Problems).Message);
+        Assert.Equal(SortCounts.Empty with { New = 1 }, first.Counts);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, second.Counts);
         Assert.Equal("book-0-only-copy", ReadDestination(workspace, "Ann Author", "Foo", "Foo.m4b"));
-        Assert.Empty(LibraryManifest.Load(workspace.Destination).Books);
+        Assert.Equal("book-1-download", ReadDestination(workspace, "Ann Author", "Foo (2)", "Foo.m4b"));
+        Assert.Equal(Path.Combine(workspace.Destination, "Ann Author", "Foo (2)"), Assert.Single(LibraryManifest.Load(workspace.Destination).Books).Value.Folder);
     }
 
     [Fact]
-    public async Task A_book_that_moves_after_its_copy_was_refused_never_takes_the_refused_file_along()
+    public async Task A_book_given_a_folder_of_its_own_beside_an_unrecorded_copy_never_takes_that_copy_along()
     {
         // A standalone "Book 1" was sorted and has since left the export; the record of it is gone. A
-        // different "Book 1" arrives and is refused its folder's file; then it is retitled, and moves.
+        // different "Book 1" arrives and is given a folder of its own; then it is retitled, and moves.
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("src-0.m4b", "book-0-only-copy");
         await Sort(workspace, TempWorkspace.Book(title: "Book 1", author: "Ann Author", filename: "src-0"));
@@ -2040,11 +2058,13 @@ public class FileSorterTests
         workspace.WriteSourceFile("src-2.mp3", "book-2-download-mp3");
         var moved = await Sort(workspace, TempWorkspace.Book(title: "Foo", author: "Ann Author", filename: "src-2", asin: "B2", m4b: null, mp3: "Yes"));
 
-        Assert.Equal(SortCounts.Empty with { Failed = 1 }, refused.Counts);
-        Assert.Equal(SortCounts.Empty with { New = 1 }, moved.Counts);
-        Assert.Equal(["Ann Author/Book 1/Book 1.m4b", "Ann Author/Foo/Foo.mp3"], workspace.DestinationFiles());
+        Assert.Equal(SortCounts.Empty with { New = 1 }, refused.Counts);
+        Assert.Contains(refused.Problems, problem => problem.Message.Contains($"Left \"{Path.Combine("Ann Author", "Book 1")}\" alone"));
         Assert.Equal("book-0-only-copy", ReadDestination(workspace, "Ann Author", "Book 1", "Book 1.m4b"));
-        Assert.Equal(["Foo.mp3"], LibraryManifest.Load(workspace.Destination).Get("b2")?.Files);
+        Assert.DoesNotContain(moved.Problems, problem => problem.Kind == SortProblemKind.Failed);
+        var entry = LibraryManifest.Load(workspace.Destination).Get("b2");
+        Assert.Equal(Path.Combine(workspace.Destination, "Ann Author", "Foo"), entry?.Folder);
+        Assert.Contains("Foo.mp3", entry!.Files);
     }
 
     [Fact]
@@ -2070,7 +2090,7 @@ public class FileSorterTests
     }
 
     [Fact]
-    public async Task A_book_whose_sort_is_cancelled_right_after_its_file_was_refused_is_not_recorded()
+    public async Task A_book_cancelled_right_after_it_was_given_its_own_folder_is_recorded_there()
     {
         // The run is cancelled as soon as the book is done, before the next one starts.
         using var workspace = new TempWorkspace();
@@ -2085,8 +2105,8 @@ public class FileSorterTests
             new SortOptions { MaxParallelism = 1 }, new CancelOnFirstReport(cancellation), cancellation.Token));
         var again = await Sort(workspace, book);
 
-        Assert.Null(LibraryManifest.Load(workspace.Destination).Get("t1"));
-        Assert.Equal(SortCounts.Empty with { Failed = 1 }, again.Counts);
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "Title (2)"), LibraryManifest.Load(workspace.Destination).Get("t1")?.Folder);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, again.Counts);
         Assert.Equal("someone-elses-only-copy", ReadDestination(workspace, "An Author", "Title", "Title.m4b"));
     }
 

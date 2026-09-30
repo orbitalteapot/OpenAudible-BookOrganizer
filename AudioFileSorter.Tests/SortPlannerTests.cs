@@ -412,17 +412,30 @@ public class SortPlannerTests
     }
 
     [Fact]
-    public void Plan_takes_a_folder_holding_the_books_file_that_no_manifest_records()
+    public void Plan_takes_a_folder_holding_the_books_own_copy_that_no_manifest_records()
     {
         // As a sort that crashed before saving its manifest, or a manifest that was deleted, leaves it.
         using var workspace = new TempWorkspace();
-        workspace.WriteSourceFile("a-book.m4b", "new-download");
-        var existing = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "old-download");
+        workspace.WriteSourceFile("a-book.m4b", "download");
+        var existing = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "download");
 
         var planned = Plan(workspace, TempWorkspace.Book());
 
-        // Only this book could be filed there, so the update check replaces the old download.
         Assert.Equal(existing, planned[0].AudioDestination);
+    }
+
+    [Fact]
+    public void Plan_leaves_an_unrecorded_folder_whose_recording_of_the_books_name_differs()
+    {
+        // An older copy of this book, or another book's only copy: the name cannot say which.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "new-download");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "old-download");
+
+        var planned = Plan(workspace, TempWorkspace.Book());
+
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "A Book (2)", "A Book.m4b"), planned[0].AudioDestination);
+        Assert.Contains($"Left \"{Path.Combine("An Author", "A Book")}\" alone", planned[0].Warning);
     }
 
     // The upgrade tests below seed the destination with exactly what the version on main wrote:

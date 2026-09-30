@@ -109,11 +109,10 @@ public sealed class SortPlanner
 
         // The books on record first, whatever the export's order: their files are provably theirs, so
         // a new book listed before one that moved must not take the folder it moves to.
-        var sharingFolderName = unique.Where(book => book.Record is null).ToLookup(SharedFolderKey, FolderComparer);
         foreach (var book in inSource.OrderBy(book => book.Record is null))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ClaimFolder(book, contested: sharingFolderName[SharedFolderKey(book)].Any(other => other != book));
+            ClaimFolder(book);
         }
 
         inSource.Where(book => book.Folder is not null).ToList().ForEach(PlanFiles);
@@ -297,22 +296,35 @@ public sealed class SortPlanner
     /// </item>
     /// </list>
     /// </summary>
-    /// <param name="contested">Another book the manifest does not know wants a folder of this name, for a book of this title.</param>
-    private void ClaimFolder(Book book, bool contested)
+    private void ClaimFolder(Book book)
     {
         var free = Enumerable.Range(1, MaxDisambiguationAttempts)
             .Select(attempt => AsRecorded(book, _disk.Spelled(book.Parent, book.BaseName + Suffix(attempt))))
             .Where(folder => !_claimedFolders.Contains(folder) && !(_folderOwners.TryGetValue(folder, out var owner) && owner != book.Id))
             .ToList();
 
-        // Other books' recorded folders are not free, so a recorded one left is this book's own.
-        var folder = free.FirstOrDefault(_folderOwners.ContainsKey)
+        // Other books' recorded folders are not free, so a recorded one left is this book's own. Kept only
+        // while it is still a book's folder: once book folders are in it (a sort stopped after filing a
+        // series there, before this book moved out), its audio would lie loose beside them, so it moves.
+        var folder = free.FirstOrDefault(folder => _folderOwners.ContainsKey(folder) && !_disk.HoldsBookFolders(folder))
                      ?? free.FirstOrDefault(folder => _disk.HasFolder(book.Parent, Path.GetFileName(folder)) && HoldsCopyOf(book, folder))
-                     ?? free.FirstOrDefault(folder => MayTake(book, folder, contested));
+                     ?? free.FirstOrDefault(folder => MayTake(book, folder));
         if (folder is null)
         {
             book.Warnings.Add($"Could not find a free folder name for \"{book.Naming.FileStem}\"");
             return;
+        }
+
+        // Passed over for a recording under this book's name that is not its download: an older copy
+        // of it, or another book's only copy. Only the person can tell, so they are told.
+        var passedOver = free
+            .TakeWhile(candidate => candidate != folder)
+            .Where(candidate => !FolderComparer.Equals(candidate, book.Record?.Folder) && NamedAudioFiles(book, candidate).Any());
+        foreach (var passed in passedOver)
+        {
+            book.Warnings.Add(
+                $"Left \"{Path.GetRelativePath(_root, passed)}\" alone: it holds a recording named like this book that differs " +
+                "from the download, so the book was given a folder of its own. If it is an old copy of this book, delete it.");
         }
 
         _claimedFolders.Add(folder);
@@ -329,28 +341,14 @@ public sealed class SortPlanner
 
     /// <summary>
     /// Whether <paramref name="folder"/>, which no other book has, may be this book's: it holds no audio,
-    /// or its only recording is under this book's name, as a sort that crashed before saving its manifest
-    /// left it, or an older version's "Book N" folder. The update check then replaces the file if the
-    /// download changed. But the export cannot tell a changed download from another book's only copy, so
-    /// the name alone decides only where nothing else can (see <see cref="MayGoByName"/>); elsewhere only
-    /// this book's own audio makes the folder this book's.
+    /// or it holds this book's own audio, as a sort that stopped before saving its record left it, or an
+    /// older version's "Book N" folder. A recording merely named like the book is not enough: the export
+    /// cannot tell a changed download from another book's only copy.
     /// </summary>
-    private bool MayTake(Book book, string folder, bool contested)
+    private bool MayTake(Book book, string folder)
     {
-        var audio = _disk.AudioFiles(folder);
-        return !_disk.HoldsBookFolders(folder) &&
-               (audio.Count == 0 ||
-                (NamedAudioFiles(book, folder).Any() && ((MayGoByName(book, contested) && audio.Count == 1) || HoldsCopyOf(book, folder))));
+        return !_disk.HoldsBookFolders(folder) && (_disk.AudioFiles(folder).Count == 0 || HoldsCopyOf(book, folder));
     }
-
-    /// <summary>
-    /// Whether a folder's one recording under this book's name may be taken as the book's without its
-    /// audio matching: an older version's "Book N" folder for a book re-downloaded since. Only for a
-    /// book no other unrecorded book shares a folder name and title with, and never for a book on
-    /// record, whose files are known. A wrong guess costs nothing: FileSorter still replaces the file
-    /// only when it is provably the book's, and otherwise leaves it and says so.
-    /// </summary>
-    private static bool MayGoByName(Book book, bool contested) => !contested && book.Record is null;
 
     /// <summary>
     /// Whether <paramref name="folder"/> is a book's folder with this book's audio under its name. Never
@@ -597,7 +595,6 @@ public sealed class SortPlanner
     /// <summary>What the books that could have left a file of their name in <paramref name="folder"/> have in common.</summary>
 
     /// <summary>What books have in common that the "(n)" of one folder name tells apart, and that share a title.</summary>
-    private static string SharedFolderKey(Book book) => $"{book.Parent}\u0000{book.BaseName}\u0000{book.StemKey}";
 
     /// <summary>A name ignoring spelling and punctuation ("A Book: The Sequel" is "A Book - The Sequel"); punctuation alone as it is.</summary>
     private static string NameKey(string name)
