@@ -234,7 +234,7 @@ public class UpdateCheckTests
         await cancellation.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            FileSorter.AreFilesIdenticalAsync(first, second, cancellation.Token));
+            FileComparison.AreIdenticalAsync(first, second, cancellation.Token));
     }
 
     [Fact]
@@ -245,7 +245,7 @@ public class UpdateCheckTests
         var first = workspace.WriteSourceFile("a-book.m4b", content);
         var second = workspace.WriteDestinationFile("copy.m4b", content);
 
-        Assert.True(await FileSorter.AreFilesIdenticalAsync(first, second, CancellationToken.None));
+        Assert.True(await FileComparison.AreIdenticalAsync(first, second, CancellationToken.None));
     }
 
     [Fact]
@@ -255,7 +255,7 @@ public class UpdateCheckTests
         var first = workspace.WriteSourceFile("a-book.m4b", new string('z', 2_000_000) + "end-a");
         var second = workspace.WriteDestinationFile("copy.m4b", new string('z', 2_000_000) + "end-b");
 
-        Assert.False(await FileSorter.AreFilesIdenticalAsync(first, second, CancellationToken.None));
+        Assert.False(await FileComparison.AreIdenticalAsync(first, second, CancellationToken.None));
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using AudioFileSorter;
 using AudioFileSorter.Model;
 
 namespace ManagerApi.Services;
@@ -102,10 +103,7 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
         }
     }
 
-    /// <summary>
-    /// Written beside the target, flushed to the disk and renamed over it, so a crash or a power cut
-    /// leaves either the old file or the new one, never half of one.
-    /// </summary>
+    /// <summary>Saves atomically (see <see cref="AtomicFile.Write"/>).</summary>
     /// <param name="error">Why it could not be saved (the system's reason, which names the file); null when it was.</param>
     public bool TrySave(SavedState state, out string? error)
     {
@@ -121,19 +119,12 @@ public sealed class SettingsStore(string? path, ILogger<SettingsStore> logger)
             return false;
         }
 
-        var partialPath = _path + ".tmp";
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_path))!);
 
             var file = new { version = FileVersion, settings = StoredSettings.From(state.Settings), schedule = state.Schedule };
-            using (var stream = new FileStream(partialPath, FileMode.Create, FileAccess.Write, FileShare.None))
-            {
-                JsonSerializer.Serialize(stream, file, JsonOptions);
-                stream.Flush(flushToDisk: true);
-            }
-
-            File.Move(partialPath, _path, overwrite: true);
+            AtomicFile.Write(_path, stream => JsonSerializer.Serialize(stream, file, JsonOptions));
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

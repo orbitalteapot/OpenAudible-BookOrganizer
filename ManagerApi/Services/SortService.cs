@@ -203,7 +203,7 @@ public sealed class SortService : IHostedService
             var progress = new InlineProgress<SortProgressInfo>(info => Update(run, status => status.With(info)));
             var summary = await _fileSorter.SortAudioFiles(sourcePath, destinationPath, books, options, progress, token);
 
-            MarkDestination(destinationPath);
+            RememberSortedDestination(destinationPath);
             final = Finish(run, status => status.Completed(summary, UtcNow()));
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
@@ -238,21 +238,22 @@ public sealed class SortService : IHostedService
     }
 
     /// <summary>
-    /// Leaves the marker automatic sorts look for (see <see cref="SettingsService.CheckUnattended"/>).
-    /// A run that finished has just proved this folder is the library, whoever started it, so a
-    /// person who emptied it on purpose re-arms automatic sorting by sorting once by hand.
+    /// Arms the check automatic sorts make for an unmounted drive (see <see cref="SettingsService.CheckUnattended"/>)
+    /// on this destination, now that the sorter has left its manifest in it (see <see cref="LibraryManifest"/>).
+    /// A run that finished has just proved this folder is the library, whoever started it, so a person
+    /// who emptied it on purpose re-arms automatic sorting by sorting once by hand.
     /// </summary>
-    private void MarkDestination(string destinationPath)
+    private void RememberSortedDestination(string destinationPath)
     {
-        try
+        if (SortPathValidator.InspectMarker(destinationPath) is null)
         {
-            SortPathValidator.MarkDestination(destinationPath);
             _settings.RecordMarkedDestination(destinationPath);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        else
         {
-            // Unmarked, the folder is sorted into as before; only the check for a stand-in is lost.
-            _logger.LogWarning(ex, "Could not leave the marker in the destination {Path}", destinationPath);
+            // The run's problems list says why; unmarked, the folder is sorted into as before, and
+            // only the check for an empty stand-in is lost.
+            _logger.LogWarning("The sort left no {File} in the destination {Path}", LibraryManifest.FileName, destinationPath);
         }
     }
 

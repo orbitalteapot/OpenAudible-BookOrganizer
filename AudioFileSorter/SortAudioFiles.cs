@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.IO;
@@ -14,12 +13,15 @@ namespace AudioFileSorter;
 public class FileSorter
 {
     private const int CopyBufferSize = 81920;
-    private const int ComparisonBufferSize = 131072;
     private const string PartialFileSuffix = ".oabo-partial";
     private const string NotFoundMessage = "No audio file for this book in the source folder";
 
+    /// <summary>What problems about the destination as a whole, rather than one book, are listed under.</summary>
+    private const string DestinationProblemSubject = "Destination folder";
+
     /// <summary>
-    /// Sorts Open Audible books into the provided destination path.
+    /// Sorts Open Audible books into the provided destination path, going by and then updating the
+    /// record of which book is in which folder that sorts keep there (see <see cref="LibraryManifest"/>).
     /// </summary>
     /// <param name="source">Source folder containing audio files.</param>
     /// <param name="destination">Destination folder to sort files into.</param>
@@ -50,29 +52,42 @@ public class FileSorter
             throw new SortPathException(pathProblem);
         }
 
-        var planned = new SortPlanner().Plan(books, source, Path.GetFullPath(destination), cancellationToken);
+        var destinationRoot = Path.GetFullPath(destination);
+        var manifest = LibraryManifest.Load(destinationRoot);
         var tally = new RunTally(books.Count, progress);
-
-        foreach (var item in planned.Where(item => item.HasWork && item.Warning is not null))
+        if (manifest.Problem is not null)
         {
-            tally.AddProblem(new SortProblem(SortProblemKind.Warning, item.Title, item.Warning!));
+            tally.AddProblem(new SortProblem(SortProblemKind.Warning, DestinationProblemSubject, manifest.Problem));
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        tally.ReportStart();
-
-        var parallelOptions = new ParallelOptions
-        {
-            MaxDegreeOfParallelism = options.MaxParallelism,
-            CancellationToken = cancellationToken
-        };
-
+        var sorted = new ConcurrentBag<PlannedCopy>();
         var vacatedFolders = new ConcurrentBag<string>();
         try
         {
+            var planned = new SortPlanner().Plan(books, source, destinationRoot, manifest, cancellationToken);
+
+            foreach (var item in planned.Where(item => item.HasWork && item.Warning is not null))
+            {
+                tally.AddProblem(new SortProblem(SortProblemKind.Warning, item.Title, item.Warning!));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            tally.ReportStart();
+
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = options.MaxParallelism,
+                CancellationToken = cancellationToken
+            };
+
             await Parallel.ForEachAsync(planned, parallelOptions, async (item, ct) =>
             {
                 var (outcome, problem) = await SortBookAsync(item, options.ComparisonMode, vacatedFolders, ct);
+                if (item.HasWork && outcome is not (BookOutcome.Failed or BookOutcome.NotFound))
+                {
+                    sorted.Add(item);
+                }
+
                 tally.Finish(item.Title, outcome, problem);
             });
         }
@@ -80,10 +95,50 @@ public class FileSorter
         {
             // Only once every copy has finished: a folder one book moved out of can be the folder
             // another book is about to be copied into.
-            RemoveEmptiedFolders(vacatedFolders, Path.GetFullPath(destination));
+            RemoveEmptiedFolders(vacatedFolders, destinationRoot);
+
+            // Whatever ended the run: the books sorted before a cancel or a failure are where they
+            // are, and the next sort has to know they are theirs.
+            SaveManifest(manifest, sorted, tally);
         }
 
         return tally.ToSummary();
+    }
+
+    /// <summary>
+    /// Records where each book sorted in this run is, beside what earlier runs recorded, and writes
+    /// the manifest. Not being able to write it costs no book anything, so it is reported rather than
+    /// allowed to fail the run: the next sort finds the books in their folders again.
+    /// </summary>
+    private static void SaveManifest(LibraryManifest manifest, IEnumerable<PlannedCopy> sorted, RunTally tally)
+    {
+        foreach (var item in sorted.Where(item => item.BookId is not null))
+        {
+            var files = new[] { item.AudioDestination, item.PdfDestination }
+                .OfType<string>()
+                .Where(File.Exists)
+                .Select(Path.GetFileName)
+                .OfType<string>()
+                .ToList();
+
+            if (files.Count > 0)
+            {
+                manifest.Set(item.BookId!, new ManifestEntry(item.TargetDirectory!, files, item.Title));
+            }
+        }
+
+        try
+        {
+            manifest.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            tally.AddProblem(new SortProblem(
+                SortProblemKind.Warning,
+                DestinationProblemSubject,
+                $"Could not save its record of which book is in which folder (the {LibraryManifest.FileName} file): {ex.Message} " +
+                "The next sort finds the books in their folders again."));
+        }
     }
 
     /// <summary>
@@ -194,8 +249,8 @@ public class FileSorter
         Directory.CreateDirectory(item.TargetDirectory!);
 
         // Both files, whatever happens to the first: '|' does not short-circuit.
-        var moved = AdoptLegacyFile(item.AudioLegacyPath, item.AudioDestination, vacatedFolders) |
-                    AdoptLegacyFile(item.PdfLegacyPath, item.PdfDestination, vacatedFolders);
+        var moved = MoveIntoPlace(item.AudioMoveFrom, item.AudioDestination, vacatedFolders) |
+                    MoveIntoPlace(item.PdfMoveFrom, item.PdfDestination, vacatedFolders);
 
         var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, cancellationToken);
         var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, cancellationToken);
@@ -216,20 +271,21 @@ public class FileSorter
     }
 
     /// <summary>
-    /// Moves a book that an older version filed elsewhere (see <see cref="PlannedCopy.AudioLegacyPath"/>)
-    /// into the book's own folder. It is a rename within the destination, so nothing is copied or
-    /// lost, and the update check that follows still replaces it if the source has changed since.
-    /// Returns whether a file was moved, and adds the folder it came from to <paramref name="vacatedFolders"/>.
+    /// Moves a copy of the book already in the destination (see <see cref="PlannedCopy.AudioMoveFrom"/>)
+    /// into the book's own folder. It is a rename within the destination that never replaces a file,
+    /// so nothing is copied or lost, and the update check that follows still replaces it if the source
+    /// has changed since. Returns whether a file was moved, and adds the folder it came from to
+    /// <paramref name="vacatedFolders"/>.
     /// </summary>
-    private static bool AdoptLegacyFile(string? legacyPath, string? destinationFile, ConcurrentBag<string> vacatedFolders)
+    private static bool MoveIntoPlace(string? moveFrom, string? destinationFile, ConcurrentBag<string> vacatedFolders)
     {
-        if (legacyPath is null || destinationFile is null || File.Exists(destinationFile) || !File.Exists(legacyPath))
+        if (moveFrom is null || destinationFile is null || File.Exists(destinationFile) || !File.Exists(moveFrom))
         {
             return false;
         }
 
-        File.Move(legacyPath, destinationFile, overwrite: false);
-        vacatedFolders.Add(Path.GetDirectoryName(Path.GetFullPath(legacyPath))!);
+        File.Move(moveFrom, destinationFile, overwrite: false);
+        vacatedFolders.Add(Path.GetDirectoryName(Path.GetFullPath(moveFrom))!);
         return true;
     }
 
@@ -268,8 +324,8 @@ public class FileSorter
         CancellationToken cancellationToken)
     {
         return comparisonMode == FileComparisonMode.Full
-            ? AreFilesIdenticalAsync(sourceFile, destinationFile, cancellationToken)
-            : Task.FromResult(AreFilesSame(sourceFile, destinationFile));
+            ? FileComparison.AreIdenticalAsync(sourceFile, destinationFile, cancellationToken)
+            : Task.FromResult(FileComparison.AreSameQuick(sourceFile, destinationFile));
     }
 
     /// <summary>
@@ -342,167 +398,6 @@ public class FileSorter
         {
             // Best effort: a leftover .oabo-partial file is overwritten by the next run.
         }
-    }
-
-    /// <summary>
-    /// Cheap "is this the same file" check. Comparing every byte of a multi-gigabyte library on
-    /// every run is not viable, so size plus three sampled chunks is used instead. It reads a few
-    /// kilobytes, so it is synchronous: the planner uses it too, to tell whose an old file is.
-    /// </summary>
-    internal static bool AreFilesSame(string filePath1, string filePath2)
-    {
-        try
-        {
-            var fileInfo1 = new FileInfo(filePath1);
-            var fileInfo2 = new FileInfo(filePath2);
-
-            if (!fileInfo1.Exists || !fileInfo2.Exists || fileInfo1.Length != fileInfo2.Length)
-            {
-                return false;
-            }
-
-            var length = fileInfo1.Length;
-            if (length == 0)
-            {
-                return true;
-            }
-
-            const int chunkSize = 4096;
-            var buffer1 = new byte[chunkSize];
-            var buffer2 = new byte[chunkSize];
-
-            using var stream1 = new FileStream(filePath1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize);
-            using var stream2 = new FileStream(filePath2, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize);
-
-            foreach (var offset in GetSampleOffsets(length, chunkSize))
-            {
-                stream1.Seek(offset, SeekOrigin.Begin);
-                stream2.Seek(offset, SeekOrigin.Begin);
-
-                var read1 = stream1.ReadAtLeast(buffer1, chunkSize, throwOnEndOfStream: false);
-                var read2 = stream2.ReadAtLeast(buffer2, chunkSize, throwOnEndOfStream: false);
-
-                if (read1 != read2 || !buffer1.AsSpan(0, read1).SequenceEqual(buffer2.AsSpan(0, read2)))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return false; // Assume the files differ so the copy is retried.
-        }
-    }
-
-    /// <summary>
-    /// Byte-for-byte comparison of two files. Used by <see cref="FileComparisonMode.Full"/>, where
-    /// the point is to notice a re-released book that happens to be exactly the same size as the
-    /// copy already on disk — something the sampled check cannot see.
-    ///
-    /// Internal rather than private so the "cancel stops it promptly" guarantee can be tested
-    /// directly: this is the only unbounded loop in a sort, and on a large library it is where a
-    /// cancelled run would otherwise keep grinding.
-    /// </summary>
-    internal static async Task<bool> AreFilesIdenticalAsync(string filePath1, string filePath2, CancellationToken cancellationToken)
-    {
-        byte[]? buffer1 = null;
-        byte[]? buffer2 = null;
-
-        try
-        {
-            var fileInfo1 = new FileInfo(filePath1);
-            var fileInfo2 = new FileInfo(filePath2);
-
-            if (!fileInfo1.Exists || !fileInfo2.Exists || fileInfo1.Length != fileInfo2.Length)
-            {
-                return false;
-            }
-
-            if (fileInfo1.Length == 0)
-            {
-                return true;
-            }
-
-            buffer1 = ArrayPool<byte>.Shared.Rent(ComparisonBufferSize);
-            buffer2 = ArrayPool<byte>.Shared.Rent(ComparisonBufferSize);
-
-            await using var stream1 = new FileStream(
-                filePath1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, ComparisonBufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await using var stream2 = new FileStream(
-                filePath2, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, ComparisonBufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-            while (true)
-            {
-                // Checked here as well as passed to the reads: a whole-file comparison of a large
-                // book is many iterations long, and cancellation must not have to wait for the
-                // reads to notice it.
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var read1 = await stream1.ReadAtLeastAsync(
-                    buffer1.AsMemory(0, ComparisonBufferSize), ComparisonBufferSize, throwOnEndOfStream: false, cancellationToken);
-                var read2 = await stream2.ReadAtLeastAsync(
-                    buffer2.AsMemory(0, ComparisonBufferSize), ComparisonBufferSize, throwOnEndOfStream: false, cancellationToken);
-
-                if (read1 != read2)
-                {
-                    // The lengths matched a moment ago, so one of the files is being written to
-                    // right now. Treat it as different and copy again on this or the next run.
-                    return false;
-                }
-
-                if (read1 == 0)
-                {
-                    return true;
-                }
-
-                if (!buffer1.AsSpan(0, read1).SequenceEqual(buffer2.AsSpan(0, read2)))
-                {
-                    return false;
-                }
-            }
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return false; // Assume the files differ so the copy is retried.
-        }
-        finally
-        {
-            if (buffer1 is not null)
-            {
-                ArrayPool<byte>.Shared.Return(buffer1);
-            }
-
-            if (buffer2 is not null)
-            {
-                ArrayPool<byte>.Shared.Return(buffer2);
-            }
-        }
-    }
-
-    private static IEnumerable<long> GetSampleOffsets(long length, int chunkSize)
-    {
-        yield return 0;
-
-        if (length <= chunkSize)
-        {
-            yield break;
-        }
-
-        var middle = Math.Max(0, (length / 2) - (chunkSize / 2));
-        if (middle > 0)
-        {
-            yield return middle;
-        }
-
-        yield return Math.Max(0, length - chunkSize);
     }
 
     /// <summary>

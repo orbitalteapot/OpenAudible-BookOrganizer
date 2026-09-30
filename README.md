@@ -146,7 +146,7 @@ Every book lands in exactly one of six counters, so they add up to the books pro
 | --- | --- |
 | **New** | Not in your library yet; copied in. |
 | **Updated** | Replaced an out-of-date copy at the destination. |
-| **Moved** | Already in the destination but not where it now belongs — left loose by an older version of this app, or filed before its series details changed — and moved there (see [below](#how-your-books-get-organised)). |
+| **Moved** | Already in the destination but not where it now belongs — left loose by an older version of this app, or filed before its series, number or title changed — and moved there (see [below](#how-your-books-get-organised)). |
 | **Up to date** | Already at the destination and unchanged, so nothing was written. |
 | **Not found** | Listed in the export, but no audio file for it in the source folder — usually books you have not downloaded. A PDF on its own is not copied; it comes along once the audio is there. |
 | **Failed** | Could not be copied. The problems list says why. |
@@ -202,28 +202,37 @@ Andy Weir/
 ```
 
 Every book gets a folder of its own: a numbered series book goes in `Book N`, and any other book in
-a folder named after its title. Two books with the same number (two narrations of one book, say)
-get `Book 1` and `Book 1 (2)`, in the order of the export the first time they are sorted; after that each
-keeps the folder that holds its audio, whatever the order. That is the layout Audiobookshelf, Plex and similar servers expect —
+a folder named after its title. That is the layout Audiobookshelf, Plex and similar servers expect —
 a loose audio file in an author folder makes them treat that whole folder as one book and miss every
 series inside it. A companion PDF is copied next to its audiobook when the export mentions one and
 the file is present.
 
-Libraries sorted by an older version, which left standalone books loose in the author folder, are
-tidied up on the next sort: each loose file is moved into its new book folder rather than copied a
-second time, and counted as **Moved**. The same happens to a book whose metadata has changed shape
-since it was filed — one that has since been given a series, or a number within its series — so it
-is not left behind as a second copy. This always happens: a loose file next to a book folder is
-exactly what breaks Audiobookshelf. Only a file that holds the same audio as the book in the source
-folder is moved, and only within the destination folder. A file with the book's old name but
-different audio may be the only copy of another book with the same title (one you have returned, or
-not downloaded again), so it is left where it is and the problems list names it: delete it yourself
-if it is an old copy of that book.
+The organiser remembers which book it put in which folder, in a small hidden file called
+`.openaudible-organizer` at the top of the destination folder. Leave it there: library servers
+ignore it. If it is deleted, nothing is lost — the next sort finds your books in their folders
+again and writes a new one.
 
-The same care is taken with book folders. A book's folder that holds different audio is updated only
-when no other book in the export could own it. When another book with the same title or series number
-is not in the source folder, or has no folder of its own yet, that audio may be its only copy: the book
-is copied into the next `(2)` folder instead, and the problems list names the folder left alone.
+Because of that record, a book keeps its folder from one sort to the next. Two books with the same
+title, or the same number in a series (two narrations of one book, say), get folders such as
+`Book 1` and `Book 1 (2)` the first time they are sorted, and keep them whatever the order of the
+export later.
+A folder stays its book's as long as the book's files are in it, even after the book has left your
+export, so a different book with the same title that comes along later gets a `(2)` folder of its
+own and never replaces what may be the only copy of the first. When a book's series, number in the
+series or title changes, it is moved to its new folder, PDF and all, renamed if its title changed,
+and counted as **Moved**; the old folder is removed if that leaves it empty.
+
+Libraries sorted by an older version, which left standalone books loose in the author folder and
+series books without a number loose in the series folder, are tidied up on the next sort: each loose
+file is moved into its book's new folder rather than copied a second time, and counted as **Moved**.
+This always happens: a loose file next to a book folder is exactly what breaks Audiobookshelf. Files
+are only ever moved within the destination folder, and never over another file. When only one book
+in your export could have left a loose file, it is that book's: it is moved, and then replaced if you
+have downloaded the book again since. When several books share its name (older versions told them
+apart as `Title (2)`), a file is moved only into the book whose audio it holds; any other may be the
+only copy of a book you have returned or not downloaded again, so it is left where it is and the
+problems list names it: delete it yourself if it is an old copy.
+
 A file in the source folder that is empty, as it is while OpenAudible downloads or converts a book, is
 counted as **Not found** and never replaces the copy in your library; nor does a file that changes
 while it is being copied.
@@ -235,8 +244,8 @@ Names come from your metadata, cleaned up so the result is portable:
 - Very long names are shortened to 200 characters.
 - Two spellings of the same author (`J.K. Rowling` and `JK Rowling`) resolve to one folder, and an
   existing folder that means the same thing is reused rather than duplicated.
-- If two different books would end up with the same file name, the second gets a `(2)` suffix
-  instead of overwriting the first.
+- If two different books would end up in the same folder, the second gets a `(2)` folder instead
+  of sharing or overwriting the first's.
 
 ## Sorting automatically
 
@@ -254,8 +263,9 @@ folder cannot be written to, the card says *"Retrying at …"* with the reason, 
 again 15 minutes later until it works. If the schedule cannot run at all — the export has gone
 missing, say — the card says *"Automatic sorting can't run"* and why.
 
-Every sort that finishes leaves a small `.openaudible-organizer` file at the top of the destination.
-Automatic sorts refuse a folder that has lost it, and **Start sorting** asks first: that is what an
+Every sort leaves its `.openaudible-organizer` record (see
+[How your books get organised](#how-your-books-get-organised)) at the top of the destination.
+Automatic sorts refuse a folder that has lost it after a finished sort left it there, and **Start sorting** asks first: that is what an
 empty mount point looks like while the drive or share meant to be mounted there is not, and sorting
 into it would copy the whole library onto the system disk. If you emptied the folder on purpose, press
 **Start sorting** once, choose *Sort into it anyway*, and automatic sorting carries on from there.
@@ -300,7 +310,7 @@ operating system's setting and changes with it.
 | Books show as **Not found** and nothing is copied | The source folder does not contain the files named in the CSV. Check the source path, and re-export the CSV if you have moved files since. |
 | Books show as **Failed** | Open **Problems** under the counters: each book is listed with the reason, such as a full disk or a folder you cannot write to. |
 | *"The destination folder doesn't exist. Is the drive connected?"* | The drive or network share holding your library is not connected. Connect it and start again. |
-| *"The destination folder … no longer holds the .openaudible-organizer file…"* | Automatic sorting found the destination folder, but not the file earlier sorts left in it: usually the drive or share is not mounted, and the empty folder it is mounted on stands in for it. Mount it. If you emptied the folder on purpose, press **Start sorting** once and choose *Sort into it anyway*. |
+| *"The destination folder … no longer holds the .openaudible-organizer file…"* | Automatic sorting found the destination folder, but not the record of your books earlier sorts left in it: usually the drive or share is not mounted, and the empty folder it is mounted on stands in for it. Mount it. If you emptied the folder on purpose, press **Start sorting** once and choose *Sort into it anyway*. |
 | The destination says **Can't write to this folder** | You do not have permission to write there, or the drive is read-only. Pick another folder, or fix the permissions. |
 | **Start sorting** is greyed out: *"A sort is already running."* | A sort — possibly an automatic one — is still going. Follow it in the Progress card, or cancel it there. |
 | **Automatic sorting** is greyed out | Choose all three paths first; the card says which are missing. |
@@ -431,7 +441,7 @@ a restart or an image update.
 | --- | --- | --- | --- |
 | `CSV_PATH` | yes | — | The OpenAudible CSV export, inside the container. |
 | `SOURCE_PATH` | yes | — | Mounted folder holding your downloaded audiobooks. |
-| `DESTINATION_PATH` | yes | — | Mounted folder to write the organised library into. It must already exist: automatic sorts never create it. Every finished sort leaves a `.openaudible-organizer` file in it, and automatic sorts refuse the folder once that file is gone (Start sorting asks first), so an empty folder standing in for an unmounted drive is reported rather than filled in. |
+| `DESTINATION_PATH` | yes | — | Mounted folder to write the organised library into. It must already exist: automatic sorts never create it. Every sort leaves its `.openaudible-organizer` record of which book is in which folder in it, and automatic sorts refuse the folder once that file is gone (Start sorting asks first), so an empty folder standing in for an unmounted drive is reported rather than filled in. |
 | `COMPARISON_MODE` | no | `quick` | Update check used until one is chosen on the Sort page: `quick` or `full`. Once chosen there, the page's choice is saved and wins. |
 | `SORT_INTERVAL` | no | off | Sort automatically, e.g. `6h`, `12h`, `1d` or `30m` (at least 15 minutes; a bare number is hours). A valid value fixes the schedule, and the Sort page shows it without letting it be changed. Leave it unset, or set `off`, to choose automatic sorting on the Sort page instead. A value that cannot be read is ignored, and the Sort page says so. |
 | `OABO_MAX_PARALLELISM` | no | cores ÷ 4, max 8 | How many books are copied at once at the **Normal** copy speed. The Sort page's **Gentle** copy speed always copies one at a time, which is the better choice for a network share or a spinning disk. |

@@ -279,7 +279,7 @@ public class ApiEndpointTests
 
         var settings = await client.GetFromJsonAsync<JsonElement>("/api/settings");
         Assert.Equal("unmounted", settings.GetProperty("pathStatus").GetProperty("destination").GetString());
-        Assert.Contains(SortPathValidator.MarkerFileName, settings.GetProperty("pathMessages").GetProperty("destination").GetString());
+        Assert.Contains(LibraryManifest.FileName, settings.GetProperty("pathMessages").GetProperty("destination").GetString());
 
         var refused = await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.BadRequest);
         Assert.Equal("destinationUnmounted", refused.GetProperty("code").GetString());

@@ -75,6 +75,39 @@ public class FileSorterTests
     }
 
     [Fact]
+    public async Task A_second_sort_changes_nothing_and_the_manifest_records_every_book()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("standalone.m4b", "standalone");
+        workspace.WriteSourceFile("standalone.pdf", "pdf");
+        workspace.WriteSourceFile("numbered.m4b", "numbered");
+        workspace.WriteSourceFile("unnumbered.m4b", "unnumbered");
+        OpenAudible[] books =
+        [
+            TempWorkspace.Book(title: "Standalone", filename: "standalone", pdf: "standalone.pdf", asin: "B01"),
+            TempWorkspace.Book(title: "Numbered", filename: "numbered", seriesName: "Saga", seriesSequence: "1", asin: "B02"),
+            TempWorkspace.Book(title: "Unnumbered", filename: "unnumbered", seriesName: "Saga")
+        ];
+
+        await Sort(workspace, books);
+        var files = workspace.DestinationFiles();
+        var second = await Sort(workspace, books);
+
+        Assert.Equal(SortCounts.Empty with { UpToDate = 3 }, second.Counts);
+        Assert.Empty(second.Problems);
+        Assert.Equal(files, workspace.DestinationFiles());
+
+        var manifest = LibraryManifest.Load(workspace.Destination);
+        Assert.Equal(["b01", "b02", "file:unnumbered.m4b"], manifest.Books.Keys.Order(StringComparer.Ordinal));
+        var standalone = manifest.Get("b01")!;
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "Standalone"), standalone.Folder);
+        Assert.Equal(["Standalone.m4b", "Standalone.pdf"], standalone.Files);
+        Assert.Equal("Standalone — An Author", standalone.Title);
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "Saga", "Book 1"), manifest.Get("b02")!.Folder);
+        Assert.Equal(Path.Combine(workspace.Destination, "An Author", "Saga", "Unnumbered"), manifest.Get("file:unnumbered.m4b")!.Folder);
+    }
+
+    [Fact]
     public async Task Sort_replaces_a_destination_file_whose_contents_changed()
     {
         using var workspace = new TempWorkspace();
@@ -190,10 +223,12 @@ public class FileSorterTests
             TempWorkspace.Book(title: "Collected Works", filename: "second"));
 
         Assert.Equal(
-            ["An Author/Collected Works (2)/Collected Works.m4b", "An Author/Collected Works.m4b"],
+            ["An Author/Collected Works.m4b", "An Author/Collected Works/Collected Works.m4b"],
             workspace.DestinationFiles());
-        Assert.Equal("first-book", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "Collected Works.m4b")));
+        Assert.Equal("first-book", ReadDestination(workspace, "An Author", "Collected Works.m4b"));
+        Assert.Equal("second-book", ReadDestination(workspace, "An Author", "Collected Works", "Collected Works.m4b"));
         Assert.Equal(SortCounts.Empty with { Moved = 1, NotFound = 1 }, summary.Counts);
+        Assert.Single(summary.Problems, problem => problem.Kind == SortProblemKind.Warning);
     }
 
     [Fact]
@@ -209,7 +244,7 @@ public class FileSorterTests
             TempWorkspace.Book(title: "Collected Works", filename: "first"),
             TempWorkspace.Book(title: "Collected Works", filename: "second"));
 
-        Assert.Equal(["An Author/Collected Works (2)/Collected Works.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["An Author/Collected Works/Collected Works.m4b"], workspace.DestinationFiles());
         Assert.Equal(SortCounts.Empty with { Moved = 1, NotFound = 1 }, summary.Counts);
     }
 
@@ -228,18 +263,59 @@ public class FileSorterTests
     }
 
     [Fact]
-    public async Task Sort_removes_the_folder_a_book_left_when_it_joined_a_series()
+    public async Task Sort_moves_a_book_that_joined_a_series_and_removes_the_folder_it_left()
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "audio");
-        // Sorted while it was still a standalone book.
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "audio");
+        workspace.WriteSourceFile("a-book.pdf", "pdf");
+        await Sort(workspace, TempWorkspace.Book(pdf: "a-book.pdf"));
 
-        var summary = await Sort(workspace, TempWorkspace.Book(seriesName: "The Series", seriesSequence: "1"));
+        var summary = await Sort(workspace, TempWorkspace.Book(pdf: "a-book.pdf", seriesName: "The Series", seriesSequence: "1"));
 
-        Assert.Equal(1, summary.Counts.Moved);
-        Assert.Equal(["An Author/The Series/Book 1/A Book.m4b"], workspace.DestinationFiles());
+        Assert.Equal(SortCounts.Empty with { Moved = 1 }, summary.Counts);
+        Assert.Equal(["An Author/The Series/Book 1/A Book.m4b", "An Author/The Series/Book 1/A Book.pdf"], workspace.DestinationFiles());
         Assert.False(Directory.Exists(Path.Combine(workspace.Destination, "An Author", "A Book")));
+    }
+
+    [Fact]
+    public async Task Sort_moves_a_series_book_that_gained_a_number()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        await Sort(workspace, TempWorkspace.Book(seriesName: "The Series"));
+
+        var summary = await Sort(workspace, TempWorkspace.Book(seriesName: "The Series", seriesSequence: "2"));
+
+        Assert.Equal(SortCounts.Empty with { Moved = 1 }, summary.Counts);
+        Assert.Equal(["An Author/The Series/Book 2/A Book.m4b"], workspace.DestinationFiles());
+    }
+
+    [Fact]
+    public async Task Sort_moves_and_renames_a_book_whose_title_changed()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        await Sort(workspace, TempWorkspace.Book(title: "Old Name", asin: "B01"));
+
+        var summary = await Sort(workspace, TempWorkspace.Book(title: "New Name", asin: "B01"));
+        var again = await Sort(workspace, TempWorkspace.Book(title: "New Name", asin: "B01"));
+
+        Assert.Equal(SortCounts.Empty with { Moved = 1 }, summary.Counts);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, again.Counts);
+        Assert.Equal(["An Author/New Name/New Name.m4b"], workspace.DestinationFiles());
+    }
+
+    [Fact]
+    public async Task Sort_keeps_a_book_where_it_is_when_its_author_is_spelled_differently()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        await Sort(workspace, TempWorkspace.Book(author: "J.K. Rowling"));
+
+        var summary = await Sort(workspace, TempWorkspace.Book(author: "JK Rowling"));
+
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
+        Assert.Equal(["J.K. Rowling/A Book/A Book.m4b"], workspace.DestinationFiles());
     }
 
     [Fact]
@@ -247,13 +323,12 @@ public class FileSorterTests
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "audio");
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "audio");
+        await Sort(workspace, TempWorkspace.Book());
         workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "cover.jpg"), "image");
 
         await Sort(workspace, TempWorkspace.Book(seriesName: "The Series", seriesSequence: "1"));
 
-        Assert.Contains("An Author/A Book/cover.jpg", workspace.DestinationFiles());
-        Assert.Contains("An Author/The Series/Book 1/A Book.m4b", workspace.DestinationFiles());
+        Assert.Equal(["An Author/A Book/cover.jpg", "An Author/The Series/Book 1/A Book.m4b"], workspace.DestinationFiles());
     }
 
     [Fact]
@@ -309,22 +384,76 @@ public class FileSorterTests
     }
 
     [Fact]
-    public async Task Sort_leaves_a_loose_file_that_differs_from_the_source_where_it_is_and_says_so()
+    public async Task Sort_moves_a_loose_file_only_one_book_could_have_left_and_updates_it()
     {
-        // A stale copy of this book, or the only copy of a same-titled book that has left the
-        // export: the export cannot tell which, so the file is kept and the book copied afresh.
+        // No other book in the export has this title, so the old file is this book's older download.
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "new-audio");
         workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "old-audio!");
 
         var summary = await Sort(workspace, TempWorkspace.Book());
 
-        Assert.Equal(["An Author/A Book.m4b", "An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
-        Assert.Equal("old-audio!", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book.m4b")));
-        Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
-        var problem = Assert.Single(summary.Problems);
-        Assert.Equal(SortProblemKind.Warning, problem.Kind);
-        Assert.StartsWith($"Left \"{Path.Combine("An Author", "A Book.m4b")}\" where it is", problem.Message);
+        Assert.Equal(["An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
+        Assert.Equal("new-audio", ReadDestination(workspace, "An Author", "A Book", "A Book.m4b"));
+        Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
+        Assert.Empty(summary.Problems);
+    }
+
+    [Fact]
+    public async Task Upgrade_tidies_up_the_layout_an_older_version_left()
+    {
+        // What main wrote: standalone books loose in the author folder, series books without a
+        // number loose in the series folder, numbered ones in "Book N", and same-named files told
+        // apart by " (2)" in list order, which has changed since. "(3)" is a book no longer listed.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("standalone.m4b", "standalone");
+        workspace.WriteSourceFile("standalone.pdf", "standalone-pdf");
+        workspace.WriteSourceFile("novella.m4b", "novella");
+        workspace.WriteSourceFile("one.m4b", "one");
+        workspace.WriteSourceFile("works-a.m4b", "works-a");
+        workspace.WriteSourceFile("works-b.m4b", "works-b");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Standalone.m4b"), "standalone");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Standalone.pdf"), "standalone-pdf");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Saga", "Novella.m4b"), "novella");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Saga", "Book 1", "One.m4b"), "one");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works.m4b"), "works-b");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works (2).m4b"), "works-a");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Collected Works (3).m4b"), "works-gone");
+        OpenAudible[] books =
+        [
+            TempWorkspace.Book(title: "Standalone", filename: "standalone", pdf: "standalone.pdf"),
+            TempWorkspace.Book(title: "Novella", filename: "novella", seriesName: "Saga"),
+            TempWorkspace.Book(title: "One", filename: "one", seriesName: "Saga", seriesSequence: "1"),
+            TempWorkspace.Book(title: "Collected Works", filename: "works-a"),
+            TempWorkspace.Book(title: "Collected Works", filename: "works-b")
+        ];
+
+        var summary = await Sort(workspace, books);
+
+        Assert.Equal(
+            [
+                "An Author/Collected Works (2)/Collected Works.m4b",
+                "An Author/Collected Works (3).m4b",
+                "An Author/Collected Works/Collected Works.m4b",
+                "An Author/Saga/Book 1/One.m4b",
+                "An Author/Saga/Novella/Novella.m4b",
+                "An Author/Standalone/Standalone.m4b",
+                "An Author/Standalone/Standalone.pdf"
+            ],
+            workspace.DestinationFiles());
+        Assert.Equal("works-a", ReadDestination(workspace, "An Author", "Collected Works", "Collected Works.m4b"));
+        Assert.Equal("works-b", ReadDestination(workspace, "An Author", "Collected Works (2)", "Collected Works.m4b"));
+        Assert.Equal(SortCounts.Empty with { Moved = 4, UpToDate = 1 }, summary.Counts);
+        var warning = Assert.Single(summary.Problems);
+        Assert.Equal(SortProblemKind.Warning, warning.Kind);
+        Assert.Equal(
+            $"Left \"{Path.Combine("An Author", "Collected Works (3).m4b")}\" where it was: it matches none of the books in the export. " +
+            "If it is an old copy, delete it.",
+            warning.Message);
+
+        var again = await Sort(workspace, books);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 5 }, again.Counts);
+        Assert.Equal(7, workspace.DestinationFiles().Length);
     }
 
     [Fact]
@@ -420,10 +549,22 @@ public class FileSorterTests
         Assert.Equal(["An Author/Foo (2)/Foo.m4b", "An Author/Foo/Foo.m4b"], workspace.DestinationFiles());
         Assert.Equal("a-edition", ReadDestination(workspace, "An Author", "Foo", "Foo.m4b"));
         Assert.Equal(SortCounts.Empty with { New = 1, NotFound = 1 }, summary.Counts);
-        Assert.Contains(
-            summary.Problems,
-            problem => problem.Kind == SortProblemKind.Warning &&
-                       problem.Message.StartsWith($"Left \"{Path.Combine("An Author", "Foo")}\" alone"));
+    }
+
+    [Fact]
+    public async Task A_new_book_never_takes_the_folder_of_a_same_titled_book_that_has_left_the_export()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a.m4b", "a-edition");
+        await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "a", asin: "A"));
+        workspace.WriteSourceFile("b.m4b", "b-edition");
+
+        var summary = await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "b", asin: "B"));
+
+        Assert.Equal(["An Author/Foo (2)/Foo.m4b", "An Author/Foo/Foo.m4b"], workspace.DestinationFiles());
+        Assert.Equal("a-edition", ReadDestination(workspace, "An Author", "Foo", "Foo.m4b"));
+        Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
+        Assert.Empty(summary.Problems);
     }
 
     [Theory]
@@ -489,9 +630,10 @@ public class FileSorterTests
             TempWorkspace.Book(title: "Same", filename: "x", seriesName: "Saga", seriesSequence: "3"),
             TempWorkspace.Book(title: "Same", filename: "y", seriesName: "Saga", seriesSequence: "4"));
 
+        Assert.Equal(["An Author/Saga/Book 3 (2)/Same.m4b", "An Author/Saga/Book 3/Same.m4b"], workspace.DestinationFiles());
         Assert.Equal("y-edition", ReadDestination(workspace, "An Author", "Saga", "Book 3", "Same.m4b"));
         Assert.Equal("x-edition", ReadDestination(workspace, "An Author", "Saga", "Book 3 (2)", "Same.m4b"));
-        Assert.Equal(SortCounts.Empty with { New = 1, NotFound = 1 }, summary.Counts);
+        Assert.Equal(SortCounts.Empty with { Moved = 1, NotFound = 1 }, summary.Counts);
     }
 
     [Fact]
@@ -513,6 +655,7 @@ public class FileSorterTests
         Assert.Equal("narration-1", ReadDestination(workspace, "An Author", "Saga", "Book 2", "Alpha.m4b"));
         Assert.Equal("narration-2", ReadDestination(workspace, "An Author", "Saga", "Book 2 (2)", "Alpha.m4b"));
         Assert.Equal(SortCounts.Empty with { Moved = 1, NotFound = 1 }, summary.Counts);
+        Assert.Contains(Path.Combine("An Author", "Saga", "Book 2", "Alpha.m4b"), Assert.Single(summary.Problems, p => p.Kind == SortProblemKind.Warning).Message);
 
         var second = await Sort(
             workspace,
@@ -933,6 +1076,136 @@ public class FileSorterTests
         Assert.Equal(SortCounts.Empty with { New = 120 }, summary.Counts);
         Assert.Equal(3, Directory.GetDirectories(workspace.Destination).Length);
         Assert.Equal(120, workspace.DestinationFiles().Length);
+    }
+
+    [Fact]
+    public async Task Sort_copies_rows_with_the_same_asin_once()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("first.m4b", "audio");
+        workspace.WriteSourceFile("second.m4b", "audio");
+        OpenAudible[] books =
+        [
+            TempWorkspace.Book(title: "Alpha", filename: "first", asin: "B01"),
+            TempWorkspace.Book(title: "Beta", filename: "second", asin: "B01")
+        ];
+
+        var first = await Sort(workspace, books);
+        var second = await Sort(workspace, books);
+
+        Assert.Equal(SortCounts.Empty with { New = 1, UpToDate = 1 }, first.Counts);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 2 }, second.Counts);
+        Assert.Equal(["An Author/Alpha/Alpha.m4b"], workspace.DestinationFiles());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_deleted_manifest_is_rebuilt_from_the_books_in_their_folders(bool orderChanged)
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a.m4b", "a-edition");
+        workspace.WriteSourceFile("b.m4b", "b-edition");
+        workspace.WriteSourceFile("x.m4b", "x-edition");
+        workspace.WriteSourceFile("y.m4b", "y-edition");
+        OpenAudible[] books =
+        [
+            TempWorkspace.Book(title: "Foo", filename: "a"),
+            TempWorkspace.Book(title: "Foo", filename: "b"),
+            TempWorkspace.Book(title: "Xbook", filename: "x", seriesName: "Saga", seriesSequence: "2"),
+            TempWorkspace.Book(title: "Ybook", filename: "y", seriesName: "Saga", seriesSequence: "2")
+        ];
+        await Sort(workspace, books);
+        var files = workspace.DestinationFiles();
+        var recorded = LibraryManifest.Load(workspace.Destination).Books.ToDictionary(pair => pair.Key, pair => pair.Value.Folder);
+        File.Delete(Path.Combine(workspace.Destination, LibraryManifest.FileName));
+
+        var summary = await Sort(workspace, orderChanged ? books.Reverse().ToArray() : books);
+
+        Assert.Equal(SortCounts.Empty with { UpToDate = 4 }, summary.Counts);
+        Assert.Equal(files, workspace.DestinationFiles());
+        Assert.Equal(recorded, LibraryManifest.Load(workspace.Destination).Books.ToDictionary(pair => pair.Key, pair => pair.Value.Folder));
+    }
+
+    [Fact]
+    public async Task A_deleted_manifest_never_costs_a_book_that_has_left_the_export_its_copy()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a.m4b", "a-edition");
+        workspace.WriteSourceFile("b.m4b", "b-edition");
+        await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "a"), TempWorkspace.Book(title: "Foo", filename: "b"));
+        File.Delete(Path.Combine(workspace.Destination, LibraryManifest.FileName));
+
+        // The first has been returned, so only the second is listed; "Foo" holds the first one's copy.
+        var summary = await Sort(workspace, TempWorkspace.Book(title: "Foo", filename: "b"));
+
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
+        Assert.Equal(["An Author/Foo (2)/Foo.m4b", "An Author/Foo/Foo.m4b"], workspace.DestinationFiles());
+        Assert.Equal("a-edition", ReadDestination(workspace, "An Author", "Foo", "Foo.m4b"));
+    }
+
+    [Theory]
+    [InlineData("OpenAudible Book Organizer sorts into this folder. Automatic sorts look for this file.\n")]
+    [InlineData("{ \"format\": \"openaudible-organizer-manifest\", ")]
+    public async Task A_manifest_that_cannot_be_read_is_rebuilt_and_said_so(string content)
+    {
+        // The first is the plain marker this app left before it kept a manifest.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        await Sort(workspace, TempWorkspace.Book());
+        File.WriteAllText(Path.Combine(workspace.Destination, LibraryManifest.FileName), content);
+
+        var summary = await Sort(workspace, TempWorkspace.Book());
+        var again = await Sort(workspace, TempWorkspace.Book());
+
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
+        var problem = Assert.Single(summary.Problems);
+        Assert.Equal(new { Kind = SortProblemKind.Warning, Book = "Destination folder" }, new { problem.Kind, problem.Book });
+        Assert.Contains("rebuilt", problem.Message);
+        Assert.Equal(["An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
+        Assert.Empty(again.Problems);
+        Assert.NotNull(LibraryManifest.Load(workspace.Destination).Get("file:a-book.m4b"));
+    }
+
+    [Fact]
+    public async Task A_cancelled_sort_still_records_the_books_it_finished()
+    {
+        using var workspace = new TempWorkspace();
+        var books = Enumerable.Range(0, 200)
+            .Select(i =>
+            {
+                workspace.WriteSourceFile($"book-{i}.m4b", new string('x', 200_000));
+                return TempWorkspace.Book(title: $"Book {i}", filename: $"book-{i}");
+            })
+            .ToList();
+
+        using var cancellation = new CancellationTokenSource();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new FileSorter().SortAudioFiles(
+            workspace.Source, workspace.Destination, books,
+            progress: new CancelOnFirstReport(cancellation), cancellationToken: cancellation.Token));
+
+        var recorded = LibraryManifest.Load(workspace.Destination).Books.Values
+            .SelectMany(entry => entry.Files.Select(name => Path.GetRelativePath(workspace.Destination, Path.Combine(entry.Folder, name))))
+            .Select(path => path.Replace(Path.DirectorySeparatorChar, '/'))
+            .Order(StringComparer.Ordinal);
+        Assert.NotEmpty(workspace.DestinationFiles());
+        Assert.Equal(workspace.DestinationFiles(), recorded);
+    }
+
+    [Fact]
+    public async Task A_manifest_that_cannot_be_saved_is_reported_without_failing_the_sort()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        // A folder where the manifest's temporary file goes makes the save fail.
+        Directory.CreateDirectory(Path.Combine(workspace.Destination, LibraryManifest.FileName + ".tmp"));
+
+        var summary = await Sort(workspace, TempWorkspace.Book());
+
+        Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
+        var problem = Assert.Single(summary.Problems);
+        Assert.Equal(SortProblemKind.Warning, problem.Kind);
+        Assert.StartsWith("Could not save its record of which book is in which folder", problem.Message);
     }
 
     /// <summary>Cancels as soon as the first book is done (not at the report made when the run starts).</summary>

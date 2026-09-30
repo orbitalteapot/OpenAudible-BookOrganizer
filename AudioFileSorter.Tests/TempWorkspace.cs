@@ -61,9 +61,9 @@ public sealed class TempWorkspace : IDisposable
     }
 
     /// <summary>
-    /// All files under the destination, as paths relative to it, using '/' separators. Not the marker
-    /// a finished sort leaves at the top (see <see cref="SortPathValidator.MarkerFileName"/>), which is
-    /// no part of the library; the tests about it look for it themselves.
+    /// All files under the destination, as paths relative to it, using '/' separators. Not the
+    /// manifest a sort leaves at the top (see <see cref="LibraryManifest.FileName"/>), which is no
+    /// part of the library; the tests about it look for it themselves.
     /// </summary>
     public string[] DestinationFiles()
     {
@@ -74,7 +74,7 @@ public sealed class TempWorkspace : IDisposable
 
         return Directory.GetFiles(Destination, "*", SearchOption.AllDirectories)
             .Select(path => Path.GetRelativePath(Destination, path).Replace(Path.DirectorySeparatorChar, '/'))
-            .Where(path => path != SortPathValidator.MarkerFileName)
+            .Where(path => path != LibraryManifest.FileName)
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
     }
@@ -180,10 +180,12 @@ public sealed class TempWorkspace : IDisposable
         string? m4b = "Yes",
         string? mp3 = null,
         string? pdf = null,
-        string? filePaths = null)
+        string? filePaths = null,
+        string? asin = null)
     {
         return new OpenAudible
         {
+            ASIN = asin,
             Title = title,
             Author = author,
             Filename = filename,

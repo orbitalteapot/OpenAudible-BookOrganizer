@@ -95,8 +95,8 @@ public sealed record ScheduleState
     public RunRecord? LastRun { get; init; }
 
     /// <summary>
-    /// The destination a finished sort last left its marker in. Automatic sorts refuse it once the
-    /// marker is gone (see <see cref="AudioFileSorter.SortPathValidator.MarkerFileName"/>); a folder
+    /// The destination a finished sort last left its manifest in. Automatic sorts refuse it once the
+    /// manifest is gone (see <see cref="AudioFileSorter.LibraryManifest.FileName"/>); a folder
     /// never marked, such as one chosen since, is sorted into as it is.
     /// </summary>
     public string? MarkedDestinationPath { get; init; }

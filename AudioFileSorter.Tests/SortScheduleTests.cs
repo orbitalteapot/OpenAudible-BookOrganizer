@@ -131,7 +131,7 @@ public class SortScheduleTests
         Assert.Equal(RunTrigger.Scheduled, state.LastRun!.Trigger);
         Assert.Equal(1, state.LastRun.Counts.New);
         Assert.Equal(["Tolkien/The Hobbit/The Hobbit.m4b"], workspace.DestinationFiles());
-        Assert.True(File.Exists(Path.Combine(workspace.Destination, SortPathValidator.MarkerFileName)));
+        Assert.True(File.Exists(Path.Combine(workspace.Destination, LibraryManifest.FileName)));
         Assert.Equal(workspace.Destination, state.MarkedDestinationPath);
     }
 
@@ -152,7 +152,7 @@ public class SortScheduleTests
         var status = scheduler.GetStatus();
         Assert.Equal("destinationUnmounted", status.LastRun!.ErrorCode);
         Assert.True(status.Retrying);
-        Assert.Contains(SortPathValidator.MarkerFileName, status.BlockedReason);
+        Assert.Contains(LibraryManifest.FileName, status.BlockedReason);
         Assert.Empty(workspace.DestinationFiles());
 
         // A person who emptied it on purpose sorts once by hand, which marks it again, once they have

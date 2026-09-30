@@ -30,7 +30,7 @@ describe('summariseRun', () => {
 
     expect(summary.headline).toBe('Sort complete: 2 moved, 5 up to date, 1 not found.');
     expect(summary.details).toEqual([
-      '2 books already in the destination folder were moved to where they now belong: left loose by an older version, or filed before their series details changed.',
+      '2 books already in the destination folder were moved to where they now belong: left loose by an older version, or filed before their series, number or title changed.',
       '1 book in the export has no file in the source folder. These are usually books that have not been downloaded yet.',
     ]);
     expect(summary.tone).toBe('caution');
