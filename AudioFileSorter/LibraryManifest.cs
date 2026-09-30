@@ -72,13 +72,6 @@ public sealed class LibraryManifest
     /// </summary>
     public string? Problem { get; }
 
-    /// <summary>
-    /// Whether a sort has run to its end in this destination, rather than only started: that sort offered
-    /// every loose file here to every book in the export of the time (see <see cref="SortPlanner"/>).
-    /// Kept once set. A first sort that was cancelled or stopped leaves it unset, as does a rebuilt record.
-    /// </summary>
-    public bool SortFinished { get; private set; }
-
     /// <summary>Every book on record, by book id (see <see cref="PlannedCopy.BookId"/>).</summary>
     public IReadOnlyDictionary<string, ManifestEntry> Books => _books;
 
@@ -104,8 +97,6 @@ public sealed class LibraryManifest
 
     public bool Remove(string bookId) => _books.Remove(bookId);
 
-    /// <summary>Records that the sort now ending ran to its end (see <see cref="SortFinished"/>).</summary>
-    public void MarkSortFinished() => SortFinished = true;
 
     /// <summary>
     /// Reads the manifest in <paramref name="destinationRoot"/>. Never throws for what the file holds:
@@ -145,10 +136,7 @@ public sealed class LibraryManifest
                 return Rebuilt(root, path);
             }
 
-            var manifest = new LibraryManifest(root, existed: true, problem: null)
-            {
-                SortFinished = document.RootElement.TryGetProperty("sortFinished", out var finished) && finished.ValueKind == JsonValueKind.True
-            };
+            var manifest = new LibraryManifest(root, existed: true, problem: null);
             var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var book in books.EnumerateObject())
             {
@@ -201,7 +189,7 @@ public sealed class LibraryManifest
             books[bookId] = new { folder = RelativeFolder(entry.Folder), files = entry.Files, title = entry.Title };
         }
 
-        var file = new { format = FormatName, version = FormatVersion, note = Note, sortFinished = SortFinished, books };
+        var file = new { format = FormatName, version = FormatVersion, note = Note, books };
         var content = JsonSerializer.SerializeToUtf8Bytes(file, WriteOptions);
         var path = Path.Combine(Root, FileName);
 

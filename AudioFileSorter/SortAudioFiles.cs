@@ -66,6 +66,7 @@ public class FileSorter
 
         var attempted = new ConcurrentBag<PlannedCopy>();
         var vacatedFolders = new ConcurrentBag<string>();
+        var ownership = new FileOwnership(manifest);
         try
         {
             var planner = new SortPlanner();
@@ -95,7 +96,7 @@ public class FileSorter
                     attempted.Add(item);
                 }
 
-                var (outcome, problem) = await SortBookAsync(item, options.ComparisonMode, vacatedFolders, ct);
+                var (outcome, problem) = await SortBookAsync(item, options.ComparisonMode, ownership, vacatedFolders, ct);
                 tally.Finish(item.Title, outcome, problem);
             });
 
@@ -106,7 +107,6 @@ public class FileSorter
                 tally.AddProblem(new SortProblem(SortProblemKind.Warning, DestinationProblemSubject, warning));
             }
 
-            manifest.MarkSortFinished();
         }
         finally
         {
@@ -271,13 +271,57 @@ public class FileSorter
         Created,
 
         /// <summary>An existing, out-of-date file was replaced.</summary>
-        Replaced
+        Replaced,
+
+        /// <summary>
+        /// A different file is already there that is not provably this book's, so it was left alone
+        /// (see <see cref="FileOwnership"/>).
+        /// </summary>
+        Refused
+    }
+
+    /// <summary>
+    /// The last line of defence against one book overwriting another. Whatever the planner decided,
+    /// a file already in the destination is only replaced, or moved into a book's folder, when it is
+    /// provably that book's: the record says so (see <see cref="LibraryManifest"/>), or its content is
+    /// the book's own download. A wrong guess about which folder belongs to which book then costs a
+    /// book being skipped with a message, never someone's only copy.
+    /// </summary>
+    private sealed class FileOwnership(LibraryManifest manifest)
+    {
+        // Read-only during a run: the record is only written once every book is done.
+        public bool IsRecordedFor(string? bookId, string path)
+        {
+            if (bookId is null || manifest.Get(bookId) is not { } entry)
+            {
+                return false;
+            }
+
+            var fullPath = Path.GetFullPath(path);
+            return entry.Files.Any(name =>
+                string.Equals(Path.GetFullPath(Path.Combine(entry.Folder, name)), fullPath, PathSanitizer.PathComparison));
+        }
+
+        /// <summary>
+        /// Whether <paramref name="file"/> may be moved into place for the book whose download is
+        /// <paramref name="source"/>. A companion such as the book's PDF may also go when it lies beside
+        /// audio already proven to be the book's (<paramref name="provenAudioFolder"/>): older versions
+        /// filed the two side by side, and a PDF often has no download left to compare with.
+        /// </summary>
+        public bool MayMove(string? bookId, string file, string? source, string? provenAudioFolder)
+        {
+            return IsRecordedFor(bookId, file) ||
+                   (source is not null && FileComparison.AreSameQuick(source, file)) ||
+                   (provenAudioFolder is not null &&
+                    string.Equals(Path.GetDirectoryName(Path.GetFullPath(file)), provenAudioFolder, PathSanitizer.PathComparison));
+        }
     }
 
     /// <summary>Sorts one book, turning anything that goes wrong into a problem for the report.</summary>
     private static async Task<(BookOutcome Outcome, SortProblem? Problem)> SortBookAsync(
         PlannedCopy item,
         FileComparisonMode comparisonMode,
+        FileOwnership ownership,
         ConcurrentBag<string> vacatedFolders,
         CancellationToken cancellationToken)
     {
@@ -301,7 +345,7 @@ public class FileSorter
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return (await ProcessPlannedCopy(item, comparisonMode, vacatedFolders, cancellationToken), null);
+            return await ProcessPlannedCopy(item, comparisonMode, ownership, vacatedFolders, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -313,63 +357,108 @@ public class FileSorter
         }
     }
 
-    private static async Task<BookOutcome> ProcessPlannedCopy(
+    private static async Task<(BookOutcome Outcome, SortProblem? Problem)> ProcessPlannedCopy(
         PlannedCopy item,
         FileComparisonMode comparisonMode,
+        FileOwnership ownership,
         ConcurrentBag<string> vacatedFolders,
         CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(item.TargetDirectory!);
 
-        // Both files, whatever happens to the first: '|' does not short-circuit.
-        var moved = MoveIntoPlace(item.AudioMoveFrom, item.AudioDestination, vacatedFolders) |
-                    MoveIntoPlace(item.PdfMoveFrom, item.PdfDestination, vacatedFolders);
-        foreach (var (from, to) in item.OtherMoves)
+        var movedHere = new List<string>();
+        var leftAlone = new List<string>();
+        string? provenAudioFolder = null;
+        var moves = new List<(string? From, string? To, string? Source)>
         {
-            moved |= MoveIntoPlace(from, to, vacatedFolders);
+            (item.AudioMoveFrom, item.AudioDestination, item.AudioSource),
+            (item.PdfMoveFrom, item.PdfDestination, item.PdfSource),
+        };
+        moves.AddRange(item.OtherMoves.Select(move => ((string?)move.From, (string?)move.To, (string?)null)));
+
+        foreach (var (from, to, source) in moves)
+        {
+            if (from is null || to is null || File.Exists(to) || !File.Exists(from))
+            {
+                continue;
+            }
+
+            // The audio comes first in the list, so its companions can go with it.
+            var isAudio = from == item.AudioMoveFrom;
+            if (!ownership.MayMove(item.BookId, from, source, isAudio ? null : provenAudioFolder))
+            {
+                leftAlone.Add(from);
+                continue;
+            }
+
+            MoveIntoPlace(from, to, vacatedFolders);
+            movedHere.Add(to);
+            if (isAudio)
+            {
+                provenAudioFolder = Path.GetDirectoryName(Path.GetFullPath(from));
+            }
         }
 
-        var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, cancellationToken);
-        var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, cancellationToken);
+        // A file moved in above is provably this book's; anything else already there has to be on record as its.
+        bool MayReplace(string destination) =>
+            ownership.IsRecordedFor(item.BookId, destination) ||
+            movedHere.Contains(destination, StringComparer.FromComparison(PathSanitizer.PathComparison));
+
+        var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, MayReplace, cancellationToken);
+        var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, MayReplace, cancellationToken);
+
+        if (audio == FileOutcome.Refused)
+        {
+            return (BookOutcome.Failed, new SortProblem(SortProblemKind.Failed, item.Title, RefusedMessage(item.AudioDestination!)));
+        }
+
+        var problem = pdf == FileOutcome.Refused
+            ? new SortProblem(SortProblemKind.Warning, item.Title, RefusedMessage(item.PdfDestination!))
+            : leftAlone.Count > 0
+                ? new SortProblem(SortProblemKind.Warning, item.Title, LeftAloneMessage(leftAlone))
+                : null;
 
         // One bucket per book, in the order SortCounts documents: a moved file that then turned out
         // to be stale is Updated, and a book whose audio is new but whose PDF was already there is New.
         if (audio == FileOutcome.Replaced || pdf == FileOutcome.Replaced)
         {
-            return BookOutcome.Updated;
+            return (BookOutcome.Updated, problem);
         }
 
         if (audio == FileOutcome.Created || pdf == FileOutcome.Created)
         {
-            return BookOutcome.New;
+            return (BookOutcome.New, problem);
         }
 
-        return moved ? BookOutcome.Moved : BookOutcome.UpToDate;
+        return (movedHere.Count > 0 ? BookOutcome.Moved : BookOutcome.UpToDate, problem);
     }
+
+    private static string RefusedMessage(string destination) =>
+        $"A different file is already at {destination}, and it is not on record as this book's, so it was left alone. " +
+        "If it is an old copy of this book, delete it and sort again.";
+
+    private static string LeftAloneMessage(IEnumerable<string> files) =>
+        $"Left {string.Join(", ", files)} where it was: it is not on record as this book's and differs from the download. " +
+        "If it is an old copy, delete it.";
 
     /// <summary>
     /// Moves a copy of the book already in the destination (see <see cref="PlannedCopy.AudioMoveFrom"/>)
-    /// into the book's own folder. It is a rename within the destination that never replaces a file,
-    /// so nothing is copied or lost, and the update check that follows still replaces it if the source
-    /// has changed since. Returns whether a file was moved, and adds the folder it came from to
-    /// <paramref name="vacatedFolders"/>.
+    /// into the book's own folder, once <see cref="FileOwnership"/> has said it is the book's. It is a
+    /// rename within the destination that never replaces a file, so nothing is copied or lost, and the
+    /// update check that follows still replaces it if the source has changed since. Adds the folder it
+    /// came from to <paramref name="vacatedFolders"/>.
     /// </summary>
-    private static bool MoveIntoPlace(string? moveFrom, string? destinationFile, ConcurrentBag<string> vacatedFolders)
+    private static void MoveIntoPlace(string moveFrom, string destinationFile, ConcurrentBag<string> vacatedFolders)
     {
-        if (moveFrom is null || destinationFile is null || File.Exists(destinationFile) || !File.Exists(moveFrom))
-        {
-            return false;
-        }
-
         File.Move(moveFrom, destinationFile, overwrite: false);
         vacatedFolders.Add(Path.GetDirectoryName(Path.GetFullPath(moveFrom))!);
-        return true;
     }
 
     private static async Task<FileOutcome> CopyIfNeededAsync(
         string? sourceFile,
         string? destinationFile,
         FileComparisonMode comparisonMode,
+        Func<string, bool> mayReplace,
         CancellationToken cancellationToken)
     {
         if (sourceFile is null || destinationFile is null)
@@ -383,6 +472,11 @@ public class FileSorter
         if (destinationExists && await IsDestinationUpToDateAsync(sourceFile, destinationFile, comparisonMode, cancellationToken))
         {
             return FileOutcome.UpToDate;
+        }
+
+        if (destinationExists && !mayReplace(destinationFile))
+        {
+            return FileOutcome.Refused;
         }
 
         await CopyFileAtomicAsync(sourceFile, destinationFile, cancellationToken);

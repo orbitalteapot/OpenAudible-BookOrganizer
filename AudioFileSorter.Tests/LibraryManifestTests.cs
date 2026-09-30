@@ -292,26 +292,6 @@ public class LibraryManifestTests
     }
 
     [Fact]
-    public void A_finished_sort_is_remembered_and_a_record_saved_without_one_says_none_has()
-    {
-        using var workspace = new TempWorkspace();
-        var started = LibraryManifest.Load(workspace.Destination);
-        started.Save();
-
-        // Saved by a sort that was cancelled or stopped before its end: the file exists, but no sort finished.
-        var afterCancel = LibraryManifest.Load(workspace.Destination);
-        Assert.True(afterCancel.Existed);
-        Assert.False(afterCancel.SortFinished);
-
-        afterCancel.MarkSortFinished();
-        afterCancel.Save();
-        var kept = LibraryManifest.Load(workspace.Destination);
-        kept.Save();
-
-        Assert.True(LibraryManifest.Load(workspace.Destination).SortFinished);
-    }
-
-    [Fact]
     public void Remove_forgets_a_book()
     {
         using var workspace = new TempWorkspace();

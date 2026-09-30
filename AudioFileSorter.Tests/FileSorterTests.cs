@@ -108,16 +108,46 @@ public class FileSorterTests
     }
 
     [Fact]
-    public async Task Sort_replaces_a_destination_file_whose_contents_changed()
+    public async Task Sort_replaces_its_own_copy_when_the_download_changed()
     {
         using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "old-audio!");
+        await Sort(workspace, TempWorkspace.Book());
         workspace.WriteSourceFile("a-book.m4b", "new-audio");
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "old-audio!");
 
         var summary = await Sort(workspace, TempWorkspace.Book());
 
         Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
         Assert.Equal("new-audio", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
+    }
+
+    [Fact]
+    public async Task Sort_never_overwrites_a_different_file_that_is_not_on_record_as_the_books()
+    {
+        // Whatever put it there, and whatever the planner makes of its name, it is not provably this
+        // book's, so it may be someone's only copy of another book.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "new-audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "another-book");
+
+        var summary = await Sort(workspace, TempWorkspace.Book());
+
+        Assert.Equal("another-book", File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
+        Assert.Equal(SortCounts.Empty with { Failed = 1 }, summary.Counts);
+        Assert.Contains("delete it and sort again", Assert.Single(summary.Problems).Message);
+    }
+
+    [Fact]
+    public async Task Sort_takes_over_an_identical_file_that_is_not_on_record_yet()
+    {
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("a-book.m4b", "audio");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "audio");
+
+        var summary = await Sort(workspace, TempWorkspace.Book());
+
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
+        Assert.NotNull(LibraryManifest.Load(workspace.Destination).Get("file:a-book.m4b"));
     }
 
     [Fact]
@@ -401,19 +431,21 @@ public class FileSorterTests
     }
 
     [Fact]
-    public async Task Sort_moves_a_loose_file_only_one_book_could_have_left_and_updates_it()
+    public async Task Sort_leaves_a_loose_file_that_differs_from_the_download_and_copies_the_book_fresh()
     {
-        // No other book in the export has this title, so the old file is this book's older download.
+        // It may well be this book's older download, but it may as easily be another book of the
+        // same title that has left the export. Only content proves whose it is.
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "new-audio");
         workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "old-audio!");
 
         var summary = await Sort(workspace, TempWorkspace.Book());
 
-        Assert.Equal(["An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["An Author/A Book.m4b", "An Author/A Book/A Book.m4b"], workspace.DestinationFiles());
+        Assert.Equal("old-audio!", ReadDestination(workspace, "An Author", "A Book.m4b"));
         Assert.Equal("new-audio", ReadDestination(workspace, "An Author", "A Book", "A Book.m4b"));
-        Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
-        Assert.Empty(summary.Problems);
+        Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
+        Assert.Contains(summary.Problems, problem => problem.Message.Contains("A Book.m4b"));
     }
 
     [Fact]
@@ -1637,27 +1669,6 @@ public class FileSorterTests
     }
 
     [Fact]
-    public async Task A_cancelled_first_sort_still_lets_the_next_move_a_changed_loose_book_only_it_could_have_left()
-    {
-        using var workspace = new TempWorkspace();
-        workspace.WriteDestinationFile(Path.Combine("An Author", "Title.m4b"), "old-release");
-        workspace.WriteSourceFile("t.m4b", "new-release!");
-        var book = TempWorkspace.Book(title: "Title", filename: "t", asin: "T1");
-
-        using var cancellation = new CancellationTokenSource();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new FileSorter().SortAudioFiles(
-            workspace.Source, workspace.Destination, [book],
-            progress: new InlineProgress(_ => cancellation.Cancel()), cancellationToken: cancellation.Token));
-        Assert.True(File.Exists(Path.Combine(workspace.Destination, LibraryManifest.FileName)));
-
-        var summary = await Sort(workspace, book);
-
-        Assert.Equal(["An Author/Title/Title.m4b"], workspace.DestinationFiles());
-        Assert.Equal("new-release!", ReadDestination(workspace, "An Author", "Title", "Title.m4b"));
-        Assert.Empty(summary.Problems);
-    }
-
-    [Fact]
     public async Task Upgrade_moves_loose_pdfs_along_with_their_books_and_names_a_departed_books()
     {
         using var workspace = new TempWorkspace();
@@ -1757,7 +1768,7 @@ public class FileSorterTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task After_a_finished_sort_a_new_book_never_takes_an_old_book_folder_of_its_name_by_name_alone(bool departedWasListed)
+    public async Task A_new_book_never_overwrites_an_unrecorded_copy_in_an_old_book_folder_of_its_name(bool departedWasListed)
     {
         // Main left a departed edition's only copy in "Saga/Book 1". A finished sort ran without touching it
         // (the edition listed but missing from the source, or not listed at all); then a new edition arrives.
@@ -1769,14 +1780,15 @@ public class FileSorterTests
             ? [other, TempWorkspace.Book(title: "Title", filename: "z", asin: "Z1", seriesName: "Saga", seriesSequence: "1")]
             : [other];
         await Sort(workspace, firstExport);
-        Assert.True(LibraryManifest.Load(workspace.Destination).SortFinished);
 
         workspace.WriteSourceFile("y.m4b", "new-edition");
         var summary = await Sort(workspace, other, TempWorkspace.Book(title: "Title", filename: "y", asin: "Y1", seriesName: "Saga", seriesSequence: "1"));
 
+        // It cannot tell a departed book's only copy from this book's older download, so it touches
+        // neither and asks.
         Assert.Equal("old-edition-only-copy", ReadDestination(workspace, "An Author", "Saga", "Book 1", "Title.m4b"));
-        Assert.Equal("new-edition", ReadDestination(workspace, "An Author", "Saga", "Book 1 (2)", "Title.m4b"));
-        Assert.Equal(SortCounts.Empty with { New = 1, UpToDate = 1 }, summary.Counts);
+        Assert.Equal(SortCounts.Empty with { Failed = 1, UpToDate = 1 }, summary.Counts);
+        Assert.Contains(summary.Problems, problem => problem.Message.Contains("delete it and sort again"));
         Assert.Contains(Path.Combine("An Author", "Saga", "Book 1", "Title.m4b"), Assert.Single(summary.Problems).Message);
     }
 

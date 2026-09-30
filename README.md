@@ -211,48 +211,32 @@ series inside it. A companion PDF is copied next to its audiobook when the expor
 the file is present.
 
 The organiser remembers which book it put in which folder, in a small file called
-`.openaudible-organizer` at the top of the destination folder (hidden on macOS and Linux, shown on
-Windows). Leave it there: library servers
-ignore it. If it is deleted, the next sort finds the books in your export in their folders again and
-writes a new one, but two things are lost until then. The folders of books that have left your export
-are no longer set aside, so a later book with the same name can be filed in one, over the copy there.
-And automatic sorts pause, taking the folder for an unmounted drive, until you press **Start sorting**
+`.openaudible-organizer` at the top of the destination folder (hidden on macOS and Linux). Leave it
+there: library servers ignore it. Because of it:
+
+- A book keeps its folder from one sort to the next. Two books with the same title, or the same
+  number in a series (two narrations of one book, say), get folders such as `Book 1` and
+  `Book 1 (2)`, and keep them whatever the order of your export later.
+- A book that leaves your export keeps its folder, so a different book with the same title that comes
+  along later gets a `(2)` folder of its own instead of taking over what may be the only copy.
+- When a book's author, series, number or title changes, its files are moved to its new folder
+  (renamed if the title changed) and counted as **Moved**. The old folder is removed if that leaves
+  it empty.
+
+If the file is deleted, the next sort rebuilds it from the books in your export. Until then automatic
+sorts pause, because a missing record usually means the drive is not mounted: press **Start sorting**
 once and confirm (see [Sorting automatically](#sorting-automatically)).
 
-Because of that record, a book keeps its folder from one sort to the next. Two books with the same
-title, or the same number in a series (two narrations of one book, say), get folders such as
-`Book 1` and `Book 1 (2)` the first time they are sorted, and keep them whatever the order of the
-export later.
-A folder stays its book's as long as the book's files are in it, even after the book has left your
-export, so a different book with the same title that comes along later gets a `(2)` folder of its
-own and never replaces what may be the only copy of the first. When a book's author, series, number in
-the series or title changes, it is moved to its new folder, PDF and all (even one no longer in the
-source, and its audio in a format it is no longer downloaded in), renamed if its title changed,
-and counted as **Moved**, or as **Updated** when its download changed too and the moved copy was
-replaced; the old folder is removed if that leaves it empty. It only ever moves into a folder that
-holds no audio or its own: a folder of its new name holding another book's file is left alone, and
-it gets a `(2)` folder instead. A file its new folder
-already has one of the same name for is never written over: it stays in the old folder, which is
-then still set aside for the book, and the problems list names it.
+**Libraries sorted by an older version** — standalone books loose in the author folder, books without
+a number loose in the series folder, two books sharing one `Book N` folder — are tidied up on the next
+sort. Each file is moved into its book's new folder rather than copied a second time, and counted as
+**Moved**. A companion PDF lying beside its audiobook moves with it.
 
-Libraries sorted by an older version, which left standalone books loose in the author folder,
-series books without a number loose in the series folder, and two books with the same number in one
-shared `Book N` folder, are tidied up on the next sort: each such file is moved into its book's new
-folder rather than copied a second time, and counted as **Moved**.
-This always happens: a loose file next to a book folder is exactly what breaks Audiobookshelf. Files
-are only ever moved within the destination folder, and never over another file. When only one book
-in your export could have left a loose file, it is that book's: it is moved, and then replaced if you
-have downloaded the book again since. Once a sort has run to the end in the destination, though,
-any loose file still there was left on purpose, and it is only moved into a book whose audio it
-holds; the same goes for an old `Book N` folder no book is on record for, which a new book only
-takes when it holds that book's audio. A file inside another book's folder is always left alone. When several books share its name (older versions told them
-apart as `Title (2)`), a file is moved only into the book whose audio it holds; any other may be the
-only copy of a book you have returned or not downloaded again, so it is left where it is and the
-problems list names it: delete it yourself if it is an old copy. A companion PDF left loose beside its
-book's audio moves into the book's folder with it. The problems list also names every other audio or
-PDF file left loose beside book folders, such as a returned book's or one from before a title or
-format changed, on every sort until it is gone; one named like a book in your export that is not in
-the source folder is named as possibly that book's only copy, so keep it.
+**Nothing is written over unless it is provably the book's own copy.** A file already in the
+destination is moved or replaced only when the record says it belongs to that book, or when its
+content is identical to the book's download. Anything else, such as an old copy of a book you have
+downloaded again since, or the only copy of a book you have returned, stays exactly where it is, and
+the problems list names it so you can delete it yourself if it is an old copy.
 
 A file in the source folder that is empty, as it is while OpenAudible downloads or converts a book, is
 counted as **Not found** and never replaces the copy in your library; nor does a file that changes

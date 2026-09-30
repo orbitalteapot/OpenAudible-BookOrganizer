@@ -63,14 +63,6 @@ public sealed class SortPlanner
     /// </summary>
     private readonly HashSet<string> _heldFolders = new(FolderComparer);
 
-    /// <summary>
-    /// Whether a sort has run to its end in this destination before (see <see cref="LibraryManifest.SortFinished"/>).
-    /// Then it offered every loose file still here to every book in the export of the time, and left it
-    /// because it matched none: it may be a returned book's only copy, and only a book's own audio
-    /// makes it that book's, however few books of its name there are now.
-    /// </summary>
-    private bool _sortedBefore;
-
     private readonly List<string> _warnings = [];
 
     private string _root = string.Empty;
@@ -97,7 +89,6 @@ public sealed class SortPlanner
         ArgumentNullException.ThrowIfNull(manifest);
 
         _root = Path.GetFullPath(destinationRoot);
-        _sortedBefore = manifest.SortFinished;
         _folderOwners = manifest.Books
             .DistinctBy(pair => pair.Value.Folder, FolderComparer)
             .ToDictionary(pair => pair.Value.Folder, pair => pair.Key, FolderComparer);
@@ -318,13 +309,12 @@ public sealed class SortPlanner
 
     /// <summary>
     /// Whether a folder's one recording under this book's name may be taken as the book's without its
-    /// audio matching. Only the first sort of an older version's library needs that, and only for a book
-    /// no other book the manifest does not know shares a folder name and title with. Never for a book on
-    /// record, whose files are known: a folder of its name that it did not write is another book's. Nor
-    /// once a sort has finished here (see <see cref="_sortedBefore"/>): an unrecorded folder left since
-    /// is no book's in the export of the time, so may be a departed or returned book's only copy.
+    /// audio matching: an older version's "Book N" folder for a book re-downloaded since. Only for a
+    /// book no other unrecorded book shares a folder name and title with, and never for a book on
+    /// record, whose files are known. A wrong guess costs nothing: FileSorter still replaces the file
+    /// only when it is provably the book's, and otherwise leaves it and says so.
     /// </summary>
-    private bool MayGoByName(Book book, bool contested) => !contested && book.Record is null && !_sortedBefore;
+    private static bool MayGoByName(Book book, bool contested) => !contested && book.Record is null;
 
     /// <summary>
     /// Whether <paramref name="folder"/> is a book's folder with this book's audio under its name. Never
@@ -406,11 +396,6 @@ public sealed class SortPlanner
     private HashSet<string> AdoptOldFiles(List<Book> books, LibraryManifest manifest, CancellationToken cancellationToken)
     {
         var newBooks = books.Where(book => book.Record is null).ToList();
-        // The book that keeps an old "Book N" folder is one of them too: that folder is not an old one of
-        // its own, but a second file of its name in it may be that book's as much as a later one's.
-        var possibleOwners = newBooks
-            .SelectMany(book => UnownedOldFolders(book).Select(folder => (Key: OldFileKey(folder, book), Book: book)))
-            .ToLookup(pair => pair.Key, pair => pair.Book, FolderComparer);
         var untouchable = SpokenFor(books, manifest);
         var adopted = new HashSet<string>(FolderComparer);
         var firstSeenBy = new Dictionary<string, Book>(FolderComparer);
@@ -464,8 +449,9 @@ public sealed class SortPlanner
                     .ToList();
                 candidates.ForEach(candidate => firstSeenBy.TryAdd(candidate, book));
 
-                var onlyOwner = !_sortedBefore && candidates.Count == 1 && possibleOwners[OldFileKey(folder, book)].Count() == 1;
-                var match = candidates.FirstOrDefault(file => !adopted.Contains(file) && (onlyOwner || FileComparison.AreSameQuick(source, file)));
+                // Only the book's own audio makes a file the book's: a name alone may as well be another
+                // book of the same title that has left the export. (FileSorter checks this again.)
+                var match = candidates.FirstOrDefault(file => !adopted.Contains(file) && FileComparison.AreSameQuick(source, file));
                 if (match is not null)
                 {
                     adopted.Add(match);
@@ -566,7 +552,6 @@ public sealed class SortPlanner
     }
 
     /// <summary>What the books that could have left a file of their name in <paramref name="folder"/> have in common.</summary>
-    private static string OldFileKey(string folder, Book book) => $"{folder}\u0000{book.StemKey}";
 
     /// <summary>What books have in common that the "(n)" of one folder name tells apart, and that share a title.</summary>
     private static string SharedFolderKey(Book book) => $"{book.Parent}\u0000{book.BaseName}\u0000{book.StemKey}";

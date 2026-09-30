@@ -446,20 +446,6 @@ public class SortPlannerTests
     }
 
     [Fact]
-    public void Upgrade_moves_a_loose_file_only_one_book_could_have_left_even_when_the_download_changed()
-    {
-        using var workspace = new TempWorkspace();
-        workspace.WriteSourceFile("a-book.m4b", "new-download");
-        var loose = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "old-download");
-
-        var planned = Plan(workspace, TempWorkspace.Book());
-
-        // Moved, then replaced by the update check.
-        Assert.Equal(loose, planned[0].AudioMoveFrom);
-        Assert.Null(planned[0].Warning);
-    }
-
-    [Fact]
     public void Upgrade_does_not_move_a_loose_file_when_the_book_folder_already_has_one()
     {
         using var workspace = new TempWorkspace();
@@ -912,21 +898,6 @@ public class SortPlannerTests
         var planned = Plan(workspace, TempWorkspace.Book(title: "Dune 2", filename: "sequel", asin: "D3"));
 
         Assert.Equal(Path.Combine(workspace.Destination, "An Author", "Dune 2", "Dune 2.m4b"), planned[0].AudioDestination);
-    }
-
-    [Fact]
-    public void Upgrade_still_moves_a_loose_file_only_one_book_could_have_left_after_the_first_sort_was_cancelled()
-    {
-        // A cancelled first sort saves a record, but offered the loose files to nobody.
-        using var workspace = new TempWorkspace();
-        workspace.WriteSourceFile("a-book.m4b", "new-download");
-        var loose = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "old-download");
-        LibraryManifest.Load(workspace.Destination).Save();
-
-        var planned = Plan(workspace, TempWorkspace.Book());
-
-        Assert.Equal(loose, planned[0].AudioMoveFrom);
-        Assert.Null(planned[0].Warning);
     }
 
     [Fact]

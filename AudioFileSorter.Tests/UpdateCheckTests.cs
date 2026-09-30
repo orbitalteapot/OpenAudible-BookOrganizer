@@ -14,8 +14,8 @@ public class UpdateCheckTests
     public async Task Either_mode_replaces_a_book_whose_size_changed(FileComparisonMode mode)
     {
         using var workspace = new TempWorkspace();
+        await SortedEarlier(workspace, "a-book.m4b", "old");
         workspace.WriteSourceFile("a-book.m4b", "the-re-recorded-and-longer-edition");
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "old");
 
         var summary = await Sort(workspace, mode, TempWorkspace.Book());
 
@@ -32,8 +32,8 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var content = new string('x', 300_000);
+        var destination = await SortedEarlier(workspace, "a-book.m4b", content);
         workspace.WriteSourceFile("a-book.m4b", content);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), content);
         var writtenAt = File.GetLastWriteTimeUtc(destination);
 
         var summary = await Sort(workspace, mode, TempWorkspace.Book());
@@ -52,8 +52,8 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
+        var destination = await SortedEarlier(workspace, "a-book.m4b", original);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
 
@@ -74,8 +74,8 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditInWindow(window);
+        var destination = await SortedEarlier(workspace, "a-book.m4b", original);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
 
@@ -88,8 +88,8 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
+        var destination = await SortedEarlier(workspace, "a-book.m4b", original);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
@@ -103,9 +103,8 @@ public class UpdateCheckTests
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
         workspace.WriteSourceFile("a-book.m4b", "audio");
+        var destinationPdf = await SortedEarlier(workspace, "a-book.pdf", original);
         workspace.WriteSourceFile("a-book.pdf", edited);
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), "audio");
-        var destinationPdf = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.pdf"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
@@ -129,8 +128,8 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
+        var destination = await SortedEarlier(workspace, "a-book.m4b", original);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), original);
 
         var summary = await new FileSorter().SortAudioFiles(
             workspace.Source, workspace.Destination, [TempWorkspace.Book()]);
@@ -144,8 +143,8 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
+        await SortedEarlier(workspace, "a-book.m4b", original);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), original);
 
         var reports = new List<SortProgressInfo>();
         await new FileSorter().SortAudioFiles(
@@ -282,8 +281,8 @@ public class UpdateCheckTests
     public async Task Full_mode_still_replaces_a_truncated_destination()
     {
         using var workspace = new TempWorkspace();
+        var destination = await SortedEarlier(workspace, "a-book.m4b", new string('y', 40_000));
         workspace.WriteSourceFile("a-book.m4b", new string('y', 100_000));
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book", "A Book.m4b"), new string('y', 40_000));
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
@@ -328,6 +327,18 @@ public class UpdateCheckTests
         Assert.Equal(expected, SortOptions.ToWireValue(mode));
         Assert.True(SortOptions.TryParseComparisonMode(SortOptions.ToWireValue(mode), out var parsed));
         Assert.Equal(mode, parsed);
+    }
+
+    /// <summary>
+    /// Puts <paramref name="content"/> in the destination the way it gets there for real: sorted from
+    /// the source, so the destination's record says the file is the book's. Only a book's own copy is
+    /// ever replaced; a file that is merely there is left alone (see FileSorterTests).
+    /// </summary>
+    private static async Task<string> SortedEarlier(TempWorkspace workspace, string sourceName, string content)
+    {
+        workspace.WriteSourceFile(sourceName, content);
+        await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
+        return Path.Combine(workspace.Destination, "An Author", "A Book", "A Book" + Path.GetExtension(sourceName));
     }
 
     private static Task<SortSummary> Sort(TempWorkspace workspace, FileComparisonMode mode, params OpenAudible[] books)
