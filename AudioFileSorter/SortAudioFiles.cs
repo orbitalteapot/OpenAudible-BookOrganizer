@@ -64,7 +64,7 @@ public class FileSorter
             tally.AddProblem(new SortProblem(SortProblemKind.Warning, DestinationProblemSubject, manifest.Problem));
         }
 
-        var attempted = new ConcurrentBag<PlannedCopy>();
+        var attempted = new ConcurrentBag<Attempt>();
         var vacatedFolders = new ConcurrentBag<string>();
         var ownership = new FileOwnership(manifest);
         try
@@ -91,12 +91,13 @@ public class FileSorter
                 // Before its files move, whatever then comes of it: a book whose copy fails or is
                 // cancelled once its files are in its new folder is in that folder, and the record
                 // has to say so, or a later book of its title may be given it.
+                var attempt = new Attempt(item);
                 if (item.HasWork)
                 {
-                    attempted.Add(item);
+                    attempted.Add(attempt);
                 }
 
-                var (outcome, problem) = await SortBookAsync(item, options.ComparisonMode, ownership, vacatedFolders, ct);
+                var (outcome, problem) = await SortBookAsync(attempt, options.ComparisonMode, ownership, vacatedFolders, ct);
                 tally.Finish(item.Title, outcome, problem);
             });
 
@@ -127,25 +128,31 @@ public class FileSorter
     /// the manifest. Not being able to write it costs no book anything, so it is reported rather than
     /// allowed to fail the run: the next sort finds the books in their folders again.
     ///
-    /// A book keeps on record every file of its own that is still there beside the ones written this
+    /// Only what is provably the book's goes on record (see <see cref="Attempt.Proven"/>), never merely
+    /// what is at its destination: the record is what later lets a sort replace or move a file, so a
+    /// file the copier left alone as not the book's, maybe another book's only copy, must never get on it.
+    ///
+    /// A book keeps on record every file of its own that is still there beside the ones proven this
     /// run: a PDF no longer in the source, or the audio in a format it has since changed from, is still
     /// its own, and must not look like a stray file another book may take. That holds for a file a
     /// book that moved could not take along too (see <see cref="KeepLeftBehind"/>).
     ///
     /// Where the book's files are is what counts, not whether its copy succeeded: one that failed or was
-    /// cancelled after its files moved is in its new folder. Only a book none of whose files reached
-    /// its folder keeps what was recorded for it.
+    /// cancelled after its files moved is in its new folder. A book with nothing proven in its folder
+    /// keeps what was recorded for it.
     /// </summary>
-    private static void SaveManifest(LibraryManifest manifest, IEnumerable<PlannedCopy> attempted, RunTally tally)
+    private static void SaveManifest(LibraryManifest manifest, IEnumerable<Attempt> attempted, RunTally tally)
     {
-        foreach (var item in attempted.Where(item => item.BookId is not null))
+        foreach (var attempt in attempted.Where(attempt => attempt.Item.BookId is not null && attempt.Proven.Count > 0))
         {
+            var item = attempt.Item;
             var recorded = manifest.Get(item.BookId!);
-            var moved = recorded is not null && !string.Equals(recorded.Folder, item.TargetDirectory, StringComparison.OrdinalIgnoreCase);
-            var kept = recorded is not null && !moved ? recorded.Files.Select(name => Path.Combine(item.TargetDirectory!, name)) : [];
-            var files = new[] { item.AudioDestination, item.PdfDestination }
-                .Concat(item.OtherMoves.Where(move => !File.Exists(move.From)).Select(move => move.To))
-                .OfType<string>()
+
+            // As the disk tells folders apart: on a case-sensitive one "Author/foo" is not the book's "Author/Foo",
+            // and the names recorded for the one must never be taken for files in the other.
+            var moved = recorded is not null && !string.Equals(recorded.Folder, item.TargetDirectory, PathSanitizer.PathComparison);
+            var kept = recorded is not null && !moved ? recorded.Files.Select(name => Path.Combine(recorded.Folder, name)) : [];
+            var files = attempt.Proven
                 .Concat(kept)
                 .Where(File.Exists)
                 .Select(Path.GetFileName)
@@ -177,6 +184,21 @@ public class FileSorter
                 $"Could not save its record of which book is in which folder (the {LibraryManifest.FileName} file): {ex.Message} " +
                 "The next sort finds the books in their folders again."));
         }
+    }
+
+    /// <summary>One book this run set to work on, and what of it has been proven so far.</summary>
+    private sealed class Attempt(PlannedCopy item)
+    {
+        public PlannedCopy Item { get; } = item;
+
+        /// <summary>
+        /// The files in the book's folder proven to be its own, added as each settles, so a run cancelled
+        /// part way records what was proven before the cancel and nothing else: moved in under
+        /// <see cref="FileOwnership.MayMove"/>, written by the copy, or found to be its download. Never a
+        /// file the copier left alone (<see cref="FileOutcome.Refused"/>). Only the book's own worker adds
+        /// to it, and it is read once every worker is done.
+        /// </summary>
+        public List<string> Proven { get; } = [];
     }
 
     /// <summary>
@@ -319,12 +341,14 @@ public class FileSorter
 
     /// <summary>Sorts one book, turning anything that goes wrong into a problem for the report.</summary>
     private static async Task<(BookOutcome Outcome, SortProblem? Problem)> SortBookAsync(
-        PlannedCopy item,
+        Attempt attempt,
         FileComparisonMode comparisonMode,
         FileOwnership ownership,
         ConcurrentBag<string> vacatedFolders,
         CancellationToken cancellationToken)
     {
+        var item = attempt.Item;
+
         // Nothing to copy is not the same as nothing to do. A book listed in the export whose file
         // is not in the source folder has to be reported as missing, not as up to date — telling
         // someone their un-downloaded books are already organised is worse than saying nothing.
@@ -345,7 +369,7 @@ public class FileSorter
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return await ProcessPlannedCopy(item, comparisonMode, ownership, vacatedFolders, cancellationToken);
+            return await ProcessPlannedCopy(attempt, comparisonMode, ownership, vacatedFolders, cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -358,12 +382,13 @@ public class FileSorter
     }
 
     private static async Task<(BookOutcome Outcome, SortProblem? Problem)> ProcessPlannedCopy(
-        PlannedCopy item,
+        Attempt attempt,
         FileComparisonMode comparisonMode,
         FileOwnership ownership,
         ConcurrentBag<string> vacatedFolders,
         CancellationToken cancellationToken)
     {
+        var item = attempt.Item;
         Directory.CreateDirectory(item.TargetDirectory!);
 
         var movedHere = new List<string>();
@@ -393,6 +418,7 @@ public class FileSorter
 
             MoveIntoPlace(from, to, vacatedFolders);
             movedHere.Add(to);
+            attempt.Proven.Add(to);
             if (isAudio)
             {
                 provenAudioFolder = Path.GetDirectoryName(Path.GetFullPath(from));
@@ -404,13 +430,16 @@ public class FileSorter
             ownership.IsRecordedFor(item.BookId, destination) ||
             movedHere.Contains(destination, StringComparer.FromComparison(PathSanitizer.PathComparison));
 
+        // A book is its audio: beside audio that is not the book's, its PDF would be filed with another book.
         var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, MayReplace, cancellationToken);
-        var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, MayReplace, cancellationToken);
-
+        Prove(item.AudioSource, item.AudioDestination, audio);
         if (audio == FileOutcome.Refused)
         {
             return (BookOutcome.Failed, new SortProblem(SortProblemKind.Failed, item.Title, RefusedMessage(item.AudioDestination!)));
         }
+
+        var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, MayReplace, cancellationToken);
+        Prove(item.PdfSource, item.PdfDestination, pdf);
 
         var problem = pdf == FileOutcome.Refused
             ? new SortProblem(SortProblemKind.Warning, item.Title, RefusedMessage(item.PdfDestination!))
@@ -431,6 +460,15 @@ public class FileSorter
         }
 
         return (movedHere.Count > 0 ? BookOutcome.Moved : BookOutcome.UpToDate, problem);
+
+        // Written by the copy, or found to be the download: either way the file there is now the book's.
+        void Prove(string? source, string? destination, FileOutcome outcome)
+        {
+            if (source is not null && destination is not null && outcome != FileOutcome.Refused)
+            {
+                attempt.Proven.Add(destination);
+            }
+        }
     }
 
     private static string RefusedMessage(string destination) =>

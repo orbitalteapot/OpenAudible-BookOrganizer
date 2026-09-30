@@ -236,7 +236,9 @@ sort. Each file is moved into its book's new folder rather than copied a second 
 destination is moved or replaced only when the record says it belongs to that book, or when its
 content is identical to the book's download. Anything else, such as an old copy of a book you have
 downloaded again since, or the only copy of a book you have returned, stays exactly where it is, and
-the problems list names it so you can delete it yourself if it is an old copy.
+the problems list names it so you can delete it yourself if it is an old copy. Such a file never goes
+on the record as the book's, so later sorts leave it alone too; a book whose audio is left alone this
+way is not copied at all, its PDF included, until you have dealt with it.
 
 A file in the source folder that is empty, as it is while OpenAudible downloads or converts a book, is
 counted as **Not found** and never replaces the copy in your library; nor does a file that changes
