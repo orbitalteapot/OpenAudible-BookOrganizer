@@ -24,7 +24,7 @@ public class ApiEndpointTests
             SourcePath = workspace.Source,
             // A subfolder of a working mount that nobody has made yet.
             DestinationPath = Path.Combine(workspace.Destination, "Audiobooks"),
-            IsMappedFolder = folder => folder == workspace.Destination
+            MountPointOf = folder => folder == workspace.Destination ? workspace.Destination : null
         };
         await using var app = new ApiFactory(config);
         using var client = app.CreateClient();

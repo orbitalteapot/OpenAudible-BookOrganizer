@@ -6,6 +6,7 @@ import Library from './components/Library';
 import SortPage from './components/SortPage';
 import RunAnnouncer from './components/RunAnnouncer';
 import AppNotices from './components/AppNotices';
+import ProgressCard from './components/sort/ProgressCard';
 import { Banner, EmptyState } from './components/ui/Surface';
 import {
   isRunning,
@@ -112,7 +113,8 @@ export default function App() {
   const handlePageChange = useCallback((page) => setCurrentPage(page), []);
 
   // The run pill promises progress, which on a narrow window sits far below the top of the Sort
-  // page; the Progress card takes focus (and so scrolls into view) once, then clears this.
+  // page; the Progress card takes focus (and so scrolls into view) once, then clears this. Until the
+  // settings load, that card is the one shown under "Starting the organizer…".
   const [focusProgress, setFocusProgress] = useState(false);
   const handleShowProgress = useCallback(() => {
     setCurrentPage('sort');
@@ -138,12 +140,27 @@ export default function App() {
         <main className="flex min-w-0 flex-1 flex-col p-5">
           {settings && <AppNotices lostContact={run.error} serverWarnings={settings.serverWarnings} />}
           {!settings ? (
-            <Starting
-              error={settingsState.error}
-              errorCode={settingsState.errorCode}
-              stopped={backendStopped}
-              isElectron={isElectron}
-            />
+            <>
+              <Starting
+                error={settingsState.error}
+                errorCode={settingsState.errorCode}
+                stopped={backendStopped}
+                isElectron={isElectron}
+              />
+              {/* The run status is only in memory, so it answers while the settings are stuck on a
+                  stalled drive. A sort started before that (an automatic one, say) can then still be
+                  followed and cancelled, which the run pill promises and the browser has no other way to do. */}
+              {run.status && run.status.state !== 'idle' && (
+                <div className="mx-auto w-full max-w-xl">
+                  <ProgressCard
+                    status={run.status}
+                    cancel={run.cancel}
+                    focusRequested={focusProgress}
+                    onFocused={handleProgressFocused}
+                  />
+                </div>
+              )}
+            </>
           ) : currentPage === 'library' ? (
             <Library
               library={library}

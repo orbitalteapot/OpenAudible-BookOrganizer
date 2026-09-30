@@ -16,7 +16,7 @@ const { pathToFileURL } = require('url');
 const fs = require('fs');
 const { APP_NAME } = require('./app-info');
 const backend = require('./backend');
-const { HIDDEN_ARG, launchedAtLogin, setOpenAtLogin } = require('./login-item');
+const { HIDDEN_ARG, launchedAtLogin, ownAppImage, setOpenAtLogin } = require('./login-item');
 
 const DEV_SERVER_URL = 'http://localhost:5173';
 const THEMES = new Set(['system', 'light', 'dark']);
@@ -433,12 +433,33 @@ function onBackendRestarted() {
 
 /**
  * Quits and opens the app again. Only asked for once the backend has stopped for good, so there is
- * no sort to ask about. Never hidden in the tray, even when this launch was a sign-in start.
+ * no sort to ask about. Never hidden in the tray, even when this launch was a sign-in start. An
+ * AppImage is started again from its file: the program Electron would restart lives in the AppImage's
+ * mount, which is gone by the time the relauncher, waiting for this copy to exit, starts it.
  */
 function relaunchApp() {
   quitting = true;
-  app.relaunch({ args: process.argv.slice(1).filter((arg) => arg !== HIDDEN_ARG) });
+  const appImage = ownAppImage();
+  app.relaunch({
+    ...(appImage && { execPath: appImage }),
+    args: process.argv.slice(1).filter((arg) => arg !== HIDDEN_ARG),
+  });
   app.quit();
+}
+
+/**
+ * Opening the app again is how people restart it, and what the messages about a backend that stopped
+ * ask for; with the window closed to the tray, it would otherwise bring back this same copy, still
+ * without the backend and without automatic sorting. Windows and Linux start a second copy for it,
+ * macOS reopens this one (see 'activate').
+ */
+function onOpenedAgain({ hidden = false } = {}) {
+  if (backendStoppedReason()) {
+    relaunchApp();
+    return;
+  }
+  // The sign-in entry firing while the app already runs should not pop the window up.
+  if (!hidden) showWindow();
 }
 
 /** The backend was left stopped: the page stops saying it is still trying, and the user is told. */
@@ -498,20 +519,11 @@ if (!app.requestSingleInstanceLock()) {
   quitting = true;
   app.quit();
 } else {
-  app.on('second-instance', (_event, argv) => {
-    // Opening the app again is how people restart it, and what the messages about a backend that
-    // stopped ask for; with the window closed to the tray, it would otherwise bring back this same
-    // copy, still without the backend and without automatic sorting.
-    if (backendStoppedReason()) {
-      relaunchApp();
-      return;
-    }
-    // The sign-in entry firing while the app already runs should not pop the window up.
-    if (!argv.includes(HIDDEN_ARG)) showWindow();
-  });
+  app.on('second-instance', (_event, argv) => onOpenedAgain({ hidden: argv.includes(HIDDEN_ARG) }));
 
-  // macOS: clicking the Dock icon brings back a window that was closed to the menu bar.
-  app.on('activate', () => showWindow());
+  // macOS: opening the app from the Dock, Launchpad or Finder while it runs is not a second copy but
+  // this event, which also brings back a window that was closed to the menu bar.
+  app.on('activate', () => onOpenedAgain());
 
   app.whenReady().then(async () => {
     registerIpcHandlers();

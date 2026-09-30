@@ -495,6 +495,61 @@ public class FileSorterTests
     }
 
     [Fact]
+    public async Task Upgrade_never_writes_a_book_over_the_missing_same_titled_book_it_shared_a_book_folder_with()
+    {
+        // main's layout: both narrations in "Book 2", the second as "Alpha (2)". The first is not in
+        // the source, and the export now lists the second first.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("n2.m4b", "narration-2");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Saga", "Book 2", "Alpha.m4b"), "narration-1");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Saga", "Book 2", "Alpha (2).m4b"), "narration-2");
+
+        var summary = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Alpha", filename: "n2", seriesName: "Saga", seriesSequence: "2"),
+            TempWorkspace.Book(title: "Alpha", filename: "n1", seriesName: "Saga", seriesSequence: "2"));
+
+        Assert.Equal(["An Author/Saga/Book 2 (2)/Alpha.m4b", "An Author/Saga/Book 2/Alpha.m4b"], workspace.DestinationFiles());
+        Assert.Equal("narration-1", ReadDestination(workspace, "An Author", "Saga", "Book 2", "Alpha.m4b"));
+        Assert.Equal("narration-2", ReadDestination(workspace, "An Author", "Saga", "Book 2 (2)", "Alpha.m4b"));
+        Assert.Equal(SortCounts.Empty with { Moved = 1, NotFound = 1 }, summary.Counts);
+
+        var second = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Alpha", filename: "n2", seriesName: "Saga", seriesSequence: "2"),
+            TempWorkspace.Book(title: "Alpha", filename: "n1", seriesName: "Saga", seriesSequence: "2"));
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1, NotFound = 1 }, second.Counts);
+    }
+
+    [Fact]
+    public async Task Upgrade_never_writes_a_book_over_an_updated_same_titled_book_it_shared_a_book_folder_with()
+    {
+        // The first narration was downloaded again, so it cannot tell "Book 2" is its and goes elsewhere;
+        // the second must not take the plain name it leaves behind, and hold "Book 2" twice.
+        using var workspace = new TempWorkspace();
+        workspace.WriteSourceFile("n1.m4b", "narration-1-redownloaded");
+        workspace.WriteSourceFile("n2.m4b", "narration-2");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Saga", "Book 2", "Alpha.m4b"), "narration-1");
+        workspace.WriteDestinationFile(Path.Combine("An Author", "Saga", "Book 2", "Alpha (2).m4b"), "narration-2");
+
+        await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Alpha", filename: "n1", seriesName: "Saga", seriesSequence: "2"),
+            TempWorkspace.Book(title: "Alpha", filename: "n2", seriesName: "Saga", seriesSequence: "2"));
+
+        Assert.Equal("narration-1", ReadDestination(workspace, "An Author", "Saga", "Book 2", "Alpha.m4b"));
+        Assert.Equal(
+            ["narration-1", "narration-1-redownloaded", "narration-2"],
+            workspace.DestinationFiles().Select(file => File.ReadAllText(Path.Combine(workspace.Destination, file))).Order());
+
+        var second = await Sort(
+            workspace,
+            TempWorkspace.Book(title: "Alpha", filename: "n1", seriesName: "Saga", seriesSequence: "2"),
+            TempWorkspace.Book(title: "Alpha", filename: "n2", seriesName: "Saga", seriesSequence: "2"));
+        Assert.Equal(SortCounts.Empty with { UpToDate = 2 }, second.Counts);
+    }
+
+    [Fact]
     public async Task Sort_moves_a_standalone_book_out_of_the_folder_a_new_series_named_like_it_takes()
     {
         using var workspace = new TempWorkspace();

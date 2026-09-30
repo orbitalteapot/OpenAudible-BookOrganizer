@@ -101,3 +101,33 @@ describe('setOpenAtLogin', () => {
     );
   });
 });
+
+describe('ownAppImage', () => {
+  const appImage = process.env.APPIMAGE;
+  const appDir = process.env.APPDIR;
+  const execPath = process.execPath;
+
+  afterEach(() => {
+    if (appImage === undefined) delete process.env.APPIMAGE;
+    else process.env.APPIMAGE = appImage;
+    if (appDir === undefined) delete process.env.APPDIR;
+    else process.env.APPDIR = appDir;
+    Object.defineProperty(process, 'execPath', { value: execPath, configurable: true, writable: true });
+  });
+
+  it('is the AppImage file, which Restart starts again because the mount the app runs from goes away when it quits', () => {
+    process.env.APPIMAGE = '/opt/Organizer.AppImage';
+    process.env.APPDIR = '/tmp/.mount_Organizer';
+    Object.defineProperty(process, 'execPath', { value: '/tmp/.mount_Organizer/openaudible-book-organizer', configurable: true, writable: true });
+
+    expect(loadLoginItem({}).ownAppImage()).toBe('/opt/Organizer.AppImage');
+  });
+
+  it('is null for an install started from another AppImage', () => {
+    process.env.APPIMAGE = '/home/me/Apps/Cursor.AppImage';
+    process.env.APPDIR = '/tmp/.mount_Cursor';
+    Object.defineProperty(process, 'execPath', { value: '/opt/Organizer/openaudible-book-organizer', configurable: true, writable: true });
+
+    expect(loadLoginItem({}).ownAppImage()).toBeNull();
+  });
+});

@@ -419,19 +419,24 @@ public sealed class SortPlanner
     /// have been filed there, having the same title or the same number. The export cannot tell a
     /// changed recording of this book from that book's only copy, so the folder is left to it and this
     /// book gets the next one.
+    ///
+    /// Also taken, rivals or not, when it holds this book's audio beside another recording: that is
+    /// the "Book N" folder main shared between books with one number and title, where this book's
+    /// file is "Title (2)" (under its own name it would have kept the folder). The other recording
+    /// is under the name this book would be written to, and may be that other book's only copy.
     /// </summary>
     private bool MayHoldAnotherBook(string folder, BookSortPlan plan, string audioSource, string destinationRoot)
     {
-        var hasRival = RivalKeys(plan, destinationRoot).Any(key =>
-            _unplacedOwners.TryGetValue(key, out var owners) &&
-            owners.Any(owner => !SourceComparer.Equals(owner, audioSource)));
-        if (!hasRival)
+        var audio = ExistingAudioFiles(folder);
+        var others = audio.Count(file => !FileSorter.AreFilesSame(audioSource, file));
+        if (others == 0)
         {
             return false;
         }
 
-        var audio = ExistingAudioFiles(folder);
-        return audio.Count > 0 && !audio.Any(file => FileSorter.AreFilesSame(audioSource, file));
+        return others < audio.Count || RivalKeys(plan, destinationRoot).Any(key =>
+            _unplacedOwners.TryGetValue(key, out var owners) &&
+            owners.Any(owner => !SourceComparer.Equals(owner, audioSource)));
     }
 
     /// <summary>

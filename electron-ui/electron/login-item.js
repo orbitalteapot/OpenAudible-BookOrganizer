@@ -28,16 +28,22 @@ function quoteDesktopExecArg(arg) {
 }
 
 /**
- * What the sign-in entry starts. An AppImage runs from a mount point (APPDIR) that changes every
- * launch; APPIMAGE is the file itself. Both are inherited by everything an AppImage starts, so they
- * are only this app's when it runs from inside that mount: a .deb install started from another
- * AppImage's terminal would otherwise register that other app to start at sign-in.
+ * The AppImage file this app runs from, or null when it is not one. An AppImage runs from a mount
+ * point (APPDIR) that changes every launch and goes away when the app quits; APPIMAGE is the file
+ * itself. Both are inherited by everything an AppImage starts, so they are only this app's when it
+ * runs from inside that mount: a .deb install started from another AppImage's terminal would
+ * otherwise register (or restart as) that other app.
  */
-function loginExecutable() {
+function ownAppImage() {
   const { APPIMAGE, APPDIR } = process.env;
   const relative = APPDIR ? path.relative(APPDIR, process.execPath) : '';
   const runsFromAppImage = Boolean(APPIMAGE && relative && !relative.startsWith('..') && !path.isAbsolute(relative));
-  return runsFromAppImage ? APPIMAGE : process.execPath;
+  return runsFromAppImage ? APPIMAGE : null;
+}
+
+/** What the sign-in entry starts: the program itself, never a path inside an AppImage's mount. */
+function loginExecutable() {
+  return ownAppImage() ?? process.execPath;
 }
 
 /**
@@ -108,4 +114,4 @@ function setOpenAtLogin(enabled) {
   }
 }
 
-module.exports = { HIDDEN_ARG, launchedAtLogin, setOpenAtLogin };
+module.exports = { HIDDEN_ARG, launchedAtLogin, ownAppImage, setOpenAtLogin };

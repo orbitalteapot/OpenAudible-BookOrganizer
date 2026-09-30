@@ -55,10 +55,11 @@ public sealed record ServerConfig
     public IReadOnlyList<string> Warnings { get; init; } = [];
 
     /// <summary>
-    /// Whether a folder lies on a volume mapped into the container rather than on the image's own
-    /// disk (see <see cref="IsOnMappedVolume"/>). Replaced in tests, which do not run in a container.
+    /// Where the volume mapped into the container that a folder lies on is mounted, or null when the
+    /// folder is on the image's own disk (see <see cref="MappedVolumeOf"/>). Replaced in tests, which
+    /// do not run in a container.
     /// </summary>
-    internal Func<string, bool> IsMappedFolder { get; init; } = IsOnMappedVolume;
+    internal Func<string, string?> MountPointOf { get; init; } = MappedVolumeOf;
 
     /// <summary>
     /// Setting any of the three paths fixes all of them: a container mounts its volumes where its
@@ -119,15 +120,29 @@ public sealed record ServerConfig
     /// mount nobody has made yet. Sending that admin to check a mapping that is fine leaves them
     /// stuck, with no Create folder button to press. A parent that merely exists proves nothing: the
     /// image already has /mnt, /media, /srv, /opt and /home, and nothing is mapped to them.
+    ///
+    /// A parent that is a plain folder inside the mapped one, rather than the mount itself, is most
+    /// likely where the host mounts a drive or share, as with /mnt bound to /destination and the
+    /// NAS at /mnt/nas: while the NAS is down that is an empty folder on the host's system disk, and
+    /// a library created in it would fill that disk and vanish under the NAS once it is back.
     /// </summary>
     private string MissingFolder(string noun, string path, string variable)
     {
-        var parent = Path.GetDirectoryName(Path.TrimEndingDirectorySeparator(path));
-        var parentIsMounted = !string.IsNullOrEmpty(parent) && Directory.Exists(parent) && IsMappedFolder(parent);
+        var trimmed = Path.TrimEndingDirectorySeparator(path);
+        var name = Path.GetFileName(trimmed);
+        var parent = Path.GetDirectoryName(trimmed);
+        var mountPoint = !string.IsNullOrEmpty(parent) && Directory.Exists(parent) ? MountPointOf(parent) : null;
 
-        return parentIsMounted
-            ? $"The folder {Path.GetFileName(Path.TrimEndingDirectorySeparator(path))} does not exist inside {parent}. Create it on the host (in the folder mapped to {parent}), then try again."
-            : MissingMount(noun, path, variable);
+        if (mountPoint is null)
+        {
+            return MissingMount(noun, path, variable);
+        }
+
+        return mountPoint == Path.TrimEndingDirectorySeparator(Path.GetFullPath(parent!))
+            ? $"The folder {name} does not exist inside {parent}. Create it on the host (in the folder mapped to {parent}), then try again."
+            : $"The folder {name} does not exist inside {parent}. If a drive or share is meant to be mounted there on the host, " +
+              "it is probably not mounted right now: mount it, then try again. Otherwise create " +
+              $"{Path.GetRelativePath(mountPoint, Path.GetFullPath(trimmed))} on the host, inside the folder mapped to {mountPoint}.";
     }
 
     private static string MissingMount(string noun, string path, string variable)
@@ -136,11 +151,11 @@ public sealed record ServerConfig
     }
 
     /// <summary>
-    /// Whether <paramref name="folder"/> is on a mount other than the container's root file system:
-    /// a volume or bind mount, as listed in /proc/self/mountinfo. False where that cannot be read,
-    /// which keeps the advice to check the mapping.
+    /// The innermost mount other than the container's root file system that <paramref name="folder"/>
+    /// is on (a volume or bind mount, as listed in /proc/self/mountinfo), or null when there is none.
+    /// Null where that cannot be read, which keeps the advice to check the mapping.
     /// </summary>
-    private static bool IsOnMappedVolume(string folder)
+    private static string? MappedVolumeOf(string folder)
     {
         string[] lines;
         try
@@ -149,7 +164,7 @@ public sealed record ServerConfig
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException)
         {
-            return false;
+            return null;
         }
 
         var full = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
@@ -159,8 +174,9 @@ public sealed record ServerConfig
             // The mount point, with spaces and other awkward characters written as octal escapes.
             .Select(fields => Regex.Replace(
                 fields[4], @"\\([0-7]{3})", match => ((char)Convert.ToInt32(match.Groups[1].Value, 8)).ToString()))
-            .Any(mountPoint => mountPoint != "/" &&
-                               (full == mountPoint || full.StartsWith(mountPoint + "/", StringComparison.Ordinal)));
+            .Where(mountPoint => mountPoint != "/" &&
+                                 (full == mountPoint || full.StartsWith(mountPoint + "/", StringComparison.Ordinal)))
+            .MaxBy(mountPoint => mountPoint.Length);
     }
 
     /// <summary>The variable that fixes <paramref name="field"/>, for messages that tell the user where to change it.</summary>

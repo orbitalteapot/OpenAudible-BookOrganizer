@@ -1,8 +1,8 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, getRunStatus, getSettings } from '../../api';
+import { ApiError, cancelSort, getRunStatus, getSettings } from '../../api';
 import App from '../../App';
-import { idleStatus } from '../../test/fixtures';
+import { idleStatus, runningStatus } from '../../test/fixtures';
 
 vi.mock('../../api', async (original) => (await import('../../test/mockApi')).mockApi(original));
 
@@ -43,5 +43,26 @@ describe('Starting the organizer on the desktop', () => {
     expect(await screen.findByText(reason)).toBeTruthy();
     expect(screen.getByText("The organizer didn't start")).toBeTruthy();
     expect(screen.queryByText(/Still trying/)).toBeNull();
+  });
+});
+
+describe('Starting the organizer in the browser', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('shows a sort that is already running, so the run pill leads to it and it can be cancelled', async () => {
+    // The settings look at every folder and can hang on a stalled share; the run status never does.
+    vi.mocked(getSettings).mockRejectedValue(new ApiError(TIMEOUT_MESSAGE, { code: 'timeout' }));
+    vi.mocked(getRunStatus).mockResolvedValue(runningStatus({ trigger: 'scheduled' }));
+    vi.mocked(cancelSort).mockResolvedValue(undefined);
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Automatic sort running · 42%. Show progress' }));
+
+    expect(document.activeElement).toBe(screen.getByRole('heading', { name: 'Progress' }));
+    expect(screen.getByText(TIMEOUT_MESSAGE)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(cancelSort).toHaveBeenCalled();
   });
 });

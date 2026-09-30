@@ -533,7 +533,7 @@ public class SortScheduleTests
             SourcePath = workspace.Source,
             DestinationPath = destination,
             ScheduleIntervalMinutes = 360,
-            IsMappedFolder = folder => folder == workspace.Destination
+            MountPointOf = folder => folder == workspace.Destination ? workspace.Destination : null
         };
         using var backend = new TestBackend(config);
         using var scheduler = backend.CreateScheduler();
@@ -541,6 +541,26 @@ public class SortScheduleTests
         Assert.Equal(
             $"The folder Audiobooks does not exist inside {workspace.Destination}. Create it on the host (in the folder mapped to {workspace.Destination}), then try again.",
             scheduler.GetStatus().BlockedReason);
+    }
+
+    [Fact]
+    public void A_missing_subfolder_of_a_plain_folder_inside_a_mount_is_blamed_on_a_drive_that_is_not_mounted()
+    {
+        // docker-compose.yml's layout: host /mnt bound to /destination, the NAS mounted at /mnt/nas.
+        // While the NAS is down, /destination/nas is the host's empty mount point on its system disk.
+        using var workspace = new TempWorkspace();
+        var nas = Directory.CreateDirectory(Path.Combine(workspace.Destination, "nas")).FullName;
+        var config = new ServerConfig
+        {
+            DestinationPath = Path.Combine(nas, "Audiobooks"),
+            MountPointOf = folder => folder.StartsWith(workspace.Destination, StringComparison.Ordinal) ? workspace.Destination : null
+        };
+
+        Assert.Equal(
+            $"The folder Audiobooks does not exist inside {nas}. If a drive or share is meant to be mounted there on the host, " +
+            "it is probably not mounted right now: mount it, then try again. Otherwise create " +
+            $"{Path.Combine("nas", "Audiobooks")} on the host, inside the folder mapped to {workspace.Destination}.",
+            config.Explain(new SortPathProblem(SortPathField.Destination, SortPathProblemCode.DestinationMissing, "")).Message);
     }
 
     [Fact]
@@ -552,7 +572,7 @@ public class SortScheduleTests
             CsvPath = "/data/books.csv",
             SourcePath = "/media/audiobooks",
             DestinationPath = "/mnt/organized",
-            IsMappedFolder = _ => false
+            MountPointOf = _ => null
         };
 
         Assert.Equal(
@@ -571,7 +591,7 @@ public class SortScheduleTests
         var config = new ServerConfig
         {
             SourcePath = Path.Combine(workspace.Source, "Books"),
-            IsMappedFolder = _ => true
+            MountPointOf = folder => folder
         };
 
         Assert.StartsWith(
