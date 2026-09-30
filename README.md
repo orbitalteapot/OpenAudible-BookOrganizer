@@ -210,6 +210,8 @@ a loose audio file in an author folder makes them treat that whole folder as one
 series inside it. A companion PDF is copied next to its audiobook when the export mentions one and
 the file is present.
 
+![Before and after: a standalone book loose in the author folder hides the series next to it; now every book has a folder of its own](images/folder-layout.png)
+
 The organiser remembers which book it put in which folder, in a small file called
 `.openaudible-organizer` at the top of the destination folder (hidden on macOS and Linux). Leave it
 there: library servers ignore it. Because of it:
@@ -264,6 +266,8 @@ Pick an interval under **Automatic sorting** on the Sort page — every 6 or 12 
 weekly — and the organiser re-sorts on its own, with the folders and options shown above it. The
 first sort starts as soon as you turn it on, and the card says so. Only new and changed books are
 copied, so a run over an unchanged library takes seconds.
+
+![The Automatic sorting card](images/app-schedule.png)
 
 The card shows when the next sort is due and how the last one went, in the same words as a sort you
 start yourself. An automatic sort shows up in the Progress card while it runs, with its progress,
