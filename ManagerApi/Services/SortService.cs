@@ -4,264 +4,336 @@ using AudioFileSorter.Model;
 namespace ManagerApi.Services;
 
 /// <summary>
-/// Owns the single sort run the backend allows at a time, plus the library it works from.
+/// Owns the single sort run the backend allows at a time, plus the library it works from. It is
+/// the only judge of whether a sort is running: the page and the schedule both start runs here, and
+/// both read the same <see cref="RunStatus"/>.
+///
+/// Hosted only so the app waits for the run it is closing (see <see cref="StopAsync"/>).
 /// </summary>
-public class SortService
+public sealed class SortService : IHostedService
 {
+    private const string AppClosedMessage = "Canceled because the app closed.";
+
     private readonly CsvParser _csvParser = new();
     private readonly FileSorter _fileSorter = new();
-    private readonly object _sortLock = new();
+    private readonly SettingsService _settings;
+    private readonly TimeProvider _time;
+    private readonly CancellationToken _appStopping;
+    private readonly ILogger<SortService> _logger;
+    private readonly object _lock = new();
 
     private List<OpenAudible> _books = [];
     private string? _booksCsvPath;
     private (DateTime LastWriteUtc, long Length)? _booksCsvStamp;
-    private SortProgressInfo _currentProgress = new();
-    private CancellationTokenSource? _sortCancellation;
-    private bool _isSorting;
+    private RunStatus _status = RunStatus.Idle;
+    private ActiveRun? _active;
+
+    public SortService(SettingsService settings, TimeProvider time, IHostApplicationLifetime lifetime, ILogger<SortService> logger)
+    {
+        _settings = settings;
+        _time = time;
+        _appStopping = lifetime.ApplicationStopping;
+        _logger = logger;
+    }
 
     public bool IsSorting
     {
         get
         {
-            lock (_sortLock)
+            lock (_lock)
             {
-                return _isSorting;
+                return _active is not null;
             }
         }
     }
 
-    /// <summary>Reads a book list into memory, replacing whatever was loaded before.</summary>
-    /// <exception cref="InvalidOperationException">A sort is currently running.</exception>
-    public async Task<CsvParseResult> ParseBooks(string csvPath, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Reads the library export from the settings into memory, replacing whatever was loaded before.
+    /// Allowed while a sort runs: the run keeps the list it started with.
+    /// </summary>
+    /// <exception cref="SortPathException">No export is set, or it does not exist.</exception>
+    /// <exception cref="InvalidDataException">The file is not an OpenAudible export.</exception>
+    public async Task<CsvParseResult> ParseBooks(CancellationToken cancellationToken = default)
     {
-        lock (_sortLock)
+        var csvPath = _settings.Effective.CsvPath;
+        if (SortPathValidator.ValidateCsv(csvPath) is { } problem)
         {
-            if (_isSorting)
-            {
-                throw new InvalidOperationException("A sort is currently running. Cancel it before loading a different library.");
-            }
+            throw new SortPathException(_settings.Config.Explain(problem));
         }
 
-        var stamp = ReadFileStamp(csvPath);
-        var result = await _csvParser.ParseAsync(csvPath, cancellationToken);
-
-        lock (_sortLock)
-        {
-            // Re-check: a sort may have started while the file was being read. Losing the parse
-            // result is better than swapping the list out from under a running sort.
-            if (_isSorting)
-            {
-                throw new InvalidOperationException("A sort started while the library was loading. Try again once it finishes.");
-            }
-
-            _books = result.Books;
-            _booksCsvPath = Path.GetFullPath(csvPath);
-            _booksCsvStamp = stamp;
-        }
-
-        return result;
+        return await LoadBooks(csvPath!, cancellationToken);
     }
 
     public List<OpenAudible> GetBooks()
     {
-        lock (_sortLock)
+        lock (_lock)
         {
             return _books;
         }
     }
 
-    public SortProgressInfo GetProgress()
+    /// <summary>The current or most recent run, trimmed for polling.</summary>
+    public RunStatus GetStatus()
     {
-        lock (_sortLock)
+        lock (_lock)
         {
-            return _currentProgress;
+            return _status.ForPolling();
         }
     }
 
-    public bool CancelSort()
+    /// <summary>
+    /// Starts a sort with the paths in the settings, unless one is already running.
+    /// </summary>
+    /// <param name="run">
+    /// Completes with this run's own final status — never the shared one, which a later run may
+    /// already have replaced. When a run was already going, it is that run's.
+    /// </param>
+    /// <param name="confirmUnmounted">
+    /// A person was told the destination no longer holds the marker earlier sorts left in it (see
+    /// <see cref="SettingsService.CheckUnattended"/>) and chose to sort into it anyway. Unattended runs
+    /// never do.
+    /// </param>
+    /// <returns>False when a sort is already running.</returns>
+    /// <exception cref="SortPathException">The paths cannot be used; nothing was started.</exception>
+    public bool TryStartSort(RunTrigger trigger, SortOptions options, out Task<RunStatus> run, bool confirmUnmounted = false)
     {
-        lock (_sortLock)
+        // Checked before validating as well as after: a second Start while a run is going should
+        // hear "already running", not a complaint about paths it never got to use.
+        if (TryGetActiveRun(out run))
         {
-            if (!_isSorting || _sortCancellation is null)
+            return false;
+        }
+
+        // Outside the lock: on a sleeping network share this can take a while, and polling for
+        // progress must not wait on it.
+        // A person pressing Start is asked too: the empty stand-in for an unmounted drive looks like
+        // the library to them as well, and the copy would be hidden under the mount point once the
+        // drive is back. Agreeing to create a missing destination already answered that question.
+        var settings = _settings.Effective;
+        var askedAboutDestination = trigger == RunTrigger.Manual && (confirmUnmounted || options.CreateDestination);
+        var problem = _settings.CheckForSort(settings, options.CreateDestination) ??
+                      (askedAboutDestination ? null : _settings.CheckUnattended(settings));
+        if (problem is not null)
+        {
+            throw new SortPathException(problem);
+        }
+
+        lock (_lock)
+        {
+            if (_active is not null)
             {
+                run = _active.Completion;
                 return false;
             }
 
-            try
-            {
-                _sortCancellation.Cancel();
-            }
-            catch (ObjectDisposedException)
-            {
-                return false;
-            }
+            var active = new ActiveRun(CancellationTokenSource.CreateLinkedTokenSource(_appStopping));
+            _active = active;
+            _status = RunStatus.Starting(trigger, UtcNow());
 
+            // Off the caller's thread: planning a large library is synchronous work, and the caller
+            // is a web request or the scheduler, neither of which should wait for it.
+            active.Completion = Task.Run(() => RunSort(active, settings.CsvPath!, settings.SourcePath!, settings.DestinationPath!, options));
+            run = active.Completion;
             return true;
         }
     }
 
-    /// <summary>Starts a sort with the default settings.</summary>
-    public bool TryStartSort(string csvPath, string sourcePath, string destinationPath, out Task sortTask)
+    /// <param name="appClosing">
+    /// The desktop app is quitting, which is not a person changing their mind: the run ends as one
+    /// the app's closing cut short, so automatic sorting tries it again instead of counting it as done.
+    /// </param>
+    public bool CancelSort(bool appClosing = false)
     {
-        return TryStartSort(csvPath, sourcePath, destinationPath, null, out sortTask);
-    }
-
-    /// <summary>
-    /// Starts a sort if none is running. Returns false when one already is, so the caller can tell
-    /// the user the truth instead of reporting a run that never started.
-    /// </summary>
-    public bool TryStartSort(string csvPath, string sourcePath, string destinationPath, SortOptions? options, out Task sortTask)
-    {
-        lock (_sortLock)
+        lock (_lock)
         {
-            if (_isSorting)
+            if (_active is null)
             {
-                sortTask = Task.CompletedTask;
                 return false;
             }
 
-            _isSorting = true;
-            _currentProgress = new SortProgressInfo();
-            _sortCancellation = new CancellationTokenSource();
+            // Under the lock: the run disposes its token source once it is no longer the active one.
+            _active.AppClosing |= appClosing;
+            _active.Cancellation.Cancel();
+            return true;
         }
-
-        sortTask = RunSort(csvPath, sourcePath, destinationPath, options ?? SortOptions.Default);
-        return true;
     }
 
-    /// <summary>Starts a sort and waits for it to finish. Used by tests and by direct callers.</summary>
-    public Task StartSort(string csvPath, string sourcePath, string destinationPath, SortOptions? options = null)
-    {
-        return TryStartSort(csvPath, sourcePath, destinationPath, options, out var sortTask)
-            ? sortTask
-            : Task.CompletedTask;
-    }
+    /// <summary>Nothing to start: runs are started on request.</summary>
+    public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
-    private async Task RunSort(string csvPath, string sourcePath, string destinationPath, SortOptions options)
+    /// <summary>
+    /// Waits, within the host's shutdown timeout, for the run the closing app has cancelled to wind
+    /// down. The scheduler waits for the runs it starts, but nothing waited for one started from the
+    /// page, so the process could exit before that run recorded and logged why it stopped, or deleted
+    /// its partly copied file.
+    /// </summary>
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
-        CancellationTokenSource cancellation;
-        lock (_sortLock)
+        Task? run;
+        lock (_lock)
         {
-            cancellation = _sortCancellation!;
+            run = _active?.Completion;
         }
 
+        if (run is not null)
+        {
+            await run.WaitAsync(cancellationToken).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
+    }
+
+    private bool TryGetActiveRun(out Task<RunStatus> run)
+    {
+        lock (_lock)
+        {
+            run = _active?.Completion ?? Task.FromResult(_status);
+            return _active is not null;
+        }
+    }
+
+    private async Task<RunStatus> RunSort(ActiveRun run, string csvPath, string sourcePath, string destinationPath, SortOptions options)
+    {
+        var token = run.Cancellation.Token;
+        RunStatus final;
         try
         {
-            var books = await EnsureBooksLoaded(csvPath, cancellation.Token);
+            var books = await EnsureBooksLoaded(csvPath, token);
 
             // Deliberately not Progress<T>: it marshals each report through the thread pool, so a
-            // per-book report could be delivered after the final one and leave the run looking
-            // unfinished forever.
-            var progress = new InlineProgress<SortProgressInfo>(SetProgress);
-            var summary = await _fileSorter.SortAudioFiles(sourcePath, destinationPath, books, options, progress, cancellation.Token);
+            // per-book report could be delivered after the final one.
+            var progress = new InlineProgress<SortProgressInfo>(info => Update(run, status => status.With(info)));
+            var summary = await _fileSorter.SortAudioFiles(sourcePath, destinationPath, books, options, progress, token);
 
-            SetProgress(new SortProgressInfo
-            {
-                CurrentBook = summary.TotalBooks,
-                TotalBooks = summary.TotalBooks,
-                CopiedBooks = summary.CopiedBooks,
-                UpdatedBooks = summary.UpdatedBooks,
-                SkippedBooks = summary.SkippedBooks,
-                MissingBooks = summary.MissingBooks,
-                FailedBooks = summary.FailedBooks,
-                WarningCount = summary.WarningCount,
-                Percentage = 100,
-                IsComplete = true
-            });
+            RememberSortedDestination(destinationPath);
+            final = Finish(run, status => status.Completed(summary, UtcNow()));
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            var snapshot = GetProgress();
-            SetProgress(new SortProgressInfo
-            {
-                CurrentBook = snapshot.CurrentBook,
-                TotalBooks = snapshot.TotalBooks,
-                CopiedBooks = snapshot.CopiedBooks,
-                UpdatedBooks = snapshot.UpdatedBooks,
-                SkippedBooks = snapshot.SkippedBooks,
-                MissingBooks = snapshot.MissingBooks,
-                FailedBooks = snapshot.FailedBooks,
-                WarningCount = snapshot.WarningCount,
-                CurrentTitle = snapshot.CurrentTitle,
-                Percentage = snapshot.Percentage,
-                IsComplete = true,
-                IsCanceled = true
-            });
+            // An app that is closing is not a person changing their mind: saying so lets the
+            // schedule try again, and tells the user why the run stopped.
+            var reason = _appStopping.IsCancellationRequested || IsClosingApp(run) ? AppClosedMessage : null;
+            final = Finish(run, status => status.Canceled(reason, UtcNow()));
+        }
+        catch (SortPathException ex)
+        {
+            // The paths passed when the run started, and something (a drive unplugged) changed since.
+            var problem = _settings.Config.Explain(ex.Problem);
+            final = Finish(run, status => status.Failed(problem.Message, RunErrors.Code(problem), RunErrors.Field(problem.Field), UtcNow()));
+        }
+        catch (FileNotFoundException ex)
+        {
+            final = Finish(run, status => status.Failed(ex.Message, RunErrors.CsvNotFound, RunErrors.CsvPathField, UtcNow()));
+        }
+        catch (InvalidDataException ex)
+        {
+            final = Finish(run, status => status.Failed(ex.Message, RunErrors.CsvInvalid, RunErrors.CsvPathField, UtcNow()));
         }
         catch (Exception ex)
         {
-            var snapshot = GetProgress();
-            SetProgress(new SortProgressInfo
-            {
-                CurrentBook = snapshot.CurrentBook,
-                TotalBooks = snapshot.TotalBooks,
-                CopiedBooks = snapshot.CopiedBooks,
-                UpdatedBooks = snapshot.UpdatedBooks,
-                SkippedBooks = snapshot.SkippedBooks,
-                MissingBooks = snapshot.MissingBooks,
-                FailedBooks = snapshot.FailedBooks,
-                WarningCount = snapshot.WarningCount,
-                CurrentTitle = snapshot.CurrentTitle,
-                Percentage = snapshot.Percentage,
-                Error = ex.Message,
-                IsComplete = true
-            });
-
-            Console.Error.WriteLine($"Sort failed: {ex}");
+            _logger.LogError(ex, "Sort failed");
+            final = Finish(run, status => status.Failed(ex.Message, null, null, UtcNow()));
         }
-        finally
+
+        _logger.LogInformation("{Summary}", RunSummary.Describe(final));
+        return final;
+    }
+
+    /// <summary>
+    /// Arms the check automatic sorts make for an unmounted drive (see <see cref="SettingsService.CheckUnattended"/>)
+    /// on this destination, now that the sorter has left its manifest in it (see <see cref="LibraryManifest"/>).
+    /// A run that finished has just proved this folder is the library, whoever started it, so a person
+    /// who emptied it on purpose re-arms automatic sorting by sorting once by hand.
+    /// </summary>
+    private void RememberSortedDestination(string destinationPath)
+    {
+        if (SortPathValidator.InspectMarker(destinationPath) is null)
         {
-            lock (_sortLock)
-            {
-                _sortCancellation?.Dispose();
-                _sortCancellation = null;
-                _isSorting = false;
-            }
+            _settings.RecordMarkedDestination(destinationPath);
+        }
+        else
+        {
+            // The run's problems list says why; unmarked, the folder is sorted into as before, and
+            // only the check for an empty stand-in is lost.
+            _logger.LogWarning("The sort left no {File} in the destination {Path}", LibraryManifest.FileName, destinationPath);
+        }
+    }
+
+    private bool IsClosingApp(ActiveRun run)
+    {
+        lock (_lock)
+        {
+            return run.AppClosing;
         }
     }
 
     /// <summary>
-    /// Returns the loaded library, re-reading the CSV when nothing is loaded, when the caller asked
-    /// to sort a different file than the one in memory, or when that file has changed on disk since
-    /// it was read.
+    /// Applies a progress report, if it belongs to the run in progress. A report that arrives after
+    /// its run finished is dropped: a finished run must stay finished, since the page stops polling
+    /// quickly on it.
+    /// </summary>
+    private void Update(ActiveRun run, Func<RunStatus, RunStatus> update)
+    {
+        lock (_lock)
+        {
+            if (_active == run)
+            {
+                _status = update(_status);
+            }
+        }
+    }
+
+    /// <summary>Publishes a run's final status and frees the slot for the next run.</summary>
+    private RunStatus Finish(ActiveRun run, Func<RunStatus, RunStatus> finish)
+    {
+        lock (_lock)
+        {
+            _status = finish(_status);
+            _active = null;
+            run.Cancellation.Dispose();
+            return _status;
+        }
+    }
+
+    /// <summary>
+    /// Returns the loaded library, re-reading the CSV when nothing is loaded, when the run is for a
+    /// different file than the one in memory, or when that file has changed on disk since it was read.
     /// </summary>
     private async Task<List<OpenAudible>> EnsureBooksLoaded(string csvPath, CancellationToken cancellationToken)
     {
         string? loadedPath;
         (DateTime, long)? loadedStamp;
         List<OpenAudible> books;
-        lock (_sortLock)
+        lock (_lock)
         {
             loadedPath = _booksCsvPath;
             loadedStamp = _booksCsvStamp;
             books = _books;
         }
 
-        var requestedPath = Path.GetFullPath(csvPath);
-        var currentStamp = ReadFileStamp(csvPath);
-
         // OpenAudible exports over the top of the same file every time, and a container's CSV_PATH
         // never changes at all. Matching on the path alone meant that re-exporting your library and
         // pressing Start sorting quietly sorted whatever was read the first time — in a long-lived
         // container, potentially days earlier.
-        var sameFile = books.Count > 0 && string.Equals(loadedPath, requestedPath, StringComparison.OrdinalIgnoreCase);
-        var unchanged = loadedStamp is not null && currentStamp is not null && loadedStamp == currentStamp;
+        var sameFile = books.Count > 0 && string.Equals(loadedPath, Path.GetFullPath(csvPath), StringComparison.OrdinalIgnoreCase);
+        var unchanged = loadedStamp is not null && loadedStamp == ReadFileStamp(csvPath);
 
-        if (sameFile && unchanged)
-        {
-            return books;
-        }
+        return sameFile && unchanged
+            ? books
+            : (await LoadBooks(csvPath, cancellationToken)).Books;
+    }
 
+    private async Task<CsvParseResult> LoadBooks(string csvPath, CancellationToken cancellationToken)
+    {
+        var stamp = ReadFileStamp(csvPath);
         var result = await _csvParser.ParseAsync(csvPath, cancellationToken);
 
-        lock (_sortLock)
+        lock (_lock)
         {
             _books = result.Books;
-            _booksCsvPath = requestedPath;
-            _booksCsvStamp = currentStamp;
+            _booksCsvPath = Path.GetFullPath(csvPath);
+            _booksCsvStamp = stamp;
         }
 
-        return result.Books;
+        return result;
     }
 
     /// <summary>
@@ -282,23 +354,19 @@ public class SortService
         }
     }
 
-    /// <summary>
-    /// Publishes a progress snapshot. Internal rather than private so the "a finished run stays
-    /// finished" guarantee can be tested without racing the thread pool.
-    /// </summary>
-    internal void SetProgress(SortProgressInfo progress)
-    {
-        lock (_sortLock)
-        {
-            // Once a run is finished, nothing from that run may un-finish it. The UI stops
-            // polling on the completed flag, so losing it would leave it spinning forever.
-            if (_currentProgress.IsComplete && !progress.IsComplete)
-            {
-                return;
-            }
+    private DateTime UtcNow() => _time.GetUtcNow().UtcDateTime;
 
-            _currentProgress = progress;
-        }
+    /// <summary>
+    /// A run in progress. Its token source is linked to the app stopping, so closing the app cancels
+    /// the run instead of cutting it off mid-copy.
+    /// </summary>
+    private sealed class ActiveRun(CancellationTokenSource cancellation)
+    {
+        public CancellationTokenSource Cancellation { get; } = cancellation;
+        public Task<RunStatus> Completion { get; set; } = null!;
+
+        /// <summary>Cancelled because the desktop app is quitting; see <see cref="CancelSort"/>.</summary>
+        public bool AppClosing { get; set; }
     }
 
     /// <summary>

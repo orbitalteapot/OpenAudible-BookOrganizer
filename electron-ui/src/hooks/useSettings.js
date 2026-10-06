@@ -1,0 +1,183 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getSettings, isUnanswered, updateSettings } from '../api';
+import { isFoundAgain } from '../paths';
+
+// The desktop backend is started alongside the window and takes a few seconds to answer; a Docker
+// container may be restarting. Keep asking, and only call it an error once it has taken a while:
+// counted in time rather than in attempts, because an attempt that hangs on an offline network drive
+// takes as long as its timeout to fail, not a moment, and ten of them took most of twenty minutes.
+const LOAD_RETRY_MS = 1_000;
+export const LOAD_ERROR_AFTER_MS = 10_000;
+
+/**
+ * Drops the errors a successful save has dealt with: those about a field it changed, and those
+ * the same change caused (turning automatic sorting on is refused with an error about a path, and
+ * turning it off again makes that error moot).
+ */
+function withoutResolved(fieldErrors, patch) {
+  const touched = (key) => Object.prototype.hasOwnProperty.call(patch, key);
+  return Object.fromEntries(
+    Object.entries(fieldErrors).filter(([field, { causes }]) => !touched(field) && !causes.some(touched))
+  );
+}
+
+/**
+ * Drops the errors about a path the backend now finds (see isFoundAgain), unless the error was about
+ * changing that path: turning automatic sorting on with an unplugged drive is refused with an error
+ * about the destination, which is moot once the drive is back, but a refused pick of a new folder
+ * says nothing about the saved one being found.
+ */
+function withoutFound(fieldErrors, pathStatus) {
+  return Object.fromEntries(
+    Object.entries(fieldErrors).filter(
+      ([field, { code, causes }]) => causes.includes(field) || !isFoundAgain({ field, code }, pathStatus)
+    )
+  );
+}
+
+/**
+ * The app's settings, as the backend holds them.
+ *
+ * What is shown is always what the backend last said: a change is sent, and the page moves on only
+ * when the reply comes back, so a refused change never leaves the page showing something the
+ * backend is not doing. Saves and refreshes go out one at a time, in order, so a slow reply can
+ * never land after a newer one and put an old value back.
+ *
+ * `fieldErrors` maps a setting ("destinationPath") to the message the backend refused it with, for
+ * showing under that setting; `error` holds anything not about one setting, and `errorCode` its code
+ * ("unreachable" when the organizer did not answer).
+ */
+export default function useSettings() {
+  const [settings, setSettings] = useState(null);
+  // Kept with its code so a refresh can tell "the backend did not answer" (moot once it answers
+  // again, having saved the change or not: the page now shows which) from a save the backend
+  // refused (still true until a save succeeds).
+  const [errorState, setErrorState] = useState(null);
+  const [fieldErrorState, setFieldErrorState] = useState({});
+  const [pending, setPending] = useState(0);
+
+  const queue = useRef(Promise.resolve());
+  // A refresh waiting for its turn, until it starts.
+  const queuedRefresh = useRef(null);
+
+  /** Runs `task` after every request queued before it. */
+  const enqueue = useCallback((task) => {
+    const next = queue.current.then(task);
+    // A failure is handled inside the task; the queue itself must keep going.
+    queue.current = next.catch(() => {});
+    return next;
+  }, []);
+
+  useEffect(() => {
+    // Cleared on unmount, so a remount (StrictMode does one) stops this retry loop instead of
+    // leaving it running beside the new one.
+    let active = true;
+    let timer = null;
+    // When the first failed attempt was sent.
+    let failingSince = null;
+
+    const load = () =>
+      enqueue(async () => {
+        const sentAt = Date.now();
+        try {
+          const loaded = await getSettings();
+          if (!active) return;
+          setSettings(loaded);
+          setErrorState(null);
+        } catch (err) {
+          if (!active) return;
+          failingSince ??= sentAt;
+          // An organizer that answers nothing in time is not still starting: it is stuck on a folder,
+          // and the message says which kind of thing to check. Shown at once.
+          if (err.code === 'timeout' || Date.now() - failingSince >= LOAD_ERROR_AFTER_MS) setErrorState(err);
+          timer = setTimeout(load, LOAD_RETRY_MS);
+        }
+      });
+
+    load();
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [enqueue]);
+
+  /**
+   * Asks again, for what only the backend can see: whether a folder has appeared since (a run
+   * created it, a drive was plugged in). Queued behind any save, so it cannot undo one.
+   *
+   * A refresh asked for while another is still waiting for its turn is that one: it will fetch
+   * the same thing. Otherwise every timer tick, focus and tab switch would queue one more while
+   * the backend takes its time over an offline network share, and a save would wait behind all of them.
+   *
+   * Resolves to whether the backend answered: only then is what the page shows newer than the moment
+   * of asking.
+   */
+  const refresh = useCallback(() => {
+    if (queuedRefresh.current) return queuedRefresh.current;
+
+    const refreshing = enqueue(async () => {
+      queuedRefresh.current = null;
+      try {
+        const current = await getSettings();
+        setSettings(current);
+        setFieldErrorState((errors) => withoutFound(errors, current.pathStatus));
+        setErrorState((shown) => (isUnanswered(shown) ? null : shown));
+        return true;
+      } catch {
+        // The settings on screen are still the last ones the backend confirmed.
+        return false;
+      }
+    });
+    queuedRefresh.current = refreshing;
+    return refreshing;
+  }, [enqueue]);
+
+  /**
+   * Saves `patch` (wire names: `{ destinationPath }`). Resolves to null once saved, or to the
+   * ApiError it was refused with, which is also recorded under its field.
+   */
+  const update = useCallback(
+    (patch) => {
+      setPending((count) => count + 1);
+
+      return enqueue(async () => {
+        try {
+          const saved = await updateSettings(patch);
+          setSettings(saved);
+          setErrorState(null);
+          setFieldErrorState((current) => withoutResolved(current, patch));
+          return null;
+        } catch (err) {
+          if (err.field) {
+            setFieldErrorState((current) => ({
+              ...current,
+              [err.field]: { message: err.message, code: err.code, causes: Object.keys(patch) },
+            }));
+          } else {
+            setErrorState(err);
+          }
+          // Given up on, not refused: the backend may have saved it all the same, so it is asked
+          // what it holds now. Queued behind this save, as every refresh is.
+          if (err.code === 'timeout') refresh();
+          return err;
+        } finally {
+          setPending((count) => count - 1);
+        }
+      });
+    },
+    [enqueue, refresh]
+  );
+
+  const error = errorState?.message ?? null;
+  const errorCode = errorState?.code ?? null;
+
+  const fieldErrors = useMemo(
+    () => Object.fromEntries(Object.entries(fieldErrorState).map(([field, { message }]) => [field, message])),
+    [fieldErrorState]
+  );
+
+  return useMemo(
+    () => ({ settings, update, refresh, saving: pending > 0, error, errorCode, fieldErrors }),
+    [settings, update, refresh, pending, error, errorCode, fieldErrors]
+  );
+}

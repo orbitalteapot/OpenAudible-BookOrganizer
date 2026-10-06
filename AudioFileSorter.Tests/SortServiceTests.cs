@@ -6,23 +6,32 @@ namespace AudioFileSorter.Tests;
 public class SortServiceTests
 {
     [Fact]
-    public async Task TryStartSort_runs_a_sort_and_reports_completion()
+    public async Task TryStartSort_runs_a_sort_with_the_paths_in_the_settings_and_reports_completion()
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("the-hobbit.m4b");
-        var csvPath = WriteCsv(workspace, "The Hobbit,Tolkien,the-hobbit");
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"));
 
-        var service = new SortService();
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var run));
+        var final = await run;
 
-        Assert.True(service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out var sortTask));
-        await sortTask;
+        Assert.Equal(RunState.Finished, final.State);
+        Assert.Equal(RunTrigger.Manual, final.Trigger);
+        Assert.Null(final.Error);
+        Assert.Equal(1, final.Counts.New);
+        Assert.NotNull(final.FinishedUtc);
+        Assert.Equal(final, backend.Sort.GetStatus());
+        Assert.False(backend.Sort.IsSorting);
+        Assert.Equal(["Tolkien/The Hobbit/The Hobbit.m4b"], workspace.DestinationFiles());
+    }
 
-        var progress = service.GetProgress();
-        Assert.True(progress.IsComplete);
-        Assert.Null(progress.Error);
-        Assert.Equal(1, progress.CopiedBooks);
-        Assert.False(service.IsSorting);
-        Assert.Equal(["Tolkien/The Hobbit.m4b"], workspace.DestinationFiles());
+    [Fact]
+    public void Nothing_has_run_until_a_sort_is_started()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv());
+
+        Assert.Equal(RunState.Idle, backend.Sort.GetStatus().State);
     }
 
     [Fact]
@@ -35,209 +44,253 @@ public class SortServiceTests
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
 
         workspace.WriteSourceFile("the-hobbit.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("Tolkien", "The Hobbit.m4b"), original);
-        var csvPath = WriteCsv(workspace, "The Hobbit,Tolkien,the-hobbit");
+        var destination = workspace.WriteDestinationFile(Path.Combine("Tolkien", "The Hobbit", "The Hobbit.m4b"), original);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"));
 
-        var quickService = new SortService();
-        Assert.True(quickService.TryStartSort(
-            csvPath, workspace.Source, workspace.Destination,
-            new SortOptions { ComparisonMode = FileComparisonMode.Quick }, out var quickTask));
-        await quickTask;
-
-        Assert.Equal(0, quickService.GetProgress().UpdatedBooks);
+        Assert.True(backend.Sort.TryStartSort(
+            RunTrigger.Manual, new SortOptions { ComparisonMode = FileComparisonMode.Quick }, out var quickRun));
+        Assert.Equal(0, (await quickRun).Counts.Updated);
         Assert.Equal(original, File.ReadAllText(destination));
 
-        var fullService = new SortService();
-        Assert.True(fullService.TryStartSort(
-            csvPath, workspace.Source, workspace.Destination,
-            new SortOptions { ComparisonMode = FileComparisonMode.Full }, out var fullTask));
-        await fullTask;
-
-        Assert.Equal(1, fullService.GetProgress().UpdatedBooks);
+        Assert.True(backend.Sort.TryStartSort(
+            RunTrigger.Manual, new SortOptions { ComparisonMode = FileComparisonMode.Full }, out var fullRun));
+        Assert.Equal(1, (await fullRun).Counts.Updated);
         Assert.Equal(edited, File.ReadAllText(destination));
     }
 
     [Fact]
-    public async Task A_late_progress_report_cannot_un_finish_a_completed_sort()
-    {
-        // A per-book report delivered after the run ended used to overwrite the completed state.
-        // The UI stops polling on that flag, so losing it left it spinning on a finished run.
-        using var workspace = new TempWorkspace();
-        workspace.WriteSourceFile("the-hobbit.m4b");
-        var csvPath = WriteCsv(workspace, "The Hobbit,Tolkien,the-hobbit");
-
-        var service = new SortService();
-        Assert.True(service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out var sortTask));
-        await sortTask;
-        Assert.True(service.GetProgress().IsComplete);
-
-        service.SetProgress(new SortProgressInfo { CurrentBook = 1, TotalBooks = 25, Percentage = 4 });
-
-        var progress = service.GetProgress();
-        Assert.True(progress.IsComplete);
-        Assert.Equal(100, progress.Percentage);
-    }
-
-    [Fact]
-    public async Task A_new_run_clears_the_completed_state_of_the_previous_one()
+    public async Task A_new_run_replaces_the_status_of_the_previous_one()
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("the-hobbit.m4b");
-        var csvPath = WriteCsv(workspace, "The Hobbit,Tolkien,the-hobbit");
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"));
 
-        var service = new SortService();
-        Assert.True(service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out var first));
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var first));
         await first;
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Scheduled, SortOptions.Default, out var second));
+        var final = await second;
 
-        Assert.True(service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out var second));
-        await second;
-
-        var progress = service.GetProgress();
-        Assert.True(progress.IsComplete);
-        Assert.Equal(1, progress.TotalBooks);
+        Assert.Equal(RunTrigger.Scheduled, backend.Sort.GetStatus().Trigger);
+        Assert.Equal(1, final.Counts.UpToDate);
+        Assert.Equal(0, final.Counts.New);
     }
 
     [Fact]
-    public async Task TryStartSort_refuses_a_second_concurrent_run()
+    public async Task A_second_start_joins_the_run_already_going()
     {
         using var workspace = new TempWorkspace();
-        for (var i = 0; i < 60; i++)
-        {
-            workspace.WriteSourceFile($"book-{i}.m4b", new string('x', 300_000));
-        }
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200));
 
-        var csvPath = WriteCsv(
-            workspace,
-            Enumerable.Range(0, 60).Select(i => $"Book {i},Author,book-{i}").ToArray());
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Scheduled, new SortOptions { MaxParallelism = 1 }, out var first));
+        var startedAgain = backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var joined);
 
-        var service = new SortService();
-        Assert.True(service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out var first));
-
-        var startedAgain = service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out _);
-
-        await first;
         Assert.False(startedAgain);
+        Assert.Same(first, joined);
+        Assert.Equal(RunTrigger.Scheduled, (await first).Trigger);
     }
 
     [Fact]
     public async Task Parallel_start_attempts_only_ever_start_one_run()
     {
         using var workspace = new TempWorkspace();
-        for (var i = 0; i < 40; i++)
-        {
-            workspace.WriteSourceFile($"book-{i}.m4b", new string('x', 200_000));
-        }
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(40, 200_000));
 
-        var csvPath = WriteCsv(
-            workspace,
-            Enumerable.Range(0, 40).Select(i => $"Book {i},Author,book-{i}").ToArray());
-
-        var service = new SortService();
         var started = 0;
-        var tasks = new List<Task>();
+        var runs = new List<Task>();
 
         Parallel.For(0, 8, _ =>
         {
-            if (service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out var task))
+            if (backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var run))
             {
                 Interlocked.Increment(ref started);
-                lock (tasks)
+                lock (runs)
                 {
-                    tasks.Add(task);
+                    runs.Add(run);
                 }
             }
         });
 
-        await Task.WhenAll(tasks);
+        await Task.WhenAll(runs);
         Assert.Equal(1, started);
     }
 
     [Fact]
-    public async Task CancelSort_stops_a_running_sort_and_records_it()
+    public async Task While_running_the_latest_problems_are_sent_and_the_capped_list_once_finished()
     {
         using var workspace = new TempWorkspace();
-        for (var i = 0; i < 200; i++)
-        {
-            workspace.WriteSourceFile($"book-{i}.m4b", new string('x', 300_000));
-        }
+        var total = SortSummary.MaxReportedProblems + 20;
+        var rows = Enumerable.Range(0, total).Select(i => $"Missing {i},Author,missing-{i}").ToArray();
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv(rows));
 
-        var csvPath = WriteCsv(
-            workspace,
-            Enumerable.Range(0, 200).Select(i => $"Book {i},Author,book-{i}").ToArray());
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var run));
+        var final = await run;
 
-        var service = new SortService();
-        Assert.True(service.TryStartSort(csvPath, workspace.Source, workspace.Destination, out var sortTask));
+        Assert.Equal(SortSummary.MaxReportedProblems, final.Problems.Count);
+        Assert.Equal(SortSummary.MaxReportedProblems, backend.Sort.GetStatus().Problems.Count);
 
-        // Wait until the run is actually under way before cancelling it.
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (service.GetProgress().CurrentBook == 0 && DateTime.UtcNow < deadline)
-        {
-            await Task.Delay(10);
-        }
+        // Past the cap the kept list stops growing; a page following the run must still see the
+        // problems as they happen, not the same 20 from the 500th onwards.
+        var running = final with { State = RunState.Running };
+        var polled = running.ForPolling();
+        Assert.Equal(SortProgressInfo.RecentProblemLimit, polled.Problems.Count);
+        Assert.All(polled.Problems, problem => Assert.DoesNotContain(problem, final.Problems));
+        Assert.Equal(total, polled.ProblemCount);
+    }
 
-        Assert.True(service.CancelSort());
-        await sortTask;
+    [Fact]
+    public async Task CancelSort_stops_a_running_sort_and_keeps_what_it_did()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200));
 
-        var progress = service.GetProgress();
-        Assert.True(progress.IsComplete);
-        Assert.True(progress.IsCanceled);
-        Assert.False(service.IsSorting);
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, new SortOptions { MaxParallelism = 1 }, out var run));
+        await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the first book");
+
+        Assert.True(backend.Sort.CancelSort());
+        var final = await run;
+
+        Assert.Equal(RunState.Finished, final.State);
+        Assert.True(final.IsCanceled);
+        Assert.Null(final.Error);
+        Assert.True(final.CurrentBook > 0);
+        Assert.False(backend.Sort.IsSorting);
+    }
+
+    [Fact]
+    public async Task Closing_the_app_cancels_the_run_and_says_so()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200));
+
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, new SortOptions { MaxParallelism = 1 }, out var run));
+        await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the first book");
+
+        backend.Lifetime.StopApplication();
+        var final = await run;
+
+        Assert.True(final.IsCanceled);
+        Assert.Equal("Canceled because the app closed.", final.Error);
+    }
+
+    [Fact]
+    public async Task Closing_the_app_waits_for_a_sort_started_from_the_page_to_say_why_it_stopped()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200));
+
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, new SortOptions { MaxParallelism = 1 }, out _));
+        await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the first book");
+
+        // What the host does on docker stop: stopping cancels the run, then each hosted service is stopped.
+        backend.Lifetime.StopApplication();
+        await backend.Sort.StopAsync(CancellationToken.None);
+
+        // Nothing waited for it, so the process exited before the run said, or logged, why it ended.
+        var status = backend.Sort.GetStatus();
+        Assert.Equal(RunState.Finished, status.State);
+        Assert.Equal("Canceled because the app closed.", status.Error);
     }
 
     [Fact]
     public void CancelSort_returns_false_when_nothing_is_running()
     {
-        Assert.False(new SortService().CancelSort());
+        using var workspace = new TempWorkspace();
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv());
+
+        Assert.False(backend.Sort.CancelSort());
     }
 
     [Fact]
-    public async Task A_failing_sort_reports_the_error_instead_of_hanging()
+    public void Paths_that_cannot_work_are_refused_before_anything_starts()
     {
         using var workspace = new TempWorkspace();
-        var csvPath = WriteCsv(workspace, "The Hobbit,Tolkien,the-hobbit");
+        var missing = Path.Combine(workspace.Root, "unplugged");
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), destination: missing);
 
-        var service = new SortService();
-        Assert.True(service.TryStartSort(csvPath, Path.Combine(workspace.Root, "missing"), workspace.Destination, out var sortTask));
-        await sortTask;
+        var ex = Assert.Throws<SortPathException>(() => backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out _));
 
-        var progress = service.GetProgress();
-        Assert.True(progress.IsComplete);
-        Assert.False(string.IsNullOrWhiteSpace(progress.Error));
-        Assert.False(service.IsSorting);
+        Assert.Equal(SortPathProblemCode.DestinationMissing, ex.Problem.Code);
+        Assert.Equal(RunState.Idle, backend.Sort.GetStatus().State);
+        Assert.False(backend.Sort.IsSorting);
+        Assert.False(Directory.Exists(missing));
     }
 
     [Fact]
-    public async Task ParseBooks_reloads_when_the_csv_path_changes()
+    public async Task A_missing_destination_is_created_when_the_person_asked_for_it()
     {
         using var workspace = new TempWorkspace();
-        var firstCsv = WriteCsv(workspace, "Book One,Author,book-one");
-        var secondCsv = WriteCsv(workspace, "Book Two,Author,book-two");
+        workspace.WriteSourceFile("the-hobbit.m4b");
+        var missing = Path.Combine(workspace.Root, "new-destination");
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("The Hobbit,Tolkien,the-hobbit"), destination: missing);
 
-        var service = new SortService();
-        await service.ParseBooks(firstCsv);
-        Assert.Equal("Book One", service.GetBooks()[0].Title);
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, new SortOptions { CreateDestination = true }, out var run));
 
-        await service.ParseBooks(secondCsv);
-        Assert.Equal("Book Two", service.GetBooks()[0].Title);
+        Assert.Equal(1, (await run).Counts.New);
+        Assert.True(Directory.Exists(missing));
     }
 
     [Fact]
-    public async Task Sorting_a_different_csv_than_the_loaded_one_uses_the_requested_file()
+    public async Task ParseBooks_reads_the_export_in_the_settings()
+    {
+        using var workspace = new TempWorkspace();
+        var firstCsv = workspace.WriteCsv("Book One,Author,book-one");
+        var secondCsv = workspace.WriteCsv("Book Two,Author,book-two");
+        using var backend = new TestBackend(new ServerConfig());
+
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CsvPath = firstCsv }, out _));
+        await backend.Sort.ParseBooks();
+        Assert.Equal("Book One", backend.Sort.GetBooks()[0].Title);
+
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CsvPath = secondCsv }, out _));
+        await backend.Sort.ParseBooks();
+        Assert.Equal("Book Two", backend.Sort.GetBooks()[0].Title);
+    }
+
+    [Fact]
+    public async Task ParseBooks_without_an_export_says_which_setting_is_missing()
+    {
+        using var backend = new TestBackend(new ServerConfig());
+
+        var ex = await Assert.ThrowsAsync<SortPathException>(() => backend.Sort.ParseBooks());
+
+        Assert.Equal(SortPathField.Csv, ex.Problem.Field);
+        Assert.Equal(SortPathProblemCode.NotSet, ex.Problem.Code);
+    }
+
+    [Fact]
+    public async Task ParseBooks_is_allowed_while_a_sort_runs_and_the_run_keeps_its_own_list()
+    {
+        using var workspace = new TempWorkspace();
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(100));
+
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, new SortOptions { MaxParallelism = 1 }, out var run));
+        await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the first book");
+
+        var parsed = await backend.Sort.ParseBooks();
+
+        Assert.Equal(100, parsed.Books.Count);
+        Assert.Equal(100, (await run).TotalBooks);
+    }
+
+    [Fact]
+    public async Task Sorting_uses_the_export_in_the_settings_rather_than_the_one_loaded()
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("book-one.m4b");
         workspace.WriteSourceFile("book-two.m4b");
+        var loadedCsv = workspace.WriteCsv("Book One,Author,book-one");
+        var chosenCsv = workspace.WriteCsv("Book Two,Author,book-two");
+        using var backend = new TestBackend(new ServerConfig());
 
-        var loadedCsv = WriteCsv(workspace, "Book One,Author,book-one");
-        var requestedCsv = WriteCsv(workspace, "Book Two,Author,book-two");
+        Assert.True(backend.Settings.TryUpdate(
+            new AppSettingsPatch { CsvPath = loadedCsv, SourcePath = workspace.Source, DestinationPath = workspace.Destination }, out _));
+        await backend.Sort.ParseBooks();
+        Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CsvPath = chosenCsv }, out _));
 
-        var service = new SortService();
-        await service.ParseBooks(loadedCsv);
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var run));
+        await run;
 
-        Assert.True(service.TryStartSort(requestedCsv, workspace.Source, workspace.Destination, out var sortTask));
-        await sortTask;
-
-        Assert.Equal(["Author/Book Two.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["Author/Book Two/Book Two.m4b"], workspace.DestinationFiles());
     }
 
     [Fact]
@@ -249,17 +302,16 @@ public class SortServiceTests
 
         // OpenAudible writes over the same file every export, and a container's CSV_PATH never
         // changes at all, so "same path" cannot be taken to mean "same library".
-        var csv = WriteCsv(workspace, "Book One,Author,book-one");
-
-        var service = new SortService();
-        await service.ParseBooks(csv);
+        var csv = workspace.WriteCsv("Book One,Author,book-one");
+        using var backend = TestBackend.LockedTo(workspace, csv);
+        await backend.Sort.ParseBooks();
 
         await OverwriteCsv(csv, "Book One,Author,book-one", "Book Two,Author,book-two");
 
-        Assert.True(service.TryStartSort(csv, workspace.Source, workspace.Destination, out var sortTask));
-        await sortTask;
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var run));
+        await run;
 
-        Assert.Equal(["Author/Book One.m4b", "Author/Book Two.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["Author/Book One/Book One.m4b", "Author/Book Two/Book Two.m4b"], workspace.DestinationFiles());
     }
 
     [Fact]
@@ -267,19 +319,16 @@ public class SortServiceTests
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("book-one.m4b");
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteCsv("Book One,Author,book-one"));
+        await backend.Sort.ParseBooks();
+        var loaded = backend.Sort.GetBooks();
 
-        var csv = WriteCsv(workspace, "Book One,Author,book-one");
-
-        var service = new SortService();
-        await service.ParseBooks(csv);
-        var loaded = service.GetBooks();
-
-        Assert.True(service.TryStartSort(csv, workspace.Source, workspace.Destination, out var sortTask));
-        await sortTask;
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var run));
+        await run;
 
         // Same instance, not merely equal: an untouched file must not be read again, and the
         // library on screen must not be swapped out underneath the person looking at it.
-        Assert.Same(loaded, service.GetBooks());
+        Assert.Same(loaded, backend.Sort.GetBooks());
     }
 
     [Fact]
@@ -288,19 +337,33 @@ public class SortServiceTests
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("book-one.m4b");
         workspace.WriteSourceFile("book-two.m4b");
-
-        var csv = WriteCsv(workspace, "Book One,Author,book-one", "Book Two,Author,book-two");
-
-        var service = new SortService();
-        await service.ParseBooks(csv);
-        Assert.Equal(2, service.GetBooks().Count);
+        var csv = workspace.WriteCsv("Book One,Author,book-one", "Book Two,Author,book-two");
+        using var backend = TestBackend.LockedTo(workspace, csv);
+        await backend.Sort.ParseBooks();
+        Assert.Equal(2, backend.Sort.GetBooks().Count);
 
         await OverwriteCsv(csv, "Book Two,Author,book-two");
 
-        Assert.True(service.TryStartSort(csv, workspace.Source, workspace.Destination, out var sortTask));
-        await sortTask;
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var run));
+        await run;
 
-        Assert.Equal(["Author/Book Two.m4b"], workspace.DestinationFiles());
+        Assert.Equal(["Author/Book Two/Book Two.m4b"], workspace.DestinationFiles());
+    }
+
+    [Fact]
+    public async Task An_export_that_is_not_from_openaudible_fails_the_run_with_a_code()
+    {
+        using var workspace = new TempWorkspace();
+        var csv = Path.Combine(workspace.Root, "not-an-export.csv");
+        File.WriteAllText(csv, "Name,Colour\nApple,Red\n");
+        using var backend = TestBackend.LockedTo(workspace, csv);
+
+        Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var run));
+        var final = await run;
+
+        Assert.Equal(RunErrors.CsvInvalid, final.ErrorCode);
+        Assert.Equal("csvPath", final.ErrorField);
+        Assert.False(backend.Sort.IsSorting);
     }
 
     /// <summary>
@@ -313,12 +376,5 @@ public class SortServiceTests
         await Task.Delay(20);
         await File.WriteAllTextAsync(path, "Title,Author,File name\n" + string.Join("\n", rows) + "\n");
         File.SetLastWriteTimeUtc(path, DateTime.UtcNow);
-    }
-
-    private static string WriteCsv(TempWorkspace workspace, params string[] rows)
-    {
-        var path = Path.Combine(workspace.Root, $"{Guid.NewGuid():N}.csv");
-        File.WriteAllText(path, "Title,Author,File name\n" + string.Join("\n", rows) + "\n");
-        return path;
     }
 }

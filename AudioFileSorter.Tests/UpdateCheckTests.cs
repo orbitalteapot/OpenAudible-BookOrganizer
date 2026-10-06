@@ -14,16 +14,15 @@ public class UpdateCheckTests
     public async Task Either_mode_replaces_a_book_whose_size_changed(FileComparisonMode mode)
     {
         using var workspace = new TempWorkspace();
+        await SortedEarlier(workspace, "a-book.m4b", "old");
         workspace.WriteSourceFile("a-book.m4b", "the-re-recorded-and-longer-edition");
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "old");
 
         var summary = await Sort(workspace, mode, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(1, summary.UpdatedBooks);
+        Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
         Assert.Equal(
             "the-re-recorded-and-longer-edition",
-            File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book.m4b")));
+            File.ReadAllText(Path.Combine(workspace.Destination, "An Author", "A Book", "A Book.m4b")));
     }
 
     [Theory]
@@ -33,15 +32,13 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var content = new string('x', 300_000);
+        var destination = await SortedEarlier(workspace, "a-book.m4b", content);
         workspace.WriteSourceFile("a-book.m4b", content);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), content);
         var writtenAt = File.GetLastWriteTimeUtc(destination);
 
         var summary = await Sort(workspace, mode, TempWorkspace.Book());
 
-        Assert.Equal(0, summary.CopiedBooks);
-        Assert.Equal(0, summary.UpdatedBooks);
-        Assert.Equal(1, summary.SkippedBooks);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
         Assert.Equal(writtenAt, File.GetLastWriteTimeUtc(destination));
     }
 
@@ -55,13 +52,12 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
+        var destination = await SortedEarlier(workspace, "a-book.m4b", original);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
 
-        Assert.Equal(0, summary.CopiedBooks);
-        Assert.Equal(1, summary.SkippedBooks);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
         Assert.Equal(original, File.ReadAllText(destination));
     }
 
@@ -78,13 +74,12 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditInWindow(window);
+        var destination = await SortedEarlier(workspace, "a-book.m4b", original);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(1, summary.UpdatedBooks);
+        Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
         Assert.Equal(edited, File.ReadAllText(destination));
     }
 
@@ -93,14 +88,12 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
+        var destination = await SortedEarlier(workspace, "a-book.m4b", original);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(1, summary.UpdatedBooks);
-        Assert.Equal(0, summary.FailedBooks);
+        Assert.Equal(SortCounts.Empty with { Updated = 1 }, summary.Counts);
         Assert.Equal(edited, File.ReadAllText(destination));
     }
 
@@ -110,26 +103,24 @@ public class UpdateCheckTests
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
         workspace.WriteSourceFile("a-book.m4b", "audio");
+        var destinationPdf = await SortedEarlier(workspace, "a-book.pdf", original);
         workspace.WriteSourceFile("a-book.pdf", edited);
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), "audio");
-        var destinationPdf = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.pdf"), original);
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.UpdatedBooks);
+        Assert.Equal(1, summary.Counts.Updated);
         Assert.Equal(edited, File.ReadAllText(destinationPdf));
     }
 
     [Fact]
-    public async Task A_brand_new_book_counts_as_copied_but_not_as_updated()
+    public async Task A_brand_new_book_counts_as_new_not_as_updated()
     {
         using var workspace = new TempWorkspace();
         workspace.WriteSourceFile("a-book.m4b", "audio");
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.CopiedBooks);
-        Assert.Equal(0, summary.UpdatedBooks);
+        Assert.Equal(SortCounts.Empty with { New = 1 }, summary.Counts);
     }
 
     [Fact]
@@ -137,13 +128,13 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
+        var destination = await SortedEarlier(workspace, "a-book.m4b", original);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
 
         var summary = await new FileSorter().SortAudioFiles(
             workspace.Source, workspace.Destination, [TempWorkspace.Book()]);
 
-        Assert.Equal(0, summary.CopiedBooks);
+        Assert.Equal(SortCounts.Empty with { UpToDate = 1 }, summary.Counts);
         Assert.Equal(original, File.ReadAllText(destination));
     }
 
@@ -152,8 +143,8 @@ public class UpdateCheckTests
     {
         using var workspace = new TempWorkspace();
         var (original, edited) = TempWorkspace.SameSizeEditedPair();
+        await SortedEarlier(workspace, "a-book.m4b", original);
         workspace.WriteSourceFile("a-book.m4b", edited);
-        workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), original);
 
         var reports = new List<SortProgressInfo>();
         await new FileSorter().SortAudioFiles(
@@ -163,8 +154,8 @@ public class UpdateCheckTests
             new SortOptions { ComparisonMode = FileComparisonMode.Full },
             new InlineTestProgress(reports.Add));
 
-        Assert.Contains(reports, report => report.UpdatedBooks == 1);
-        Assert.Equal(1, reports[^1].UpdatedBooks);
+        Assert.Contains(reports, report => report.Counts.Updated == 1);
+        Assert.Equal(1, reports[^1].Counts.Updated);
     }
 
     /// <summary>
@@ -242,7 +233,7 @@ public class UpdateCheckTests
         await cancellation.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            FileSorter.AreFilesIdenticalAsync(first, second, cancellation.Token));
+            FileComparison.AreIdenticalAsync(first, second, cancellation.Token));
     }
 
     [Fact]
@@ -253,7 +244,7 @@ public class UpdateCheckTests
         var first = workspace.WriteSourceFile("a-book.m4b", content);
         var second = workspace.WriteDestinationFile("copy.m4b", content);
 
-        Assert.True(await FileSorter.AreFilesIdenticalAsync(first, second, CancellationToken.None));
+        Assert.True(await FileComparison.AreIdenticalAsync(first, second, CancellationToken.None));
     }
 
     [Fact]
@@ -263,7 +254,7 @@ public class UpdateCheckTests
         var first = workspace.WriteSourceFile("a-book.m4b", new string('z', 2_000_000) + "end-a");
         var second = workspace.WriteDestinationFile("copy.m4b", new string('z', 2_000_000) + "end-b");
 
-        Assert.False(await FileSorter.AreFilesIdenticalAsync(first, second, CancellationToken.None));
+        Assert.False(await FileComparison.AreIdenticalAsync(first, second, CancellationToken.None));
     }
 
     [Fact]
@@ -290,12 +281,12 @@ public class UpdateCheckTests
     public async Task Full_mode_still_replaces_a_truncated_destination()
     {
         using var workspace = new TempWorkspace();
+        var destination = await SortedEarlier(workspace, "a-book.m4b", new string('y', 40_000));
         workspace.WriteSourceFile("a-book.m4b", new string('y', 100_000));
-        var destination = workspace.WriteDestinationFile(Path.Combine("An Author", "A Book.m4b"), new string('y', 40_000));
 
         var summary = await Sort(workspace, FileComparisonMode.Full, TempWorkspace.Book());
 
-        Assert.Equal(1, summary.UpdatedBooks);
+        Assert.Equal(1, summary.Counts.Updated);
         Assert.Equal(100_000, new FileInfo(destination).Length);
     }
 
@@ -336,6 +327,18 @@ public class UpdateCheckTests
         Assert.Equal(expected, SortOptions.ToWireValue(mode));
         Assert.True(SortOptions.TryParseComparisonMode(SortOptions.ToWireValue(mode), out var parsed));
         Assert.Equal(mode, parsed);
+    }
+
+    /// <summary>
+    /// Puts <paramref name="content"/> in the destination the way it gets there for real: sorted from
+    /// the source, so the destination's record says the file is the book's. Only a book's own copy is
+    /// ever replaced; a file that is merely there is left alone (see FileSorterTests).
+    /// </summary>
+    private static async Task<string> SortedEarlier(TempWorkspace workspace, string sourceName, string content)
+    {
+        workspace.WriteSourceFile(sourceName, content);
+        await Sort(workspace, FileComparisonMode.Quick, TempWorkspace.Book());
+        return Path.Combine(workspace.Destination, "An Author", "A Book", "A Book" + Path.GetExtension(sourceName));
     }
 
     private static Task<SortSummary> Sort(TempWorkspace workspace, FileComparisonMode mode, params OpenAudible[] books)

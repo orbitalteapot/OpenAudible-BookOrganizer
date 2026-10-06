@@ -14,6 +14,8 @@ public class PathSanitizerTests
     [InlineData("Pipe|Test", "PipeTest")]
     [InlineData("Trailing dots...", "Trailing dots")]
     [InlineData("Trailing space   ", "Trailing space")]
+    [InlineData("...And Ladies of the Club", "And Ladies of the Club")]
+    [InlineData(". . . Hidden", "Hidden")]
     public void SanitizeSegment_removes_characters_that_are_invalid_on_any_supported_platform(string input, string expected)
     {
         Assert.Equal(expected, PathSanitizer.SanitizeSegment(input));
@@ -115,6 +117,18 @@ public class PathSanitizerTests
     public void NormalizeComparisonKey_ignores_punctuation_and_case(string first, string second)
     {
         Assert.Equal(PathSanitizer.NormalizeComparisonKey(first), PathSanitizer.NormalizeComparisonKey(second));
+    }
+
+    [Fact]
+    public void Comparison_keys_match_a_name_whatever_the_disk_does_with_its_accents()
+    {
+        // "é" as one character (as exports spell it) and as "e" + a combining accent (as HFS+ stores it).
+        const string composed = "Caf\u00e9 Stories";
+        const string decomposed = "Cafe\u0301 Stories";
+
+        Assert.Equal(PathSanitizer.NormalizeComparisonKey(composed), PathSanitizer.NormalizeComparisonKey(decomposed));
+        Assert.Equal(PathSanitizer.NormalizeSeriesKey(composed), PathSanitizer.NormalizeSeriesKey(decomposed));
+        Assert.NotEqual(PathSanitizer.NormalizeComparisonKey("Cafe Stories"), PathSanitizer.NormalizeComparisonKey(composed));
     }
 
     [Theory]

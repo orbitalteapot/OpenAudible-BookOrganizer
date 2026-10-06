@@ -10,4 +10,9 @@ module.exports = defineConfig({
   build: {
     outDir: 'dist',
   },
+  test: {
+    // Hook and page tests render React; the pure-function tests do not mind the DOM being there.
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.js'],
+  },
 });

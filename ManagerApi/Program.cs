@@ -1,5 +1,9 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using AudioFileSorter;
 using AudioFileSorter.Model;
 using ManagerApi.Services;
+using Microsoft.AspNetCore.HostFiltering;
 
 // Pin the content root to where the binary actually lives. The default is the current working
 // directory, which is fine for the container (WORKDIR is the app) but arbitrary for the desktop
@@ -12,39 +16,77 @@ var builder = WebApplication.CreateBuilder(new WebApplicationOptions
     ContentRootPath = AppContext.BaseDirectory
 });
 
-var csvPath = Environment.GetEnvironmentVariable("CSV_PATH") ?? string.Empty;
-var sourcePath = Environment.GetEnvironmentVariable("SOURCE_PATH") ?? string.Empty;
-var destinationPath = Environment.GetEnvironmentVariable("DESTINATION_PATH") ?? string.Empty;
+// The framework logs six lines at Information for every request, and the page polls several times
+// a second during a sort: that buried the startup summary and the run results the README says to
+// read in "docker logs", and grew the log without end. Its warnings and errors still get through.
+builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
 
-// COMPARISON_MODE is the server-wide default: a container can be set up to verify contents on
-// every run, and a request that names a mode explicitly still wins.
-var configuredComparisonMode = Environment.GetEnvironmentVariable("COMPARISON_MODE");
-if (!SortOptions.TryParseComparisonMode(configuredComparisonMode, out var defaultComparisonMode))
-{
-    Console.Error.WriteLine(
-        $"Ignoring COMPARISON_MODE=\"{configuredComparisonMode}\": expected \"quick\" or \"full\". Using \"quick\".");
-    defaultComparisonMode = SortOptions.Default.ComparisonMode;
-}
+// Read once, here. Everything else takes it from the container, so a test can swap in its own.
+var serverConfig = ServerConfig.FromEnvironment();
 
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
     {
-        policy.WithOrigins("http://localhost:5173")
+        policy.WithOrigins(LocalRequestGuard.DevServerOrigins)
               .AllowAnyMethod()
               .AllowAnyHeader();
     });
 });
 
-builder.Services.AddSingleton<SortService>();
+// Enums go over the wire as the page spells them: "running", "scheduled", "notFound".
+builder.Services.ConfigureHttpJsonOptions(options =>
+    options.SerializerOptions.Converters.Add(new JsonStringEnumConverter(JsonNamingPolicy.CamelCase)));
 
-builder.WebHost.UseUrls(Environment.GetEnvironmentVariable("ASPNETCORE_URLS") ?? "http://0.0.0.0:5123");
+builder.Services.AddSingleton(serverConfig);
+builder.Services.AddSingleton(TimeProvider.System);
+builder.Services.AddSingleton(services => new SettingsStore(
+    services.GetRequiredService<ServerConfig>().SettingsPath,
+    services.GetRequiredService<ILogger<SettingsStore>>()));
+builder.Services.AddSingleton<SettingsService>();
+builder.Services.AddSingleton<SortService>();
+builder.Services.AddHostedService(services => services.GetRequiredService<SortService>());
+builder.Services.AddSingleton<SortScheduler>();
+builder.Services.AddHostedService(services => services.GetRequiredService<SortScheduler>());
+builder.Services.AddHostedService<ParentProcessWatch>();
+
+// The desktop backend only answers to its own names, so a web site cannot rebind one of its own
+// to 127.0.0.1 and read the library. Read from the registered ServerConfig, so a test's own applies.
+builder.Services.AddOptions<HostFilteringOptions>().Configure<ServerConfig>((options, config) =>
+{
+    if (config.IsLoopbackOnly)
+    {
+        options.AllowedHosts = LocalRequestGuard.AllowedHosts;
+    }
+});
+
+builder.WebHost.UseUrls(serverConfig.BindUrl);
 
 var app = builder.Build();
 
 var logger = app.Logger;
+var config = app.Services.GetRequiredService<ServerConfig>();
+config.Log(logger);
+
+using var settingsLock = SettingsFileLock.Acquire(config.SettingsPath, logger);
+if (settingsLock is null)
+{
+    return SettingsFileLock.InUseExitCode;
+}
 
 app.UseCors();
+
+app.Use(async (context, next) =>
+{
+    if (LocalRequestGuard.Refusal(context.Request, checkOrigin: config.IsLoopbackOnly) is { } refusal)
+    {
+        context.Response.StatusCode = refusal.Status;
+        await context.Response.WriteAsJsonAsync(new { error = refusal.Error });
+        return;
+    }
+
+    await next(context);
+});
 
 // The desktop app ships the backend without a wwwroot: its window loads the interface straight
 // off disk, and the backend is only an API. Only wire up static hosting when there is something
@@ -63,28 +105,25 @@ else
 
 app.MapGet("/api/health", () => Results.Ok(new { status = "ok" }));
 
-app.MapGet("/api/config", () => Results.Ok(new
-{
-    csvPath,
-    sourcePath,
-    destinationPath,
-    webMode = true,
-    comparisonMode = SortOptions.ToWireValue(defaultComparisonMode),
-    csvExists = !string.IsNullOrWhiteSpace(csvPath) && File.Exists(csvPath),
-    sourceExists = !string.IsNullOrWhiteSpace(sourcePath) && Directory.Exists(sourcePath),
-    destinationExists = !string.IsNullOrWhiteSpace(destinationPath) && Directory.Exists(destinationPath)
-}));
+app.MapGet("/api/settings", (SettingsService settings) => Results.Ok(SettingsResponse.From(settings)));
 
-app.MapPost("/api/books/parse", async (ParseRequest? request, SortService sortService, CancellationToken cancellationToken) =>
+app.MapPut("/api/settings", (AppSettingsPatch? patch, SettingsService settings) =>
 {
-    if (request is null || string.IsNullOrWhiteSpace(request.CsvPath))
+    if (patch is null)
     {
-        return Results.BadRequest(new { error = "CSV path is required" });
+        return Results.BadRequest(new { error = "Send the settings to change.", field = (string?)null });
     }
 
+    return settings.TryUpdate(patch, out var error)
+        ? Results.Ok(SettingsResponse.From(settings))
+        : Results.BadRequest(new { error = error!.Message, field = error.Field, code = error.Code });
+});
+
+app.MapPost("/api/books/parse", async (SortService sortService, CancellationToken cancellationToken) =>
+{
     try
     {
-        var result = await sortService.ParseBooks(request.CsvPath, cancellationToken);
+        var result = await sortService.ParseBooks(cancellationToken);
 
         foreach (var warning in result.Warnings)
         {
@@ -98,10 +137,17 @@ app.MapPost("/api/books/parse", async (ParseRequest? request, SortService sortSe
             warnings = result.Warnings
         });
     }
-    catch (Exception ex) when (ex is FileNotFoundException or ArgumentException or InvalidDataException or InvalidOperationException)
+    catch (SortPathException ex)
     {
-        logger.LogWarning(ex, "Failed to parse {CsvPath}", request.CsvPath);
-        return Results.BadRequest(new { error = ex.Message });
+        return Results.BadRequest(RunErrors.Body(ex));
+    }
+    catch (FileNotFoundException ex)
+    {
+        return CsvError(ex.Message, RunErrors.CsvNotFound);
+    }
+    catch (InvalidDataException ex)
+    {
+        return CsvError(ex.Message, RunErrors.CsvInvalid);
     }
     catch (OperationCanceledException)
     {
@@ -109,90 +155,58 @@ app.MapPost("/api/books/parse", async (ParseRequest? request, SortService sortSe
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Unexpected error parsing {CsvPath}", request.CsvPath);
-        return Results.BadRequest(new { error = $"Could not read the CSV file: {ex.Message}" });
+        logger.LogError(ex, "Unexpected error reading the library export");
+        return CsvError($"Could not read the CSV file: {ex.Message}", RunErrors.CsvInvalid);
     }
 });
 
 app.MapGet("/api/books", (SortService sortService) => Results.Ok(sortService.GetBooks()));
 
-app.MapPost("/api/sort/start", (SortRequest? request, SortService sortService) =>
+app.MapPost("/api/sort/start", (StartSortRequest? request, SortService sortService, SettingsService settings) =>
 {
-    if (request is null ||
-        string.IsNullOrWhiteSpace(request.CsvPath) ||
-        string.IsNullOrWhiteSpace(request.SourcePath) ||
-        string.IsNullOrWhiteSpace(request.DestinationPath))
+    // An omitted mode means the saved one, so a run started from anywhere does what the page shows.
+    FileComparisonMode? comparisonMode = null;
+    if (!string.IsNullOrWhiteSpace(request?.ComparisonMode))
     {
-        return Results.BadRequest(new { error = "All paths are required" });
-    }
-
-    // An omitted mode means "whatever this server is configured for", so a container started with
-    // COMPARISON_MODE=full verifies contents even for callers that never heard of the setting.
-    var comparisonMode = defaultComparisonMode;
-    if (!string.IsNullOrWhiteSpace(request.ComparisonMode) &&
-        !SortOptions.TryParseComparisonMode(request.ComparisonMode, out comparisonMode))
-    {
-        return Results.BadRequest(new
+        if (!SortOptions.TryParseComparisonMode(request.ComparisonMode, out var requested))
         {
-            error = $"Unknown comparison mode \"{request.ComparisonMode}\". Use \"quick\" or \"full\"."
-        });
+            return Results.BadRequest(new
+            {
+                error = $"Unknown update check \"{request.ComparisonMode}\". Use \"quick\" or \"full\".",
+                code = RunErrors.InvalidComparisonMode,
+                field = "comparisonMode"
+            });
+        }
+
+        comparisonMode = requested;
     }
 
-    // Validate before starting so the user gets a real error instead of a run that reports
-    // failure seconds later, or worse, never reports at all.
-    if (!File.Exists(request.CsvPath))
-    {
-        return Results.BadRequest(new { error = $"CSV file not found: {request.CsvPath}" });
-    }
-
-    if (!Directory.Exists(request.SourcePath))
-    {
-        return Results.BadRequest(new { error = $"Source folder not found: {request.SourcePath}" });
-    }
-
+    // A person pressed Start, so a missing destination is created — but only once they have been
+    // asked: the page sends createDestination after "The destination folder doesn't exist" is confirmed.
+    var options = settings.SortOptionsFor(request?.CreateDestination ?? false, comparisonMode);
     try
     {
-        Directory.CreateDirectory(request.DestinationPath);
+        return sortService.TryStartSort(RunTrigger.Manual, options, out _, request?.ConfirmUnmounted ?? false)
+            ? Results.Accepted(value: sortService.GetStatus())
+            : Results.Conflict(new { error = "A sort is already running.", code = RunErrors.AlreadyRunning });
     }
-    catch (Exception ex)
+    catch (SortPathException ex)
     {
-        return Results.BadRequest(new { error = $"Destination folder is not writable: {ex.Message}" });
+        return Results.BadRequest(RunErrors.Body(ex));
     }
-
-    if (PathsOverlap(request.SourcePath, request.DestinationPath))
-    {
-        return Results.BadRequest(new
-        {
-            error = "The destination folder cannot be the source folder or live inside it."
-        });
-    }
-
-    // Checking IsSorting separately would leave a window where two requests both start a run.
-    var options = new SortOptions { ComparisonMode = comparisonMode };
-    if (!sortService.TryStartSort(request.CsvPath, request.SourcePath, request.DestinationPath, options, out var sortTask))
-    {
-        return Results.Conflict(new { error = "Sort already in progress" });
-    }
-
-    _ = sortTask.ContinueWith(
-        t => logger.LogError(t.Exception, "Sort task faulted"),
-        TaskContinuationOptions.OnlyOnFaulted);
-
-    return Results.Ok(new
-    {
-        message = "Sort started",
-        comparisonMode = SortOptions.ToWireValue(comparisonMode)
-    });
 });
 
-app.MapGet("/api/sort/progress", (SortService sortService) => Results.Ok(sortService.GetProgress()));
+app.MapGet("/api/sort/progress", (SortService sortService) => Results.Ok(sortService.GetStatus()));
 
-app.MapPost("/api/sort/cancel", (SortService sortService) =>
+app.MapPost("/api/sort/cancel", (CancelSortRequest? request, SortService sortService) =>
 {
-    return sortService.CancelSort()
+    var appClosing = string.Equals(request?.Reason, CancelSortRequest.AppClosing, StringComparison.Ordinal);
+    return sortService.CancelSort(appClosing)
         ? Results.Ok(new { message = "Sort cancellation requested" })
         : Results.BadRequest(new { error = "No sort is currently running" });
 });
+
+app.MapGet("/api/schedule", (SortScheduler scheduler) => Results.Ok(scheduler.GetStatus()));
 
 if (servesWebUi)
 {
@@ -200,30 +214,29 @@ if (servesWebUi)
 }
 
 app.Run();
+return 0;
 
-// Copying a library into itself (or into a subfolder of itself) makes the source grow while it is
-// being read, which never terminates cleanly.
-static bool PathsOverlap(string sourcePath, string destinationPath)
+static IResult CsvError(string message, string code)
 {
-    try
-    {
-        var source = Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourcePath));
-        var destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destinationPath));
-        var comparison = OperatingSystem.IsLinux() ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-
-        return string.Equals(source, destination, comparison) ||
-               destination.StartsWith(source + Path.DirectorySeparatorChar, comparison);
-    }
-    catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-    {
-        return false;
-    }
+    return Results.BadRequest(new { error = message, code, field = RunErrors.CsvPathField });
 }
 
-record ParseRequest(string CsvPath);
+/// <param name="ComparisonMode">"quick" or "full" for this run only. Omitted means the saved setting.</param>
+/// <param name="CreateDestination">Create a missing destination folder; sent once the user has agreed to it.</param>
+/// <param name="ConfirmUnmounted">
+/// Sort into a destination that no longer holds the marker earlier sorts left in it; sent once the
+/// user has agreed to it (see <see cref="SortService.TryStartSort"/>).
+/// </param>
+record StartSortRequest(string? ComparisonMode = null, bool CreateDestination = false, bool ConfirmUnmounted = false);
 
-/// <param name="ComparisonMode">"quick" or "full". Omitted means the server default.</param>
-record SortRequest(string CsvPath, string SourcePath, string DestinationPath, string? ComparisonMode = null);
+/// <param name="Reason">
+/// <see cref="AppClosing"/> when the desktop app is quitting ("Stop sorting and quit"), which
+/// automatic sorting tries again soon; omitted when a person cancels.
+/// </param>
+record CancelSortRequest(string? Reason = null)
+{
+    public const string AppClosing = "appClosing";
+}
 
 /// <summary>Exposed so the integration tests can drive the real application host.</summary>
 public partial class Program;

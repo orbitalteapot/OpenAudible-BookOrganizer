@@ -9,7 +9,8 @@ namespace AudioFileSorter;
 /// </summary>
 public static class SourceFileLocator
 {
-    private static readonly string[] AudioExtensions = [".m4b", ".mp3", ".m4a"];
+    /// <summary>Every audio format a book's file can have.</summary>
+    internal static readonly string[] AudioExtensions = [".m4b", ".mp3", ".m4a"];
 
     /// <summary>Locates the audio file for a book, or null when none of the candidates exist.</summary>
     public static string? FindAudioFile(OpenAudible book, string sourceRoot)
@@ -25,6 +26,17 @@ public static class SourceFileLocator
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Whether the book's audio file is there but empty, which <see cref="FindAudioFile"/> does not
+    /// count as the book: see <see cref="FileExists"/>.
+    /// </summary>
+    public static bool HasEmptyAudioFile(OpenAudible book, string sourceRoot)
+    {
+        ArgumentNullException.ThrowIfNull(book);
+
+        return GetAudioCandidates(book, sourceRoot).Any(candidate => Length(candidate) == 0);
     }
 
     /// <summary>Locates the companion PDF for a book, or null when there is none.</summary>
@@ -215,16 +227,28 @@ public static class SourceFileLocator
                AudioExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Whether <paramref name="path"/> is a file with something in it. An empty one is what OpenAudible
+    /// leaves while a download or a conversion is still going, or after one failed: taken for the
+    /// book, it would be copied over the good copy in the library.
+    /// </summary>
     private static bool FileExists(string path)
+    {
+        return Length(path) > 0;
+    }
+
+    /// <summary>The size of the file at <paramref name="path"/>, or null when there is none.</summary>
+    private static long? Length(string path)
     {
         try
         {
-            return File.Exists(path);
+            var info = new FileInfo(path);
+            return info.Exists ? info.Length : null;
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException or IOException or UnauthorizedAccessException)
         {
             // A malformed candidate is simply not a match; it must never abort the whole sort.
-            return false;
+            return null;
         }
     }
 }

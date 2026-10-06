@@ -1,4 +1,4 @@
-import { useId, useLayoutEffect, useRef } from 'react';
+import { forwardRef, useId, useLayoutEffect, useRef } from 'react';
 
 /**
  * A labelled control. The label is bound to the control by id rather than by wrapping, so the
@@ -7,21 +7,40 @@ import { useId, useLayoutEffect, useRef } from 'react';
  * Set `group` when the child is a composite (a radiogroup, say) rather than a single form control:
  * a <label for> pointing at a group is not a valid association, and the group carries its own
  * accessible name instead.
+ *
+ * `description` says what the setting is for, under the label; `hint` says how it stands (a status,
+ * why it is disabled), under the control.
+ *
+ * `children(id, describedBy)`: the control takes `id` and puts `describedBy` in its aria-describedby,
+ * so the description and the hint are read out with it. `describedBy` is undefined when there is
+ * neither.
  */
-export function Field({ label, hint, group = false, children, className = '' }) {
+export function Field({ label, description, hint, group = false, children, className = '' }) {
   const id = useId();
+  const descriptionId = description ? `${id}-description` : undefined;
+  const hintId = hint ? `${id}-hint` : undefined;
+  const describedBy = [descriptionId, hintId].filter(Boolean).join(' ') || undefined;
 
   return (
     <div className={className}>
       {group ? (
-        <span className="mb-1.5 block text-xs font-medium text-fg-muted">{label}</span>
+        <span className="mb-2 block text-xs font-medium text-fg-muted">{label}</span>
       ) : (
-        <label htmlFor={id} className="mb-1.5 block text-xs font-medium text-fg-muted">
+        <label htmlFor={id} className="mb-2 block text-xs font-medium text-fg-muted">
           {label}
         </label>
       )}
-      {children(id)}
-      {hint && <p className="mt-1.5 text-2xs text-fg-subtle">{hint}</p>}
+      {description && (
+        <p id={descriptionId} className="-mt-1 mb-2 text-2xs text-fg-subtle">
+          {description}
+        </p>
+      )}
+      {children(id, describedBy)}
+      {hint && (
+        <div id={hintId} className="mt-2 text-2xs text-fg-subtle">
+          {hint}
+        </div>
+      )}
     </div>
   );
 }
@@ -34,7 +53,7 @@ export function Field({ label, hint, group = false, children, className = '' }) 
  * `direction: rtl`, which does keep the tail in view but reorders the leading separator to the
  * wrong end, rendering "/home/me/books.csv" as "home/me/books.csv/".
  */
-export function PathInput({ id, value, placeholder, icon: Icon, invalid = false }) {
+export function PathInput({ id, value, placeholder, icon: Icon, invalid = false, describedBy }) {
   const inputRef = useRef(null);
 
   useLayoutEffect(() => {
@@ -56,21 +75,23 @@ export function PathInput({ id, value, placeholder, icon: Icon, invalid = false 
         id={id}
         type="text"
         readOnly
-        value={value}
+        value={value ?? ''}
         placeholder={placeholder}
+        aria-invalid={invalid || undefined}
+        aria-describedby={describedBy}
         title={value || undefined}
         className={[
           'h-control w-full rounded border bg-surface pr-3 text-sm text-fg-muted',
           'placeholder:text-fg-subtle',
           Icon ? 'pl-9' : 'pl-3',
-          invalid ? 'border-critical/50' : 'border-line',
+          invalid ? 'border-critical' : 'border-line-strong',
         ].join(' ')}
       />
     </div>
   );
 }
 
-export function TextInput({ id, icon: Icon, className = '', ...props }) {
+export const TextInput = forwardRef(function TextInput({ id, icon: Icon, className = '', ...props }, ref) {
   return (
     <div className={`relative ${className}`}>
       {Icon && (
@@ -81,15 +102,15 @@ export function TextInput({ id, icon: Icon, className = '', ...props }) {
         />
       )}
       <input
+        ref={ref}
         id={id}
         className={[
-          'h-control w-full rounded border border-line bg-surface pr-3 text-sm text-fg',
+          'h-control w-full rounded border border-line-strong bg-surface pr-3 text-sm text-fg',
           'placeholder:text-fg-subtle',
-          'focus:border-accent/60',
           Icon ? 'pl-9' : 'pl-3',
         ].join(' ')}
         {...props}
       />
     </div>
   );
-}
+});

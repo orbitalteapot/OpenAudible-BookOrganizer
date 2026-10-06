@@ -1,5 +1,5 @@
-using System.Buffers;
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,256 +8,524 @@ using AudioFileSorter.Model;
 namespace AudioFileSorter;
 
 /// <summary>
-/// Copies an OpenAudible library into an Author / Series / Book folder structure.
+/// Copies an OpenAudible library into an Author / Series / Book folder structure, one folder per book.
 /// </summary>
 public class FileSorter
 {
-    private const int MaxReportedWarnings = 200;
     private const int CopyBufferSize = 81920;
-    private const int ComparisonBufferSize = 131072;
     private const string PartialFileSuffix = ".oabo-partial";
+    private const string NotFoundMessage = "No audio file for this book in the source folder";
 
-    private static readonly object ConsoleLock = new();
+    /// <summary>What problems about the destination as a whole, rather than one book, are listed under.</summary>
+    private const string DestinationProblemSubject = "Destination folder";
 
     /// <summary>
-    /// Sorts Open Audible books into the provided destination path.
+    /// Sorts Open Audible books into the provided destination path, going by and then updating the
+    /// record of which book is in which folder that sorts keep there (see <see cref="LibraryManifest"/>).
     /// </summary>
     /// <param name="source">Source folder containing audio files.</param>
     /// <param name="destination">Destination folder to sort files into.</param>
-    /// <param name="openAudibles">List of audiobook metadata. Never modified.</param>
+    /// <param name="books">List of audiobook metadata. Never modified.</param>
     /// <param name="options">Per-run settings. Defaults to <see cref="SortOptions.Default"/>.</param>
-    /// <param name="progress">Optional progress reporter.</param>
+    /// <param name="progress">
+    /// Optional progress reporter, called once after planning and once per finished book. Reports
+    /// are made in order from the worker threads, so the handler should be quick.
+    /// </param>
     /// <param name="cancellationToken">Token used to abort the run.</param>
-    /// <exception cref="ArgumentException">A required path was not supplied.</exception>
-    /// <exception cref="DirectoryNotFoundException">The source folder does not exist.</exception>
-    /// <exception cref="IOException">The destination folder could not be created.</exception>
+    /// <exception cref="SortPathException">The paths cannot be used; see <see cref="SortPathValidator"/>.</exception>
+    /// <exception cref="IOException">
+    /// The destination's record of its books cannot be read right now (see <see cref="LibraryManifest.Load"/>),
+    /// or cannot be brought up to date before sorting (see <see cref="SaveBeforeSorting"/>). Nothing was sorted.
+    /// </exception>
     public async Task<SortSummary> SortAudioFiles(
-        string? source,
-        string? destination,
-        List<OpenAudible> openAudibles,
+        string source,
+        string destination,
+        IReadOnlyList<OpenAudible> books,
         SortOptions? options = null,
         IProgress<SortProgressInfo>? progress = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(openAudibles);
-
-        var comparisonMode = (options ?? SortOptions.Default).ComparisonMode;
+        ArgumentNullException.ThrowIfNull(books);
+        options ??= SortOptions.Default;
 
         // These used to be logged and swallowed, which left the UI waiting for a run that was
         // never going to report anything.
-        if (string.IsNullOrWhiteSpace(source))
+        var pathProblem = SortPathValidator.Validate(null, source, destination, options.CreateDestination);
+        if (pathProblem is not null)
         {
-            throw new ArgumentException("Source path is required.", nameof(source));
+            throw new SortPathException(pathProblem);
         }
 
-        if (string.IsNullOrWhiteSpace(destination))
+        var destinationRoot = Path.GetFullPath(destination);
+        var manifest = LibraryManifest.Load(destinationRoot);
+        SaveBeforeSorting(manifest);
+        var tally = new RunTally(books.Count, progress);
+        if (manifest.Problem is not null)
         {
-            throw new ArgumentException("Destination path is required.", nameof(destination));
+            tally.AddProblem(new SortProblem(SortProblemKind.Warning, DestinationProblemSubject, manifest.Problem));
         }
 
-        if (!Directory.Exists(source))
+        var attempted = new ConcurrentBag<Attempt>();
+        var vacatedFolders = new ConcurrentBag<string>();
+        var ownership = new FileOwnership(manifest);
+        try
         {
-            throw new DirectoryNotFoundException($"Source folder not found: {source}");
+            var planner = new SortPlanner();
+            var planned = planner.Plan(books, source, destinationRoot, manifest, cancellationToken);
+
+            foreach (var item in planned.Where(item => item.HasWork && item.Warning is not null))
+            {
+                tally.AddProblem(new SortProblem(SortProblemKind.Warning, item.Title, item.Warning!));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            tally.ReportStart();
+
+            var parallelOptions = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = options.MaxParallelism,
+                CancellationToken = cancellationToken
+            };
+
+            await Parallel.ForEachAsync(planned, parallelOptions, async (item, ct) =>
+            {
+                // Before its files move, whatever then comes of it: a book whose copy fails or is
+                // cancelled once its files are in its new folder is in that folder, and the record
+                // has to say so, or a later book of its title may be given it.
+                var attempt = new Attempt(item);
+                if (item.HasWork)
+                {
+                    attempted.Add(attempt);
+                }
+
+                var (outcome, problem) = await SortBookAsync(attempt, options.ComparisonMode, ownership, vacatedFolders, ct);
+                tally.Finish(item.Title, outcome, problem);
+            });
+
+            // After every book's outcome: the problems list keeps only the first few hundred, and a
+            // library with hundreds of loose files must not crowd out why a book failed.
+            foreach (var warning in planner.Warnings)
+            {
+                tally.AddProblem(new SortProblem(SortProblemKind.Warning, DestinationProblemSubject, warning));
+            }
+
+        }
+        finally
+        {
+            // Only once every copy has finished: a folder one book moved out of can be the folder
+            // another book is about to be copied into.
+            RemoveEmptiedFolders(vacatedFolders, destinationRoot);
+
+            // Whatever ended the run: the books sorted before a cancel or a failure are where they
+            // are, and the next sort has to know they are theirs.
+            SaveManifest(manifest, attempted, tally);
+        }
+
+        return tally.ToSummary();
+    }
+
+    /// <summary>
+    /// Writes the record as it was read, before any file is moved or written, and stops the run when
+    /// that fails, as <see cref="LibraryManifest.Load"/> does when it cannot read it. Reading it left off
+    /// what is no longer true: books deleted, files gone or changed since they went on record. A sort
+    /// that went on anyway would move and write books under a record on disk that still says otherwise,
+    /// and one failed save after another is how a record ends up naming another book's file. Nothing is
+    /// written when nothing changed, as every quarter of an hour a sort may find.
+    /// </summary>
+    /// <exception cref="IOException">It cannot be written. The message is worded for the person sorting.</exception>
+    private static void SaveBeforeSorting(LibraryManifest manifest)
+    {
+        try
+        {
+            manifest.Save();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new IOException(
+                $"Could not update its record of which book is in which folder (the {LibraryManifest.FileName} file), so nothing " +
+                $"was sorted: {ex.Message} Sort again once the file can be written.",
+                ex);
+        }
+    }
+
+    /// <summary>
+    /// Records where each book this run worked on is, beside what earlier runs recorded, and writes
+    /// the manifest. By now files have moved, so not being able to write it is reported rather than
+    /// allowed to fail the run. It costs no book anything: a file the record on disk names vouches for
+    /// its book only while it holds what it held when it went on record (see <see cref="LibraryManifest.IsRecorded"/>),
+    /// and the next sort finds the books in their folders again.
+    ///
+    /// Only what is provably the book's goes on record (see <see cref="Attempt.Proven"/>), never merely
+    /// what is at its destination: the record is what later lets a sort replace or move a file, so a
+    /// file the copier left alone as not the book's, maybe another book's only copy, must never get on it.
+    ///
+    /// A book keeps on record every file of its own that is still there beside the ones proven this
+    /// run: a PDF no longer in the source, or the audio in a format it has since changed from, is still
+    /// its own, and must not look like a stray file another book may take. That holds for a file a
+    /// book that moved could not take along too (see <see cref="KeepLeftBehind"/>).
+    ///
+    /// Where the book's files are is what counts, not whether its copy succeeded: one that failed or was
+    /// cancelled after its files moved is in its new folder. A book with nothing proven in its folder
+    /// keeps what was recorded for it.
+    ///
+    /// A file proven this run goes on record with what it holds now; one kept from before with what it
+    /// held when it first went on record, never what it holds now (see <see cref="LibraryManifest.Set"/>).
+    /// </summary>
+    private static void SaveManifest(LibraryManifest manifest, IEnumerable<Attempt> attempted, RunTally tally)
+    {
+        var sameFile = StringComparer.FromComparison(PathSanitizer.PathComparison);
+        foreach (var attempt in attempted.Where(attempt => attempt.Item.BookId is not null && attempt.Proven.Count > 0))
+        {
+            var item = attempt.Item;
+            var recorded = manifest.Get(item.BookId!);
+
+            // As the disk tells folders apart: on a case-sensitive one "Author/foo" is not the book's "Author/Foo",
+            // and the names recorded for the one must never be taken for files in the other.
+            var moved = recorded is not null && !string.Equals(recorded.Folder, item.TargetDirectory, PathSanitizer.PathComparison);
+            var proven = attempt.Proven
+                .Where(File.Exists)
+                .Select(Path.GetFileName)
+                .OfType<string>()
+                .Distinct(sameFile)
+                .ToList();
+            var kept = recorded is not null && !moved
+                ? recorded.Files
+                    .Where(name => !proven.Contains(name, sameFile) && recorded.Stamps.ContainsKey(name) && File.Exists(Path.Combine(recorded.Folder, name)))
+                    .ToList()
+                : [];
+
+            if (proven.Count == 0 && kept.Count == 0)
+            {
+                continue;
+            }
+
+            var entry = new ManifestEntry(item.TargetDirectory!, [.. proven, .. kept], item.Title)
+            {
+                Stamps = kept.ToDictionary(name => name, name => recorded!.Stamps[name], StringComparer.Ordinal)
+            };
+            Record(manifest, item.BookId!, entry, tally);
+            if (moved)
+            {
+                KeepLeftBehind(manifest, item, recorded!, tally);
+            }
         }
 
         try
         {
-            Directory.CreateDirectory(destination);
+            manifest.Save();
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            throw new IOException($"Destination folder is not writable: {destination}. {ex.Message}", ex);
+            tally.AddProblem(new SortProblem(
+                SortProblemKind.Warning,
+                DestinationProblemSubject,
+                $"Could not save its record of which book is in which folder (the {LibraryManifest.FileName} file): {ex.Message} " +
+                "The next sort finds the books in their folders again."));
+        }
+    }
+
+    /// <summary>One book this run set to work on, and what of it has been proven so far.</summary>
+    private sealed class Attempt(PlannedCopy item)
+    {
+        public PlannedCopy Item { get; } = item;
+
+        /// <summary>
+        /// The files in the book's folder proven to be its own, added as each settles, so a run cancelled
+        /// part way records what was proven before the cancel and nothing else: moved in under
+        /// <see cref="FileOwnership.MayMove"/>, written by the copy, or found to be its download. Never a
+        /// file the copier left alone (<see cref="FileOutcome.Refused"/>). Only the book's own worker adds
+        /// to it, and it is read once every worker is done.
+        /// </summary>
+        public List<string> Proven { get; } = [];
+    }
+
+    /// <summary>
+    /// Keeps on record, apart from the book, the files a book that moved left in its old folder (its
+    /// new folder already had a file of the name, which is never replaced), so that folder is still
+    /// given to no other book, and names them in the problems for the person to sort out.
+    /// </summary>
+    private static void KeepLeftBehind(LibraryManifest manifest, PlannedCopy item, ManifestEntry recorded, RunTally tally)
+    {
+        var left = recorded.Files.Where(name => recorded.Stamps.ContainsKey(name) && File.Exists(Path.Combine(recorded.Folder, name))).ToList();
+        if (left.Count == 0)
+        {
+            return;
         }
 
-        var totalBooks = openAudibles.Count;
-        var warnings = new ConcurrentQueue<string>();
-        var warningCount = 0;
+        var relativeFolder = Path.GetRelativePath(manifest.Root, recorded.Folder);
+        Record(manifest, $"{item.BookId} left in {relativeFolder.Replace(Path.DirectorySeparatorChar, '/')}", recorded with { Files = left }, tally);
+        tally.AddProblem(new SortProblem(
+            SortProblemKind.Warning,
+            item.Title,
+            $"Left {string.Join(", ", left.Select(name => $"\"{Path.Combine(relativeFolder, name)}\""))} in the folder the book moved out of, " +
+            "as its new folder already has a file of that name. No other book is filed in that folder; if it is an old copy, delete it."));
+    }
 
-        if (totalBooks == 0)
+    /// <summary>Records a book's entry, and says so when it cannot be: then nothing keeps another book out of its folder.</summary>
+    private static void Record(LibraryManifest manifest, string bookId, ManifestEntry entry, RunTally tally)
+    {
+        if (!manifest.Set(bookId, entry))
         {
-            progress?.Report(new SortProgressInfo { Percentage = 100, IsComplete = true });
-            WriteLine("No books to sort.");
-            return new SortSummary { Warnings = [] };
+            tally.AddProblem(new SortProblem(
+                SortProblemKind.Warning,
+                entry.Title,
+                $"Could not record that the book is in \"{Path.GetRelativePath(manifest.Root, entry.Folder)}\", so a later book of " +
+                "the same title could be filed in that folder."));
         }
+    }
 
-        var planned = new SortPlanner().Plan(openAudibles, source, Path.GetFullPath(destination));
-        foreach (var item in planned)
+    /// <summary>
+    /// Deletes the folders that moving books left empty, such as an old "Book 1" folder or a
+    /// standalone book's folder after the book joined a series, and any parent left empty as a
+    /// result. A folder holding anything at all, a hidden file included, is left alone, and the
+    /// destination folder itself is never removed.
+    /// </summary>
+    private static void RemoveEmptiedFolders(IEnumerable<string> folders, string destinationRoot)
+    {
+        var root = Path.TrimEndingDirectorySeparator(destinationRoot);
+
+        // Deepest first, so a parent is only looked at after the folders inside it are gone.
+        foreach (var start in folders.Distinct(StringComparer.Ordinal).OrderByDescending(folder => folder.Length))
         {
-            if (item.Warning is not null)
+            for (var folder = start;
+                 folder is not null && PathSanitizer.IsWithin(root, folder) &&
+                 !string.Equals(Path.TrimEndingDirectorySeparator(folder), root, StringComparison.Ordinal);
+                 folder = Path.GetDirectoryName(folder))
             {
-                RecordWarning(warnings, ref warningCount, item.Warning);
-            }
-        }
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        WriteLine($"Sorting {totalBooks} books using the {DescribeMode(comparisonMode)} update check.");
-
-        var progressCount = 0;
-        var copiedBooks = 0;
-        var updatedBooks = 0;
-        var skippedBooks = 0;
-        var missingBooks = 0;
-        var failedBooks = 0;
-        var maxLineLength = 0;
-
-        var parallelOptions = new ParallelOptions
-        {
-            MaxDegreeOfParallelism = GetMaxParallelism(),
-            CancellationToken = cancellationToken
-        };
-
-        await Parallel.ForEachAsync(planned, parallelOptions, async (item, ct) =>
-        {
-            try
-            {
-                ct.ThrowIfCancellationRequested();
-                var outcome = await ProcessPlannedCopy(item, comparisonMode, ct);
-
-                switch (outcome)
+                try
                 {
-                    case CopyOutcome.Skipped:
-                        Interlocked.Increment(ref skippedBooks);
+                    if (!Directory.Exists(folder) || Directory.EnumerateFileSystemEntries(folder).Any())
+                    {
                         break;
-                    case CopyOutcome.NotFound:
-                        Interlocked.Increment(ref missingBooks);
-                        break;
-                    default:
-                        Interlocked.Increment(ref copiedBooks);
-                        if (outcome == CopyOutcome.Updated)
-                        {
-                            Interlocked.Increment(ref updatedBooks);
-                        }
-                        break;
+                    }
+
+                    Directory.Delete(folder, recursive: false);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    // Tidying up is a courtesy; a folder that cannot go stays, empty and harmless.
+                    break;
                 }
             }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception ex)
-            {
-                Interlocked.Increment(ref failedBooks);
-                RecordWarning(warnings, ref warningCount, $"Error processing {item.Book.Filename ?? item.Label}: {ex.Message}");
-            }
-
-            var currentProgress = Interlocked.Increment(ref progressCount);
-
-            // Read the sub-counts before the total they are part of. A worker increments
-            // copiedBooks and only then updatedBooks, so reading them the other way round can
-            // pair an old copied count with a newer updated count and publish a snapshot
-            // claiming more books were updated than were copied.
-            var currentUpdated = Volatile.Read(ref updatedBooks);
-            var currentSkipped = Volatile.Read(ref skippedBooks);
-            var currentMissing = Volatile.Read(ref missingBooks);
-            var currentFailed = Volatile.Read(ref failedBooks);
-            var currentCopied = Volatile.Read(ref copiedBooks);
-
-            UpdateProgress(currentProgress, totalBooks, currentCopied, item.Label, ref maxLineLength);
-
-            progress?.Report(new SortProgressInfo
-            {
-                CurrentBook = currentProgress,
-                TotalBooks = totalBooks,
-                CopiedBooks = currentCopied,
-                UpdatedBooks = currentUpdated,
-                SkippedBooks = currentSkipped,
-                MissingBooks = currentMissing,
-                FailedBooks = currentFailed,
-                CurrentTitle = item.Label,
-                Percentage = CalculatePercentage(currentProgress, totalBooks),
-                WarningCount = Volatile.Read(ref warningCount)
-            });
-        });
-
-        var summary = new SortSummary
-        {
-            TotalBooks = totalBooks,
-            CopiedBooks = copiedBooks,
-            UpdatedBooks = updatedBooks,
-            SkippedBooks = skippedBooks,
-            MissingBooks = missingBooks,
-            FailedBooks = failedBooks,
-            Warnings = warnings.ToArray(),
-            WarningCount = warningCount
-        };
-
-        progress?.Report(new SortProgressInfo
-        {
-            CurrentBook = totalBooks,
-            TotalBooks = totalBooks,
-            CopiedBooks = summary.CopiedBooks,
-            UpdatedBooks = summary.UpdatedBooks,
-            SkippedBooks = summary.SkippedBooks,
-            MissingBooks = summary.MissingBooks,
-            FailedBooks = summary.FailedBooks,
-            Percentage = 100,
-            IsComplete = true,
-            WarningCount = summary.WarningCount
-        });
-
-        WriteLine(
-            $"Sorting complete. Copied {summary.CopiedBooks} (of which {summary.UpdatedBooks} updated), " +
-            $"skipped {summary.SkippedBooks}, not found {summary.MissingBooks}, " +
-            $"failed {summary.FailedBooks} of {totalBooks}.");
-        return summary;
+        }
     }
 
-    /// <summary>What a single file, or a whole book, needed.</summary>
-    private enum CopyOutcome
+    /// <summary>Where one book ended up. Each maps to one bucket of <see cref="SortCounts"/>.</summary>
+    private enum BookOutcome
+    {
+        New,
+        Updated,
+        Moved,
+        UpToDate,
+        NotFound,
+        Failed
+    }
+
+    /// <summary>What one file needed.</summary>
+    private enum FileOutcome
     {
         /// <summary>Already up to date, so nothing was written.</summary>
-        Skipped = 0,
+        UpToDate,
 
         /// <summary>Written where nothing was before.</summary>
-        Created = 1,
+        Created,
 
         /// <summary>An existing, out-of-date file was replaced.</summary>
-        Updated = 2,
+        Replaced,
 
-        /// <summary>No file to copy: the book is in the export but not in the source folder.</summary>
-        NotFound = 3
+        /// <summary>
+        /// A different file is already there that is not provably this book's, so it was left alone
+        /// (see <see cref="FileOwnership"/>).
+        /// </summary>
+        Refused
     }
 
-    private static async Task<CopyOutcome> ProcessPlannedCopy(
-        PlannedCopy item,
+    /// <summary>
+    /// The last line of defence against one book overwriting another. Whatever the planner decided,
+    /// a file already in the destination is only replaced, or moved into a book's folder, when it is
+    /// provably that book's: the record says so (see <see cref="LibraryManifest"/>), or its content is
+    /// the book's own download. A wrong guess about which folder belongs to which book then costs a
+    /// book being skipped with a message, never someone's only copy.
+    /// </summary>
+    private sealed class FileOwnership(LibraryManifest manifest)
+    {
+        /// <summary>
+        /// Whether the record says <paramref name="path"/> is the book's: on record for it, and still holding
+        /// what it held when it went on record, never by its name alone (see <see cref="LibraryManifest.IsRecorded"/>).
+        /// The record in memory is only changed once every book is done.
+        /// </summary>
+        public bool IsRecordedFor(string? bookId, string path) => bookId is not null && manifest.IsRecorded(bookId, path);
+
+        /// <summary>
+        /// Whether <paramref name="file"/> may be moved into place for the book whose download is
+        /// <paramref name="source"/>. Never by its name or where it lies alone, not even a PDF named
+        /// like the book beside the book's own audio: older versions numbered each type of file on its
+        /// own, so beside one book's "Title.m4b" lies the "Title.pdf" of a same-titled book that had only
+        /// its PDF then, and that may be its only copy. Moved in, it would go on record as the book's,
+        /// and the book's next download of its PDF would replace it.
+        /// </summary>
+        public bool MayMove(string? bookId, string file, string? source)
+        {
+            return IsRecordedFor(bookId, file) || (source is not null && FileComparison.AreSameQuick(source, file));
+        }
+    }
+
+    /// <summary>Sorts one book, turning anything that goes wrong into a problem for the report.</summary>
+    private static async Task<(BookOutcome Outcome, SortProblem? Problem)> SortBookAsync(
+        Attempt attempt,
         FileComparisonMode comparisonMode,
+        FileOwnership ownership,
+        ConcurrentBag<string> vacatedFolders,
         CancellationToken cancellationToken)
     {
+        var item = attempt.Item;
+
         // Nothing to copy is not the same as nothing to do. A book listed in the export whose file
         // is not in the source folder has to be reported as missing, not as up to date — telling
         // someone their un-downloaded books are already organised is worse than saying nothing.
+        if (item.IsMissingFromSource)
+        {
+            // The warning says why, when there is a file but it cannot be the book yet.
+            return (BookOutcome.NotFound, new SortProblem(SortProblemKind.NotFound, item.Title, item.Warning ?? NotFoundMessage));
+        }
+
         if (!item.HasWork)
         {
-            return CopyOutcome.NotFound;
+            // No warning means the same file was listed twice, and the first listing copies it.
+            return item.Warning is null
+                ? (BookOutcome.UpToDate, null)
+                : (BookOutcome.Failed, new SortProblem(SortProblemKind.Failed, item.Title, item.Warning));
         }
 
-        Directory.CreateDirectory(item.TargetDirectory!);
-
-        var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, cancellationToken);
-        var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, cancellationToken);
-
-        // A book counts as updated when any of its files replaced an existing one; a book whose
-        // audio is new but whose PDF was already there is simply a copy.
-        if (audio == CopyOutcome.Updated || pdf == CopyOutcome.Updated)
+        try
         {
-            return CopyOutcome.Updated;
+            cancellationToken.ThrowIfCancellationRequested();
+            return await ProcessPlannedCopy(attempt, comparisonMode, ownership, vacatedFolders, cancellationToken);
         }
-
-        return audio == CopyOutcome.Created || pdf == CopyOutcome.Created
-            ? CopyOutcome.Created
-            : CopyOutcome.Skipped;
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return (BookOutcome.Failed, new SortProblem(SortProblemKind.Failed, item.Title, $"Could not copy the file: {ex.Message}"));
+        }
     }
 
-    private static async Task<CopyOutcome> CopyIfNeededAsync(
+    private static async Task<(BookOutcome Outcome, SortProblem? Problem)> ProcessPlannedCopy(
+        Attempt attempt,
+        FileComparisonMode comparisonMode,
+        FileOwnership ownership,
+        ConcurrentBag<string> vacatedFolders,
+        CancellationToken cancellationToken)
+    {
+        var item = attempt.Item;
+        Directory.CreateDirectory(item.TargetDirectory!);
+
+        var movedHere = new List<string>();
+        var leftAlone = new List<string>();
+        var moves = new List<(string? From, string? To, string? Source)>
+        {
+            (item.AudioMoveFrom, item.AudioDestination, item.AudioSource),
+            (item.PdfMoveFrom, item.PdfDestination, item.PdfSource),
+        };
+        moves.AddRange(item.OtherMoves.Select(move => ((string?)move.From, (string?)move.To, (string?)null)));
+
+        foreach (var (from, to, source) in moves)
+        {
+            if (from is null || to is null || File.Exists(to) || !File.Exists(from))
+            {
+                continue;
+            }
+
+            if (!ownership.MayMove(item.BookId, from, source))
+            {
+                leftAlone.Add(from);
+                continue;
+            }
+
+            MoveIntoPlace(from, to, vacatedFolders);
+            movedHere.Add(to);
+            attempt.Proven.Add(to);
+        }
+
+        // A file moved in above is provably this book's; anything else already there has to be on record as its.
+        bool MayReplace(string destination) =>
+            ownership.IsRecordedFor(item.BookId, destination) ||
+            movedHere.Contains(destination, StringComparer.FromComparison(PathSanitizer.PathComparison));
+
+        // A book is its audio: beside audio that is not the book's, its PDF would be filed with another book.
+        var audio = await CopyIfNeededAsync(item.AudioSource, item.AudioDestination, comparisonMode, MayReplace, cancellationToken);
+        Prove(item.AudioSource, item.AudioDestination, audio);
+        if (audio == FileOutcome.Refused)
+        {
+            return (BookOutcome.Failed, new SortProblem(SortProblemKind.Failed, item.Title, RefusedMessage(item.AudioDestination!)));
+        }
+
+        var pdf = await CopyIfNeededAsync(item.PdfSource, item.PdfDestination, comparisonMode, MayReplace, cancellationToken);
+        Prove(item.PdfSource, item.PdfDestination, pdf);
+
+        var problem = pdf == FileOutcome.Refused
+            ? new SortProblem(SortProblemKind.Warning, item.Title, RefusedMessage(item.PdfDestination!))
+            : leftAlone.Count > 0
+                ? new SortProblem(SortProblemKind.Warning, item.Title, LeftAloneMessage(leftAlone))
+                : null;
+
+        // One bucket per book, in the order SortCounts documents: a moved file that then turned out
+        // to be stale is Updated, and a book whose audio is new but whose PDF was already there is New.
+        if (audio == FileOutcome.Replaced || pdf == FileOutcome.Replaced)
+        {
+            return (BookOutcome.Updated, problem);
+        }
+
+        if (audio == FileOutcome.Created || pdf == FileOutcome.Created)
+        {
+            return (BookOutcome.New, problem);
+        }
+
+        return (movedHere.Count > 0 ? BookOutcome.Moved : BookOutcome.UpToDate, problem);
+
+        // Written by the copy, or found to be the download: either way the file there is now the book's.
+        void Prove(string? source, string? destination, FileOutcome outcome)
+        {
+            if (source is not null && destination is not null && outcome != FileOutcome.Refused)
+            {
+                attempt.Proven.Add(destination);
+            }
+        }
+    }
+
+    private static string RefusedMessage(string destination) =>
+        $"A different file is already at {destination}, and it is not on record as this book's, so it was left alone. " +
+        "If it is an old copy of this book, delete it and sort again.";
+
+    private static string LeftAloneMessage(IEnumerable<string> files) =>
+        $"Left {string.Join(", ", files)} where it was: it is not on record as this book's and differs from the download. " +
+        "If it is an old copy, delete it.";
+
+    /// <summary>
+    /// Moves a copy of the book already in the destination (see <see cref="PlannedCopy.AudioMoveFrom"/>)
+    /// into the book's own folder, once <see cref="FileOwnership"/> has said it is the book's. It is a
+    /// rename within the destination that never replaces a file, so nothing is copied or lost, and the
+    /// update check that follows still replaces it if the source has changed since. Adds the folder it
+    /// came from to <paramref name="vacatedFolders"/>.
+    /// </summary>
+    private static void MoveIntoPlace(string moveFrom, string destinationFile, ConcurrentBag<string> vacatedFolders)
+    {
+        File.Move(moveFrom, destinationFile, overwrite: false);
+        vacatedFolders.Add(Path.GetDirectoryName(Path.GetFullPath(moveFrom))!);
+    }
+
+    private static async Task<FileOutcome> CopyIfNeededAsync(
         string? sourceFile,
         string? destinationFile,
         FileComparisonMode comparisonMode,
+        Func<string, bool> mayReplace,
         CancellationToken cancellationToken)
     {
         if (sourceFile is null || destinationFile is null)
         {
-            return CopyOutcome.Skipped;
+            return FileOutcome.UpToDate;
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -265,11 +533,16 @@ public class FileSorter
         var destinationExists = File.Exists(destinationFile);
         if (destinationExists && await IsDestinationUpToDateAsync(sourceFile, destinationFile, comparisonMode, cancellationToken))
         {
-            return CopyOutcome.Skipped;
+            return FileOutcome.UpToDate;
+        }
+
+        if (destinationExists && !mayReplace(destinationFile))
+        {
+            return FileOutcome.Refused;
         }
 
         await CopyFileAtomicAsync(sourceFile, destinationFile, cancellationToken);
-        return destinationExists ? CopyOutcome.Updated : CopyOutcome.Created;
+        return destinationExists ? FileOutcome.Replaced : FileOutcome.Created;
     }
 
     /// <summary>
@@ -284,14 +557,18 @@ public class FileSorter
         CancellationToken cancellationToken)
     {
         return comparisonMode == FileComparisonMode.Full
-            ? AreFilesIdenticalAsync(sourceFile, destinationFile, cancellationToken)
-            : AreFilesSameAsync(sourceFile, destinationFile, cancellationToken);
+            ? FileComparison.AreIdenticalAsync(sourceFile, destinationFile, cancellationToken)
+            : Task.FromResult(FileComparison.AreSameQuick(sourceFile, destinationFile));
     }
 
     /// <summary>
     /// Copies through a temporary file in the destination folder and renames it into place, so an
     /// interrupted run (cancel, crash, full disk) can never leave a half written book behind that
     /// a later run would mistake for a complete one.
+    ///
+    /// The source is shared for writing, because OpenAudible may be working on it. A copy taken
+    /// while it changed is only part of a book, so it never replaces anything: the book is copied
+    /// again on the next sort, once the file has settled.
     /// </summary>
     private static async Task CopyFileAtomicAsync(string sourceFile, string destinationFile, CancellationToken cancellationToken)
     {
@@ -299,6 +576,8 @@ public class FileSorter
 
         try
         {
+            var before = FileStamp(sourceFile);
+            long copied;
             await using (var sourceStream = new FileStream(
                              sourceFile, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, CopyBufferSize,
                              FileOptions.Asynchronous | FileOptions.SequentialScan))
@@ -308,6 +587,19 @@ public class FileSorter
             {
                 await sourceStream.CopyToAsync(destinationStream, CopyBufferSize, cancellationToken);
                 await destinationStream.FlushAsync(cancellationToken);
+
+                // On the disk before the rename replaces the old copy: without it, a power cut or an
+                // unplugged drive can leave an empty or truncated book where the good copy was on
+                // file systems that do not order the two (exFAT, NTFS-3g, XFS, many network shares).
+                destinationStream.Flush(flushToDisk: true);
+                copied = destinationStream.Length;
+            }
+
+            if (copied != before.Length || FileStamp(sourceFile) != before)
+            {
+                throw new IOException(
+                    "The file in the source folder changed while it was being copied, as it does while OpenAudible " +
+                    "is still writing it. It is copied again on the next sort.");
             }
 
             File.Move(partialFile, destinationFile, overwrite: true);
@@ -317,6 +609,13 @@ public class FileSorter
             TryDelete(partialFile);
             throw;
         }
+    }
+
+    /// <summary>A file's size and when it was last written, which change whenever anything writes to it.</summary>
+    private static (long Length, DateTime LastWriteUtc) FileStamp(string path)
+    {
+        var info = new FileInfo(path);
+        return (info.Length, info.LastWriteTimeUtc);
     }
 
     private static void TryDelete(string path)
@@ -335,254 +634,94 @@ public class FileSorter
     }
 
     /// <summary>
-    /// Cheap "is this the same file" check. Comparing every byte of a multi-gigabyte library on
-    /// every run is not viable, so size plus three sampled chunks is used instead.
+    /// The running totals of one sort. Workers finish books concurrently, so counting, recording
+    /// the problem and reporting happen under one lock: each report is a consistent snapshot (the
+    /// counts add up to the books finished), and reports arrive in the order the books finished,
+    /// so a slow report can never overwrite a newer one.
     /// </summary>
-    private static async Task<bool> AreFilesSameAsync(string filePath1, string filePath2, CancellationToken cancellationToken)
+    private sealed class RunTally(int totalBooks, IProgress<SortProgressInfo>? progress)
     {
-        try
+        private readonly object _lock = new();
+
+        // Immutable, so every snapshot can share it instead of copying up to 500 problems per book.
+        private ImmutableList<SortProblem> _problems = [];
+
+        // Kept apart from the capped list above, which stops at the oldest 500: a page following
+        // the run wants the latest ones.
+        private ImmutableList<SortProblem> _recentProblems = [];
+        private int _problemCount;
+        private SortCounts _counts = SortCounts.Empty;
+
+        public void AddProblem(SortProblem problem)
         {
-            var fileInfo1 = new FileInfo(filePath1);
-            var fileInfo2 = new FileInfo(filePath2);
-
-            if (!fileInfo1.Exists || !fileInfo2.Exists || fileInfo1.Length != fileInfo2.Length)
+            lock (_lock)
             {
-                return false;
+                RecordProblem(problem);
             }
+        }
 
-            var length = fileInfo1.Length;
-            if (length == 0)
+        /// <summary>Reports the run as started, so the total and any planning problems show at once.</summary>
+        public void ReportStart()
+        {
+            lock (_lock)
             {
-                return true;
+                progress?.Report(Snapshot(currentTitle: null));
             }
+        }
 
-            const int chunkSize = 4096;
-            var buffer1 = new byte[chunkSize];
-            var buffer2 = new byte[chunkSize];
-
-            await using var stream1 = new FileStream(filePath1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize, true);
-            await using var stream2 = new FileStream(filePath2, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, chunkSize, true);
-
-            foreach (var offset in GetSampleOffsets(length, chunkSize))
+        public void Finish(string title, BookOutcome outcome, SortProblem? problem)
+        {
+            lock (_lock)
             {
-                stream1.Seek(offset, SeekOrigin.Begin);
-                stream2.Seek(offset, SeekOrigin.Begin);
-
-                var read1 = await stream1.ReadAtLeastAsync(buffer1, chunkSize, throwOnEndOfStream: false, cancellationToken);
-                var read2 = await stream2.ReadAtLeastAsync(buffer2, chunkSize, throwOnEndOfStream: false, cancellationToken);
-
-                if (read1 != read2 || !buffer1.AsSpan(0, read1).SequenceEqual(buffer2.AsSpan(0, read2)))
+                _counts = Add(_counts, outcome);
+                if (problem is not null)
                 {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return false; // Assume the files differ so the copy is retried.
-        }
-    }
-
-    /// <summary>
-    /// Byte-for-byte comparison of two files. Used by <see cref="FileComparisonMode.Full"/>, where
-    /// the point is to notice a re-released book that happens to be exactly the same size as the
-    /// copy already on disk — something the sampled check cannot see.
-    ///
-    /// Internal rather than private so the "cancel stops it promptly" guarantee can be tested
-    /// directly: this is the only unbounded loop in a sort, and on a large library it is where a
-    /// cancelled run would otherwise keep grinding.
-    /// </summary>
-    internal static async Task<bool> AreFilesIdenticalAsync(string filePath1, string filePath2, CancellationToken cancellationToken)
-    {
-        byte[]? buffer1 = null;
-        byte[]? buffer2 = null;
-
-        try
-        {
-            var fileInfo1 = new FileInfo(filePath1);
-            var fileInfo2 = new FileInfo(filePath2);
-
-            if (!fileInfo1.Exists || !fileInfo2.Exists || fileInfo1.Length != fileInfo2.Length)
-            {
-                return false;
-            }
-
-            if (fileInfo1.Length == 0)
-            {
-                return true;
-            }
-
-            buffer1 = ArrayPool<byte>.Shared.Rent(ComparisonBufferSize);
-            buffer2 = ArrayPool<byte>.Shared.Rent(ComparisonBufferSize);
-
-            await using var stream1 = new FileStream(
-                filePath1, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, ComparisonBufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-            await using var stream2 = new FileStream(
-                filePath2, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, ComparisonBufferSize,
-                FileOptions.Asynchronous | FileOptions.SequentialScan);
-
-            while (true)
-            {
-                // Checked here as well as passed to the reads: a whole-file comparison of a large
-                // book is many iterations long, and cancellation must not have to wait for the
-                // reads to notice it.
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var read1 = await stream1.ReadAtLeastAsync(
-                    buffer1.AsMemory(0, ComparisonBufferSize), ComparisonBufferSize, throwOnEndOfStream: false, cancellationToken);
-                var read2 = await stream2.ReadAtLeastAsync(
-                    buffer2.AsMemory(0, ComparisonBufferSize), ComparisonBufferSize, throwOnEndOfStream: false, cancellationToken);
-
-                if (read1 != read2)
-                {
-                    // The lengths matched a moment ago, so one of the files is being written to
-                    // right now. Treat it as different and copy again on this or the next run.
-                    return false;
+                    RecordProblem(problem);
                 }
 
-                if (read1 == 0)
-                {
-                    return true;
-                }
-
-                if (!buffer1.AsSpan(0, read1).SequenceEqual(buffer2.AsSpan(0, read2)))
-                {
-                    return false;
-                }
+                progress?.Report(Snapshot(title));
             }
         }
-        catch (OperationCanceledException)
+
+        public SortSummary ToSummary()
         {
-            throw;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
-        {
-            return false; // Assume the files differ so the copy is retried.
-        }
-        finally
-        {
-            if (buffer1 is not null)
+            lock (_lock)
             {
-                ArrayPool<byte>.Shared.Return(buffer1);
+                return new SortSummary(totalBooks, _counts, _problems, _problemCount);
             }
+        }
 
-            if (buffer2 is not null)
+        private void RecordProblem(SortProblem problem)
+        {
+            _problemCount++;
+            if (_problems.Count < SortSummary.MaxReportedProblems)
             {
-                ArrayPool<byte>.Shared.Return(buffer2);
+                _problems = _problems.Add(problem);
             }
-        }
-    }
 
-    private static IEnumerable<long> GetSampleOffsets(long length, int chunkSize)
-    {
-        yield return 0;
-
-        if (length <= chunkSize)
-        {
-            yield break;
+            _recentProblems = _recentProblems.Count < SortProgressInfo.RecentProblemLimit
+                ? _recentProblems.Add(problem)
+                : _recentProblems.RemoveAt(0).Add(problem);
         }
 
-        var middle = Math.Max(0, (length / 2) - (chunkSize / 2));
-        if (middle > 0)
+        private SortProgressInfo Snapshot(string? currentTitle)
         {
-            yield return middle;
+            return new SortProgressInfo(
+                totalBooks, _counts.Total, currentTitle, _counts, _problems, _recentProblems, _problemCount);
         }
 
-        yield return Math.Max(0, length - chunkSize);
-    }
-
-    private static string DescribeMode(FileComparisonMode mode)
-    {
-        return mode == FileComparisonMode.Full ? "full (byte-for-byte)" : "quick (size and sampled contents)";
-    }
-
-    internal static double CalculatePercentage(int current, int total)
-    {
-        if (total <= 0)
+        private static SortCounts Add(SortCounts counts, BookOutcome outcome)
         {
-            return 100;
-        }
-
-        return Math.Round(Math.Clamp((double)current / total, 0, 1) * 100, 2);
-    }
-
-    private static int GetMaxParallelism()
-    {
-        var configured = Environment.GetEnvironmentVariable("OABO_MAX_PARALLELISM");
-        if (int.TryParse(configured, out var requested) && requested > 0)
-        {
-            return requested;
-        }
-
-        // Copying is bound by the slowest of the two volumes, and on a network share or a spinning
-        // disk more concurrency makes throughput worse, not better.
-        return Math.Clamp(Environment.ProcessorCount / 4, 1, 8);
-    }
-
-    private static void RecordWarning(ConcurrentQueue<string> warnings, ref int warningCount, string message)
-    {
-        var count = Interlocked.Increment(ref warningCount);
-        if (count <= MaxReportedWarnings)
-        {
-            warnings.Enqueue(message);
-            WriteLine($"Warning: {message}");
-        }
-        else if (count == MaxReportedWarnings + 1)
-        {
-            WriteLine($"Warning: more than {MaxReportedWarnings} warnings, further warnings are suppressed.");
-        }
-    }
-
-    private static void UpdateProgress(int currentProgress, int totalBooks, int copyBooks, string? title, ref int maxLineLength)
-    {
-        // When output is redirected (a service log, or the backend piped into the desktop app) the
-        // carriage-return trick just produces one enormous line, so log periodically instead.
-        if (Console.IsOutputRedirected)
-        {
-            if (currentProgress == totalBooks || currentProgress % 100 == 0)
+            return outcome switch
             {
-                WriteLine($"{CalculatePercentage(currentProgress, totalBooks):0.##}% ({currentProgress}/{totalBooks}) transferred: {copyBooks}");
-            }
-
-            return;
-        }
-
-        var message = $"{CalculatePercentage(currentProgress, totalBooks):0.##}% ({currentProgress}/{totalBooks}) Transferred: {copyBooks} => {title}";
-
-        lock (ConsoleLock)
-        {
-            try
-            {
-                Console.Write("\r" + new string(' ', maxLineLength) + "\r");
-                Console.Write(message);
-                maxLineLength = Math.Max(maxLineLength, message.Length);
-            }
-            catch (IOException)
-            {
-                // The console went away (the desktop app closed the pipe). Never fail a sort for it.
-            }
-        }
-    }
-
-    private static void WriteLine(string message)
-    {
-        lock (ConsoleLock)
-        {
-            try
-            {
-                Console.WriteLine(Console.IsOutputRedirected ? message : $"\n{message}");
-            }
-            catch (IOException)
-            {
-                // See UpdateProgress.
-            }
+                BookOutcome.New => counts with { New = counts.New + 1 },
+                BookOutcome.Updated => counts with { Updated = counts.Updated + 1 },
+                BookOutcome.Moved => counts with { Moved = counts.Moved + 1 },
+                BookOutcome.UpToDate => counts with { UpToDate = counts.UpToDate + 1 },
+                BookOutcome.NotFound => counts with { NotFound = counts.NotFound + 1 },
+                BookOutcome.Failed => counts with { Failed = counts.Failed + 1 },
+                _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, null)
+            };
         }
     }
 }

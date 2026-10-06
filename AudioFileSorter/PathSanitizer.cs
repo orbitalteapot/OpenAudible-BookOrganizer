@@ -25,7 +25,8 @@ public static class PathSanitizer
     private static readonly char[] PlatformInvalidChars = Path.GetInvalidFileNameChars();
     private static readonly HashSet<string> ReservedDeviceNames = BuildReservedDeviceNames();
 
-    private static readonly StringComparison PathComparison =
+    /// <summary>How this platform's file system compares names; the one rule every path comparison uses.</summary>
+    internal static readonly StringComparison PathComparison =
         OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
@@ -115,8 +116,7 @@ public static class PathSanitizer
             return string.Empty;
         }
 
-        var normalized = value.Trim().ToLowerInvariant();
-        return new string(normalized.Where(char.IsLetterOrDigit).ToArray());
+        return new string(FoldForComparison(value).Where(char.IsLetterOrDigit).ToArray());
     }
 
     /// <summary>
@@ -130,7 +130,7 @@ public static class PathSanitizer
             return string.Empty;
         }
 
-        var normalized = value.Trim().ToLowerInvariant();
+        var normalized = FoldForComparison(value);
 
         foreach (var article in LeadingArticles)
         {
@@ -151,6 +151,27 @@ public static class PathSanitizer
         }
 
         return new string(normalized.Where(char.IsLetterOrDigit).ToArray());
+    }
+
+    /// <summary>
+    /// Trims, lower-cases and composes accents, so "Café" typed in an export and "Café" read back
+    /// from a disk that stores it decomposed ("e" + U+0301: HFS+, and files a Mac wrote to a NAS
+    /// or ext4) give the same key. Otherwise the combining accent is dropped as "not a letter",
+    /// the two never match, and an existing file or folder is copied again beside itself.
+    /// </summary>
+    private static string FoldForComparison(string value)
+    {
+        var trimmed = value.Trim();
+        try
+        {
+            trimmed = trimmed.Normalize(NormalizationForm.FormC);
+        }
+        catch (ArgumentException)
+        {
+            // A lone surrogate cannot be normalised; compare the name as it is rather than fail the sort.
+        }
+
+        return trimmed.ToLowerInvariant();
     }
 
     /// <summary>
@@ -219,8 +240,9 @@ public static class PathSanitizer
     private static string TrimSegment(string value)
     {
         // Windows silently drops trailing dots and spaces, which turns "Vol. 2 ." into a name
-        // that never matches on a later run.
-        return value.Trim().TrimEnd('.', ' ').Trim();
+        // that never matches on a later run. A leading dot ("...And Ladies of the Club") makes a
+        // hidden folder on Linux, macOS and NAS shares, which Audiobookshelf skips entirely.
+        return value.Trim().TrimStart('.', ' ').TrimEnd('.', ' ').Trim();
     }
 
     private static string CollapseWhitespace(string value)
