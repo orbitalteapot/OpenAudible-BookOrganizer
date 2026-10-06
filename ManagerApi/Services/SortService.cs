@@ -36,6 +36,13 @@ public sealed class SortService : IHostedService
         _logger = logger;
     }
 
+    /// <summary>
+    /// Called on the sorting thread after each progress report, with the run's cancellation token.
+    /// Lets a test hold a run at a known point instead of racing a sort that a fast disk, or a
+    /// starved test thread, lets finish before it can be cancelled.
+    /// </summary>
+    internal Action<SortProgressInfo, CancellationToken>? AfterProgress { get; set; }
+
     public bool IsSorting
     {
         get
@@ -200,7 +207,11 @@ public sealed class SortService : IHostedService
 
             // Deliberately not Progress<T>: it marshals each report through the thread pool, so a
             // per-book report could be delivered after the final one.
-            var progress = new InlineProgress<SortProgressInfo>(info => Update(run, status => status.With(info)));
+            var progress = new InlineProgress<SortProgressInfo>(info =>
+            {
+                Update(run, status => status.With(info));
+                AfterProgress?.Invoke(info, token);
+            });
             var summary = await _fileSorter.SortAudioFiles(sourcePath, destinationPath, books, options, progress, token);
 
             RememberSortedDestination(destinationPath);

@@ -299,7 +299,7 @@ public class SortScheduleTests
     {
         using var workspace = new TempWorkspace();
         var time = new FakeTimeProvider(Now);
-        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time).HoldRunsUntilCanceled();
         Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out _));
         using var scheduler = backend.CreateScheduler();
 
@@ -321,7 +321,7 @@ public class SortScheduleTests
     {
         using var workspace = new TempWorkspace();
         var time = new FakeTimeProvider(Now);
-        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time).HoldRunsUntilCanceled();
         Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out _));
         using var scheduler = backend.CreateScheduler();
 
@@ -368,7 +368,7 @@ public class SortScheduleTests
     {
         using var workspace = new TempWorkspace();
         var time = new FakeTimeProvider(Now);
-        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time).HoldRunsUntilCanceled();
         Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out _));
         Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out _));
         using var scheduler = backend.CreateScheduler();
@@ -392,7 +392,7 @@ public class SortScheduleTests
     {
         using var workspace = new TempWorkspace();
         var time = new FakeTimeProvider(Now);
-        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time);
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200), 1440, time: time).HoldRunsUntilCanceled();
         Assert.True(backend.Settings.TryUpdate(new AppSettingsPatch { CopySpeed = "gentle" }, out _));
         Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, SortOptions.Default, out var manual));
         using var scheduler = backend.CreateScheduler();
