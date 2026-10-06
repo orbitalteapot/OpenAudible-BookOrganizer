@@ -179,6 +179,7 @@ public class ApiEndpointTests
         using var workspace = new TempWorkspace();
         await using var app = new ApiFactory(Locked(workspace, workspace.WriteLargeLibrary(400)));
         using var client = app.CreateClient();
+        TestBackend.HoldRunsUntilCanceled(app.Services.GetRequiredService<SortService>());
 
         // One book at a time, so the run is still going when the next requests arrive.
         await ExpectStatus(await client.PutAsJsonAsync("/api/settings", new { copySpeed = "gentle" }), HttpStatusCode.OK);
@@ -200,6 +201,7 @@ public class ApiEndpointTests
         using var workspace = new TempWorkspace();
         await using var app = new ApiFactory(Locked(workspace, workspace.WriteLargeLibrary(400)));
         using var client = app.CreateClient();
+        TestBackend.HoldRunsUntilCanceled(app.Services.GetRequiredService<SortService>());
         await ExpectStatus(await client.PutAsJsonAsync("/api/settings", new { copySpeed = "gentle" }), HttpStatusCode.OK);
         await ExpectStatus(await client.PostAsJsonAsync("/api/sort/start", new { }), HttpStatusCode.Accepted);
 

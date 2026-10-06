@@ -141,7 +141,7 @@ public class SortServiceTests
     public async Task CancelSort_stops_a_running_sort_and_keeps_what_it_did()
     {
         using var workspace = new TempWorkspace();
-        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200));
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200)).HoldRunsUntilCanceled();
 
         Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, new SortOptions { MaxParallelism = 1 }, out var run));
         await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the first book");
@@ -160,7 +160,7 @@ public class SortServiceTests
     public async Task Closing_the_app_cancels_the_run_and_says_so()
     {
         using var workspace = new TempWorkspace();
-        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200));
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200)).HoldRunsUntilCanceled();
 
         Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, new SortOptions { MaxParallelism = 1 }, out var run));
         await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the first book");
@@ -176,7 +176,7 @@ public class SortServiceTests
     public async Task Closing_the_app_waits_for_a_sort_started_from_the_page_to_say_why_it_stopped()
     {
         using var workspace = new TempWorkspace();
-        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200));
+        using var backend = TestBackend.LockedTo(workspace, workspace.WriteLargeLibrary(200)).HoldRunsUntilCanceled();
 
         Assert.True(backend.Sort.TryStartSort(RunTrigger.Manual, new SortOptions { MaxParallelism = 1 }, out _));
         await TestBackend.WaitUntil(() => backend.Sort.GetStatus().CurrentBook > 0, "the first book");

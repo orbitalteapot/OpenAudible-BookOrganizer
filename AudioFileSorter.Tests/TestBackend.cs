@@ -55,6 +55,29 @@ public sealed class TestBackend : IDisposable
         Lifetime.Dispose();
     }
 
+    /// <summary>
+    /// Holds every run once it has sorted its first book, until it is cancelled. Without it a test
+    /// that cancels a running sort races the sort: on a two-core CI runner the test thread can go
+    /// unscheduled until every book is done, leaving nothing to cancel.
+    /// </summary>
+    public static void HoldRunsUntilCanceled(SortService sort)
+    {
+        sort.AfterProgress = (info, token) =>
+        {
+            if (info.CurrentBook > 0)
+            {
+                token.WaitHandle.WaitOne(TimeSpan.FromSeconds(15));
+            }
+        };
+    }
+
+    /// <inheritdoc cref="HoldRunsUntilCanceled(SortService)"/>
+    public TestBackend HoldRunsUntilCanceled()
+    {
+        HoldRunsUntilCanceled(Sort);
+        return this;
+    }
+
     /// <summary>Polls until <paramref name="condition"/> holds, failing the test after a few seconds.</summary>
     public static async Task WaitUntil(Func<bool> condition, string what, int seconds = 15)
     {
